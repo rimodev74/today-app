@@ -1113,7 +1113,9 @@ private struct ProjectPageView: View {
     if task.isHeader {
       Text(task.title.isEmpty ? "En-tête" : task.title)
         .font(.subheadline.bold())
-        .foregroundStyle(.secondary)
+        .foregroundStyle(
+          task.headerColor.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary)
+        )
         .padding(.leading, 20)
         .padding(.top, 6)
     } else {
@@ -1645,12 +1647,24 @@ private struct HeaderRow: View {
       TextField("Nouvel en-tête", text: $task.title)
         .textFieldStyle(.plain)
         .font(.headline)
-        .foregroundStyle(Color.accentColor.opacity(0.85))
+        .foregroundStyle((task.headerColor?.color ?? Color.accentColor).opacity(0.85))
         .focused($titleFocused)
         .allowsHitTesting(isEditing)
         .onSubmit(onEndEditing)
       Spacer(minLength: 0)
       Menu {
+        Menu("Couleur") {
+          Button("Par défaut") { task.headerColor = nil }
+          ForEach(HeaderColor.allCases) { option in
+            Button {
+              task.headerColor = option
+            } label: {
+              Label(option.label, systemImage: "circle.fill")
+                .foregroundStyle(option.color)
+            }
+          }
+        }
+        Divider()
         Button("Supprimer", role: .destructive, action: onDelete)
       } label: {
         Image(systemName: "ellipsis")
@@ -1669,9 +1683,16 @@ private struct HeaderRow: View {
       if active {
         // Pendant le drag, l'en-tête est le calque du DESSUS de la cascade : couleur OPAQUE dédiée
         // (#CAE1FF), sinon les calques derrière transparaissent à travers. Hors drag, le lavande
-        // translucide (comme une tâche sélectionnée) suffit. Ombre de soulevé seulement au drag.
+        // translucide (comme une tâche sélectionnée) suffit, ou la teinte choisie si définie.
+        // Ombre de soulevé seulement au drag.
+        // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
+        // `thingsSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
+        let tinted = task.headerColor.map { AnyShapeStyle($0.color.opacity(0.22)) }
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(isDragging ? AnyShapeStyle(Self.dragTop) : AnyShapeStyle(thingsSelectionFill))
+          .fill(
+            isDragging
+              ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(thingsSelectionFill))
+          )
           .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
       }
     }
