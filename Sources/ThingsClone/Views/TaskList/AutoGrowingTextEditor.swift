@@ -63,7 +63,8 @@ struct AutoGrowingTextEditor: NSViewRepresentable {
     // Intercepte Entrée avant l'insertion native : `handleReturn` décide si elle doit être
     // avalée (retour `true`) ou laissée insérer un retour à la ligne comme d'habitude.
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-      guard selector == #selector(NSResponder.insertNewline(_:)), let handleReturn = parent.handleReturn
+      guard selector == #selector(NSResponder.insertNewline(_:)),
+        let handleReturn = parent.handleReturn
       else { return false }
       let shiftHeld = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
       return handleReturn(shiftHeld)

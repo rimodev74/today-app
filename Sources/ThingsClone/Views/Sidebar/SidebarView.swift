@@ -588,7 +588,8 @@ struct SidebarView: View {
       .zIndex(draggedKeys.contains(key) ? 1 : 0)
       .animation(
         draggedKeys.contains(key) ? nil : .snappy(duration: 0.22),
-        value: offset(for: key, plan: plan))
+        value: offset(for: key, plan: plan)
+      )
       .animation(.easeInOut(duration: 0.2), value: folding(key))
   }
 
@@ -611,7 +612,9 @@ struct SidebarView: View {
     // conflit avec le scroll.
     return measured(content, key: key, plan: plan)
       .scaleEffect(grabbed ? 1.02 : 1)
-      .shadow(color: .black.opacity(grabbed ? 0.18 : 0), radius: grabbed ? 8 : 0, y: grabbed ? 4 : 0)
+      .shadow(
+        color: .black.opacity(grabbed ? 0.18 : 0), radius: grabbed ? 8 : 0, y: grabbed ? 4 : 0
+      )
       .simultaneousGesture(reorderGesture(id: id, isProject: isProject))
   }
 
@@ -734,7 +737,8 @@ struct SidebarView: View {
         break
       }
     }
-    let target = start ?? others.firstIndex { if case .project = $0 { return true } else { return false } }
+    let target =
+      start ?? others.firstIndex { if case .project = $0 { return true } else { return false } }
     guard let head = target else { return others.count }  // aucun projet : rien à insérer
     // Dans le projet cible : avant la première liste dont le centre passe sous le curseur, sinon en
     // fin de section (avant la rangée « + » ou le projet suivant).
@@ -854,7 +858,9 @@ struct SidebarView: View {
     var index = 0
     for k in plan.others[0..<plan.insert] {
       switch k {
-      case .project(let pid): targetID = pid; index = 0
+      case .project(let pid):
+        targetID = pid
+        index = 0
       case .list: index += 1
       case .addList: break
       }

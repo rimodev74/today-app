@@ -38,17 +38,19 @@ struct ContentView: View {
     HStack(spacing: 0) {
       SidebarView(
         selection: $selection, searchPresented: $searchPresented,
-        pendingTitleFocus: $pendingTitleFocus)
-        .frame(width: 260)
-        .background { Rectangle().fill(sidebarBackground).ignoresSafeArea() }
+        pendingTitleFocus: $pendingTitleFocus
+      )
+      .frame(width: 260)
+      .background { Rectangle().fill(sidebarBackground).ignoresSafeArea() }
 
       Divider().ignoresSafeArea()
 
       TaskListView(
         selection: $selection, searchPresented: $searchPresented,
-        pendingTitleFocus: $pendingTitleFocus)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background { Rectangle().fill(pageBackground).ignoresSafeArea() }
+        pendingTitleFocus: $pendingTitleFocus
+      )
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background { Rectangle().fill(pageBackground).ignoresSafeArea() }
     }
     // La palette flotte AU-DESSUS de toute la fenêtre (centrée en haut), elle n'est pas
     // ancrée au bouton : c'est le comportement Spotlight demandé.
@@ -73,7 +75,8 @@ struct ContentView: View {
     .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
       syncCompletionsFromReminders()
     }
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    {
       _ in syncCompletionsFromReminders()
     }
     // Une vraie toolbar (transparente) : c'est elle qui donne le gros rayon « moderne ».
