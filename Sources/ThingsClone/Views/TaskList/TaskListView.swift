@@ -963,6 +963,7 @@ private struct ListPageView: View {
       )
       clone.sortIndex = task.sortIndex
       clone.priority = task.priority
+      clone.headerColor = task.headerColor
       modelContext.insert(clone)
     }
     try? modelContext.save()
@@ -998,6 +999,7 @@ private struct ListPageView: View {
     )
     clone.priority = task.priority
     clone.deadline = task.deadline
+    clone.headerColor = task.headerColor
     for t in list.tasks where t.sortIndex > task.sortIndex { t.sortIndex += 1 }
     clone.sortIndex = task.sortIndex + 1
     modelContext.insertAndSave(clone)

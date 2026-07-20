@@ -13,6 +13,9 @@ enum NotesCodec {
 
   /// Une note vide encode TOUJOURS en `Data()` exactement (jamais un en-tête RTF vide) : les
   /// `.isEmpty` sur `notes: Data` dans les vues restent fiables sans repasser par ce module.
+  /// Le RTF sérialise le RGB résolu, pas une `NSColor` dynamique : un texte coloré via
+  /// `.labelColor`/`.secondaryLabelColor` au moment de l'encodage garde cette couleur figée après
+  /// rechargement, même si l'apparence système change entre-temps.
   static func encode(_ attributedString: NSAttributedString) -> Data {
     guard !attributedString.string.isEmpty else { return Data() }
     let range = NSRange(location: 0, length: attributedString.length)

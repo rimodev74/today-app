@@ -36,6 +36,10 @@ struct RichTextEditor: NSViewRepresentable {
 
   func updateNSView(_ nsView: NSTextView, context: Context) {
     context.coordinator.parent = self
+    // Contrairement à l'ancien `AutoGrowingTextEditor`, `font`/`textColor` ne sont réappliqués
+    // qu'à la création (`makeNSView`) : ce garde sort avant toute réassignation. Sans risque tant
+    // que les trois sites d'appel passent des constantes ; un futur appelant avec une valeur
+    // variable dans le temps ne la verrait jamais reprise.
     // N'écrase le contenu que si `data` a changé depuis l'EXTÉRIEUR (chargement initial, autre
     // vue) — pas en écho de notre propre `textDidChange`, sinon le curseur saute à chaque frappe.
     guard data != context.coordinator.lastPushed else { return }
