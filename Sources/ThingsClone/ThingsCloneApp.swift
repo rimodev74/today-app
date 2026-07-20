@@ -38,6 +38,19 @@ struct ThingsCloneApp: App {
     }
     .modelContainer(Self.container)
     .defaultSize(width: 1400, height: 900)
+    // Menu Format natif (gras Cmd+B, italique Cmd+I, etc.) câblé sur le premier répondeur —
+    // `RichTextEditor` (isRichText) gère déjà ces actions nativement, aucune logique à écrire.
+    // Le second groupe ajoute Cmd+K : panneau natif AppKit pour ajouter/modifier/retirer un lien
+    // sur la sélection courante (même mécanisme que Mail/Notes/TextEdit).
+    .commands {
+      TextFormattingCommands()
+      CommandGroup(after: .textEditing) {
+        Button("Ajouter un lien…") {
+          NSApp.sendAction(#selector(NSTextView.orderFrontLinkPanel(_:)), to: nil, from: nil)
+        }
+        .keyboardShortcut("k", modifiers: .command)
+      }
+    }
 
     Settings {
       SettingsView()
