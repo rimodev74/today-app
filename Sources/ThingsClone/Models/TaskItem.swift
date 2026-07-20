@@ -4,7 +4,7 @@ import SwiftData
 @Model
 final class TaskItem {
   var title: String
-  var notes: String
+  var notes: Data
   var isCompleted: Bool
   /// Une en-tête est une ligne de séparation titrée dans la liste, pas une tâche.
   var isHeader: Bool = false
@@ -23,10 +23,13 @@ final class TaskItem {
   /// Permet de re-modifier le rappel au lieu d'en recréer un.
   var reminderIdentifier: String?
   var list: TodoList?
+  /// Couleur de l'en-tête (uniquement significatif si `isHeader`). `nil` = style par défaut.
+  /// Stocke `HeaderColor.rawValue` — voir `headerColor` ci-dessous, même pattern que `priority`.
+  var headerColorRaw: String?
 
   init(
     title: String,
-    notes: String = "",
+    notes: Data = Data(),
     when: Date? = nil,
     isHeader: Bool = false,
     list: TodoList? = nil
@@ -44,6 +47,12 @@ final class TaskItem {
   var priority: Priority {
     get { Priority(rawValue: priorityRaw) ?? .none }
     set { priorityRaw = newValue.rawValue }
+  }
+
+  /// Stocké en String (rawValue) : SwiftData persiste les propriétés stockées, pas les calculées.
+  var headerColor: HeaderColor? {
+    get { headerColorRaw.flatMap(HeaderColor.init(rawValue:)) }
+    set { headerColorRaw = newValue?.rawValue }
   }
 
   var project: Project? { list?.project }

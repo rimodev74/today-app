@@ -6,12 +6,12 @@ import SwiftData
 @Model
 final class Project {
   var title: String
-  var notes: String
+  var notes: Data
   var sortIndex: Int = 0
   var createdAt: Date = Date()
   @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList]
 
-  init(title: String, notes: String = "") {
+  init(title: String, notes: Data = Data()) {
     self.title = title
     self.notes = notes
     self.lists = []

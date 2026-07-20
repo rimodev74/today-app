@@ -5,7 +5,7 @@ import SwiftData
 @Model
 final class TodoList {
   var title: String
-  var notes: String
+  var notes: Data
   var sortIndex: Int = 0
   var createdAt: Date = Date()
   /// Date planifiée de la liste (menu « Définir une date » de l'en-tête).
@@ -20,7 +20,7 @@ final class TodoList {
     set { priorityRaw = newValue.rawValue }
   }
 
-  init(title: String, notes: String = "", project: Project? = nil) {
+  init(title: String, notes: Data = Data(), project: Project? = nil) {
     self.title = title
     self.notes = notes
     self.project = project

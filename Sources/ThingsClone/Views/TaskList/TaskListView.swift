@@ -862,8 +862,8 @@ private struct ListPageView: View {
           .padding(.leading, 5)
           .allowsHitTesting(false)
       }
-      AutoGrowingTextEditor(
-        text: $list.notes,
+      RichTextEditor(
+        data: $list.notes,
         font: .systemFont(ofSize: NSFont.systemFontSize),
         textColor: .labelColor,
         // Page sans tâche : Entrée dans les notes saute au champ « Nouvelle tâche » plutôt que
@@ -1039,10 +1039,21 @@ private struct ProjectPageView: View {
             .textFieldStyle(.plain)
             .font(.title.bold())
         }
-        TextField("Notes", text: $project.notes, axis: .vertical)
-          .textFieldStyle(.plain)
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+        ZStack(alignment: .topLeading) {
+          if project.notes.isEmpty {
+            Text("Notes")
+              .font(.subheadline)
+              .foregroundStyle(.tertiary)
+              .padding(.leading, 5)
+              .allowsHitTesting(false)
+          }
+          RichTextEditor(
+            data: $project.notes,
+            font: .systemFont(ofSize: NSFont.systemFontSize - 1),
+            textColor: .secondaryLabelColor
+          )
+          .fixedSize(horizontal: false, vertical: true)
+        }
       }
       .padding(.bottom, 14)
       .listRowSeparator(.hidden)
@@ -1178,8 +1189,9 @@ private struct TaskRow: View {
         editorBody.transition(.opacity)
       } else if !task.notes.isEmpty {
         // Au repos : aperçu de la note sous le titre (1 ligne tronquée, façon Things). Aligné
-        // sous le titre (case 16 + espace 10), pas sous la case.
-        Text(task.notes)
+        // sous le titre (case 16 + espace 10), pas sous la case. Texte brut seulement — la mise
+        // en forme (gras/italique/liens) ne sert qu'en édition.
+        Text(NotesCodec.plainText(task.notes))
           .font(.callout)
           .foregroundStyle(.secondary)
           .lineLimit(1)
@@ -1285,8 +1297,8 @@ private struct TaskRow: View {
           .padding(.leading, 5)
           .allowsHitTesting(false)
       }
-      AutoGrowingTextEditor(
-        text: $task.notes,
+      RichTextEditor(
+        data: $task.notes,
         font: .systemFont(ofSize: NSFont.systemFontSize),
         textColor: .secondaryLabelColor
       )
