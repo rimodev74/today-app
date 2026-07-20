@@ -1557,10 +1557,10 @@ private struct TaskRow: View {
   }
 }
 
-/// En-tête de section dans la liste. Trois états, comme une tâche :
-/// - **repos** : titre bleu, souligné d'un filet. Le clic va au geste de la page.
-/// - **sélection / édition** : le titre passe sur une PILULE lavande (le filet s'efface), le •••
-///   apparaît ; en édition le champ devient actif + focus (curseur de saisie).
+/// En-tête de section dans la liste. La pilule lavande (ou teintée si une `HeaderColor` est
+/// choisie) est TOUJOURS visible, repos comme sélection/édition — ce n'est plus un indicateur de
+/// sélection mais l'apparence permanente de l'en-tête. Le ••• apparaît au survol ou en
+/// sélection/édition ; en édition le champ devient actif + focus (curseur de saisie).
 /// - **drag** : la pilule est portée sous le curseur, avec DERRIÈRE elle des calques en cascade
 ///   (un par tâche rattachée, plafonné à 3, de plus en plus petits et pâles) et, en haut à gauche,
 ///   une bulle rouge portant le nombre RÉEL de tâches emportées.
@@ -1615,9 +1615,6 @@ private struct HeaderRow: View {
         }
         pill(active: active)
       }
-      // Filet du bas : seulement au repos ; la pilule le remplace en sélection/édition/drag. Opacité
-      // (et non un `if`) pour garder une hauteur stable, sans saut au passage en sélection.
-      Divider().opacity(active ? 0 : 1)
     }
     .padding(.top, 20)
     .padding(.bottom, 4)
@@ -1682,21 +1679,20 @@ private struct HeaderRow: View {
     .padding(.vertical, 6)
     .padding(.horizontal, 10)
     .background {
-      if active {
-        // Pendant le drag, l'en-tête est le calque du DESSUS de la cascade : couleur OPAQUE dédiée
-        // (#CAE1FF), sinon les calques derrière transparaissent à travers. Hors drag, le lavande
-        // translucide (comme une tâche sélectionnée) suffit, ou la teinte choisie si définie.
-        // Ombre de soulevé seulement au drag.
-        // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
-        // `thingsSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
-        let tinted = task.headerColor.map { AnyShapeStyle($0.color.opacity(0.22)) }
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(
-            isDragging
-              ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(thingsSelectionFill))
-          )
-          .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
-      }
+      // La pilule est TOUJOURS visible (plus un indicateur de sélection) : c'est l'apparence
+      // permanente de l'en-tête. Pendant le drag, l'en-tête est le calque du DESSUS de la
+      // cascade : couleur OPAQUE dédiée (#CAE1FF), sinon les calques derrière transparaissent à
+      // travers. Hors drag, le lavande translucide (comme une tâche sélectionnée) suffit, ou la
+      // teinte choisie si définie. Ombre de soulevé seulement au drag.
+      // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
+      // `thingsSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
+      let tinted = task.headerColor.map { AnyShapeStyle($0.color.opacity(0.22)) }
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(
+          isDragging
+            ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(thingsSelectionFill))
+        )
+        .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
     }
   }
 }
