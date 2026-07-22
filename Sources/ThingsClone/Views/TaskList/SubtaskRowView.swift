@@ -21,10 +21,7 @@ struct SubtaskRowView: View {
       Button {
         subtask.isDone.toggle()
       } label: {
-        Image(systemName: subtask.isDone ? "checkmark.square" : "square")
-          .font(.system(size: 15))
-          .foregroundStyle(subtask.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-          .contentShape(Rectangle())
+        subtaskCheckbox
       }
       .buttonStyle(.plain)
 
@@ -58,5 +55,24 @@ struct SubtaskRowView: View {
     .contextMenu {
       Button("Supprimer", role: .destructive, action: onDelete)
     }
+  }
+
+  /// Case carrée mais NETTEMENT plus arrondie que celle d'une tâche (rayon 6 vs 4,5), en gris et
+  /// sans fond plein : une sous-tâche reste visuellement secondaire par rapport à sa tâche.
+  private var subtaskCheckbox: some View {
+    RoundedRectangle(cornerRadius: 6, style: .continuous)
+      .strokeBorder(
+        subtask.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary),
+        lineWidth: 1.5
+      )
+      .overlay {
+        if subtask.isDone {
+          Image(systemName: "checkmark")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.secondary)
+        }
+      }
+      .frame(width: 15, height: 15)
+      .contentShape(Rectangle())
   }
 }
