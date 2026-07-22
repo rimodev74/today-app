@@ -1765,9 +1765,14 @@ private struct TaskRow: View {
         titleFocused = false
         focusNotesOnAppear = false
         // Purge des sous-tâches au titre vide : on ne persiste jamais une ligne vide (comme les
-        // brouillons de nouvelle tâche).
-        for subtask in task.subtasks
-        where subtask.title.trimmingCharacters(in: .whitespaces).isEmpty {
+        // brouillons de nouvelle tâche). SNAPSHOT via `filter` AVANT de supprimer : itérer
+        // `task.subtasks` en direct pendant qu'on supprime mute la relation en pleine énumération
+        // (maintenance de l'inverse CoreData → `_maintainInverseRelationship`), ce qui crashe
+        // (SIGABRT) et laisse le store incohérent.
+        let emptySubtasks = task.subtasks.filter {
+          $0.title.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        for subtask in emptySubtasks {
           modelContext.delete(subtask)
         }
         // Fermeture ANIMÉE : la fenêtre rétrécit (le clipping ravale notes + icônes, laissés
