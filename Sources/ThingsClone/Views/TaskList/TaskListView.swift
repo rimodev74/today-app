@@ -1611,6 +1611,10 @@ private struct TaskRow: View {
   /// mute à l'autosave), pour poser le focus sur celle qu'on vient de créer.
   /// uuid de la sous-tâche à focaliser (clé de focus stable, cf. `SubtaskRowView`).
   @FocusState private var focusedSubtask: UUID?
+  /// Dépliant de sous-tâches ouvert/fermé : permet de replier une longue checklist pour ne pas
+  /// surcharger la tâche. ponytail: état éphémère (par vue de tâche), non persisté — se réinitialise
+  /// à `true` au redémarrage. À porter sur `TaskItem` si l'on veut le mémoriser.
+  @State private var subtasksExpanded = true
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
@@ -2023,15 +2027,20 @@ private struct TaskRow: View {
   }
 
   private var subtasksSection: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      ForEach(task.orderedSubtasks, id: \.uuid) { subtask in
-        SubtaskRowView(
-          subtask: subtask,
-          isEditing: isEditing,
-          focus: $focusedSubtask,
-          onEnter: { enterOnSubtask(subtask) },
-          onDelete: { removeSubtask(subtask) }
-        )
+    VStack(alignment: .leading, spacing: 4) {
+      subtasksHeader
+      if subtasksExpanded {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(task.orderedSubtasks, id: \.uuid) { subtask in
+            SubtaskRowView(
+              subtask: subtask,
+              isEditing: isEditing,
+              focus: $focusedSubtask,
+              onEnter: { enterOnSubtask(subtask) },
+              onDelete: { removeSubtask(subtask) }
+            )
+          }
+        }
       }
     }
     // Aligné sous le titre (case 16 + espace 10 = 26), comme l'aperçu de note.
@@ -2039,8 +2048,44 @@ private struct TaskRow: View {
     .padding(.top, 4)
   }
 
-  /// Icône checklist : crée une sous-tâche vide et pose le focus dessus.
+  /// En-tête du dépliant, sur une ligne : anneau de progression + « fait/total », un « + » (en
+  /// édition) pour ajouter une sous-tâche, et à droite le chevron pour déplier/replier.
+  private var subtasksHeader: some View {
+    let total = task.subtasks.count
+    let done = task.subtasks.filter(\.isDone).count
+    return HStack(spacing: 8) {
+      SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
+        .frame(width: 13, height: 13)
+      Text("\(done)/\(total)")
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+      if isEditing {
+        Button(action: addNewSubtask) {
+          Image(systemName: "plus")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+      Spacer(minLength: 0)
+      Button {
+        withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
+      } label: {
+        Image(systemName: "chevron.right")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+    }
+  }
+
+  /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus.
   private func addNewSubtask() {
+    subtasksExpanded = true
     focusedSubtask = task.addSubtask().uuid
   }
 

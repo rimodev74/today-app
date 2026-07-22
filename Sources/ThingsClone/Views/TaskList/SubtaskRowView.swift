@@ -79,3 +79,20 @@ struct SubtaskRowView: View {
       .contentShape(Rectangle())
   }
 }
+
+/// Petit anneau de progression (fraction 0…1) pour l'en-tête du dépliant de sous-tâches : l'arc bleu
+/// se remplit au fur et à mesure des sous-tâches cochées.
+struct SubtaskProgressRing: View {
+  let fraction: Double
+
+  var body: some View {
+    ZStack {
+      Circle().stroke(Color.secondary.opacity(0.25), lineWidth: 2)
+      Circle()
+        .trim(from: 0, to: max(0, min(1, fraction)))
+        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        // Départ à midi plutôt qu'à 3 h (l'arc de `trim` commence à droite par défaut).
+        .rotationEffect(.degrees(-90))
+    }
+  }
+}
