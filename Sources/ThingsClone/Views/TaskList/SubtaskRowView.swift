@@ -7,9 +7,10 @@ import SwiftUI
 struct SubtaskRowView: View {
   @Bindable var subtask: Subtask
   let isEditing: Bool
-  /// Focus partagé avec `TaskRow`, clé = identifiant persistant de la sous-tâche (pour poser le
-  /// focus sur celle qu'on vient de créer).
-  @FocusState.Binding var focus: PersistentIdentifier?
+  /// Focus partagé avec `TaskRow`, clé = uuid stable de la sous-tâche (pas `persistentModelID`,
+  /// qui mute à l'autosave et ferait sauter le focus — pour poser le focus sur celle qu'on vient
+  /// de créer).
+  @FocusState.Binding var focus: UUID?
   /// Entrée dans le champ (ajouter la suivante / terminer — logique côté `TaskRow`).
   var onEnter: () -> Void
   /// Retour arrière sur un champ vide (supprimer — logique côté `TaskRow`).
@@ -24,7 +25,7 @@ struct SubtaskRowView: View {
       if isEditing {
         TextField("Sous-tâche", text: $subtask.title)
           .textFieldStyle(.plain)
-          .focused($focus, equals: subtask.persistentModelID)
+          .focused($focus, equals: subtask.uuid)
           .onSubmit(onEnter)
           // Retour arrière sur un champ vide → supprimer (sinon laisser le champ effacer un
           // caractère). `.delete` = la touche Retour arrière (0x7F), pas la suppression avant.

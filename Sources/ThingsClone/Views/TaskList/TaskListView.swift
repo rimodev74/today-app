@@ -1092,6 +1092,12 @@ private struct ListPageView: View {
       clone.sortIndex = task.sortIndex
       clone.priority = task.priority
       clone.headerColor = task.headerColor
+      for sub in task.orderedSubtasks {
+        let subCopy = Subtask(title: sub.title)
+        subCopy.isDone = sub.isDone
+        subCopy.sortIndex = sub.sortIndex
+        clone.subtasks.append(subCopy)
+      }
       modelContext.insert(clone)
     }
     try? modelContext.save()
@@ -1147,6 +1153,14 @@ private struct ListPageView: View {
     clone.headerColor = task.headerColor
     for t in list.tasks where t.sortIndex > task.sortIndex { t.sortIndex += 1 }
     clone.sortIndex = task.sortIndex + 1
+    // La checklist fait partie de la tâche : sans ça, dupliquer perdrait silencieusement les
+    // sous-tâches (même piège que la couleur d'en-tête jadis oubliée ici).
+    for sub in task.orderedSubtasks {
+      let subCopy = Subtask(title: sub.title)
+      subCopy.isDone = sub.isDone
+      subCopy.sortIndex = sub.sortIndex
+      clone.subtasks.append(subCopy)
+    }
     modelContext.insertAndSave(clone)
   }
 
@@ -1593,9 +1607,9 @@ private struct TaskRow: View {
 
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.modelContext) private var modelContext
-  /// Focus de la sous-tâche en cours d'édition (clé = identifiant persistant), pour poser le focus
-  /// sur celle qu'on vient de créer.
-  @FocusState private var focusedSubtask: PersistentIdentifier?
+  /// Focus de la sous-tâche en cours d'édition (clé = uuid stable, pas `persistentModelID` qui
+  /// mute à l'autosave), pour poser le focus sur celle qu'on vient de créer.
+  @FocusState private var focusedSubtask: UUID?
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
@@ -2011,7 +2025,7 @@ private struct TaskRow: View {
 
   private var subtasksSection: some View {
     VStack(alignment: .leading, spacing: 2) {
-      ForEach(task.orderedSubtasks) { subtask in
+      ForEach(task.orderedSubtasks, id: \.uuid) { subtask in
         SubtaskRowView(
           subtask: subtask,
           isEditing: isEditing,
@@ -2028,7 +2042,7 @@ private struct TaskRow: View {
 
   /// Icône checklist : crée une sous-tâche vide et pose le focus dessus.
   private func addNewSubtask() {
-    focusedSubtask = task.addSubtask().persistentModelID
+    focusedSubtask = task.addSubtask().uuid
   }
 
   /// Entrée sur une sous-tâche : vide → termine (défocalise) ; non vide → nouvelle sous-tâche + focus.
@@ -2038,17 +2052,17 @@ private struct TaskRow: View {
     if subtask.title.trimmingCharacters(in: .whitespaces).isEmpty {
       focusedSubtask = nil
     } else {
-      focusedSubtask = task.addSubtask().persistentModelID
+      focusedSubtask = task.addSubtask().uuid
     }
   }
 
   /// Retour arrière sur une sous-tâche vide : la supprime et refocalise la précédente (ou rien).
   private func deleteSubtask(_ subtask: Subtask) {
     let ordered = task.orderedSubtasks
-    let index = ordered.firstIndex { $0.persistentModelID == subtask.persistentModelID }
+    let index = ordered.firstIndex { $0.uuid == subtask.uuid }
     modelContext.delete(subtask)
     if let index, index > 0 {
-      focusedSubtask = ordered[index - 1].persistentModelID
+      focusedSubtask = ordered[index - 1].uuid
     } else {
       focusedSubtask = nil
     }
