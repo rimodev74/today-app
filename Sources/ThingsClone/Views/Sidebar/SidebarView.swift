@@ -17,13 +17,13 @@ struct SidebarView: View {
   /// Un seul état de renommage pour toute la sidebar : projets et listes ne peuvent
   /// pas être édités en même temps, deux états séparés se désynchroniseraient.
   @State private var editingID: PersistentIdentifier?
+  // Brouillon du renommage en cours : jamais écrit dans `list.title`/`project.title` avant la
+  // SORTIE du champ (cf. `editableTitle`), pour que la page de la liste/du projet — qui lit la
+  // même propriété — ne se mette pas à jour frappe par frappe en même temps que la sidebar.
+  @State private var draftTitle: String = ""
   @State private var collapsedProjects: Set<PersistentIdentifier> = []
   @FocusState private var renameFocused: Bool
 
-  // La sidebar est un « pan » focalisable : ⌫ ne supprime la sélection QUE quand la sidebar a le
-  // focus (posé au clic sur une ligne). Sans ce garde-fou, un ⌫ tapé en travaillant dans la page
-  // de droite effacerait la liste courante — la sélection de la sidebar est toujours non-nil.
-  @FocusState private var sidebarFocused: Bool
   // Liste/projet en attente de confirmation de suppression (non-vide) ⇒ alerte affichée.
   @State private var deletionCandidate: DeletionCandidate?
 
@@ -98,15 +98,10 @@ struct SidebarView: View {
       .scrollContentBackground(.hidden)
     }
     .safeAreaInset(edge: .bottom) { bottomBar }
-    // Focus posé au clic sur une ligne (cf. `sidebarRow`) ; `focusEffectDisabled` retire l'anneau
-    // système qu'un conteneur focalisable afficherait. Cliquer dans la page de droite vole le
-    // premier répondeur → `sidebarFocused` repasse à false, et ⌫ n'agit plus sur la sidebar.
-    .focusable()
-    .focused($sidebarFocused)
-    .focusEffectDisabled()
-    .onDeleteCommand(perform: requestDeleteSelection)
+    // Suppression uniquement via le clic droit → « Supprimer » (cf. `contextMenu` de `projectRow`/
+    // `listRow`) : pas de raccourci clavier (⌫) sur la sélection de la sidebar.
     // Confirmation seulement si l'élément n'est pas vide ; sinon la suppression est immédiate
-    // (cf. `requestDeleteSelection`).
+    // (cf. `requestDelete`).
     .alert(
       deletionCandidate.map(alertTitle) ?? "",
       isPresented: Binding(
@@ -246,30 +241,40 @@ struct SidebarView: View {
       selection = .project(project)
     } label: {
       HStack(spacing: 6) {
-        // Pas un Button : le `.onTapGesture` du `sidebarRow` (posé sur toute la ligne via
-        // contentShape) avale le clic d'un Button imbriqué. Un `highPriorityGesture` sur le
-        // chevron passe DEVANT le tap de la ligne — il déroule sans aussi sélectionner le projet.
-        Image(systemName: "chevron.right")
-          .font(.system(size: 9, weight: .bold))
+        // Icône « boîte » sur le flanc gauche : à l'œil, un projet (boîte) se distingue
+        // d'une liste (anneau de progression) au premier regard.
+        Image(systemName: "shippingbox")
+          .font(.system(size: 12))
           .foregroundStyle(.secondary)
-          .rotationEffect(.degrees(collapsedProjects.contains(id) ? 0 : 90))
-          // Cible de clic élargie : la flèche fait 9pt mais sa zone tactile couvre 24×20 (tout le
-          // flanc gauche de la rangée), bien plus facile à viser que le glyphe seul. Hauteur 20 (et
-          // padding vertical réduit) pour une rangée de projet plus compacte.
-          .frame(width: 24, height: 20)
-          .contentShape(Rectangle())
-          .highPriorityGesture(
-            TapGesture().onEnded {
-              withAnimation(.snappy(duration: 0.2)) { toggleCollapse(id) }
-            }
-          )
+          .frame(width: 20)
 
         editableTitle(id: id, text: Bindable(project).title, placeholder: "Nom du projet") {
           if project.title.trimmingCharacters(in: .whitespaces).isEmpty {
             project.title = "Nouveau projet"
           }
         }
-        .font(.system(size: 13, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
+
+        // Chevron à DROITE : le flanc gauche porte désormais l'icône. Pas un Button : le
+        // `.onTapGesture` du `sidebarRow` (posé sur toute la ligne via contentShape) avale le clic
+        // d'un Button imbriqué. Un `highPriorityGesture` passe DEVANT le tap de la ligne — il
+        // déroule sans aussi sélectionner le projet.
+        Image(systemName: "chevron.right")
+          .font(.system(size: 9, weight: .bold))
+          .foregroundStyle(.secondary)
+          .rotationEffect(.degrees(collapsedProjects.contains(id) ? 0 : 90))
+          // Cible de clic élargie : la flèche fait 9pt mais sa zone tactile couvre 24×20 (le flanc
+          // droit de la rangée), bien plus facile à viser que le glyphe seul. Hauteur 20 (et padding
+          // vertical réduit) pour une rangée de projet plus compacte. `alignment: .trailing` cale le
+          // glyphe sur le bord DROIT de cette zone (pas son centre) : c'est ce bord qui doit tomber
+          // pile sur celui du badge numérique d'une liste (`listRow`), lui sans zone de clic élargie.
+          .frame(width: 24, height: 20, alignment: .trailing)
+          .contentShape(Rectangle())
+          .highPriorityGesture(
+            TapGesture().onEnded {
+              withAnimation(.snappy(duration: 0.2)) { toggleCollapse(id) }
+            }
+          )
       }
     } onRename: {
       startRename(id)
@@ -289,7 +294,9 @@ struct SidebarView: View {
       selection = .list(list)
     } label: {
       HStack(spacing: 8) {
-        ProgressRing(progress: list.progress, showsFill: true)
+        // Trait seul (pas de camembert plein) : une liste vide reste un anneau GRIS ; le bleu
+        // n'apparaît qu'avec la progression, disque plein bleu quand tout est fait.
+        ProgressRing(progress: list.progress)
         editableTitle(id: id, text: Bindable(list).title, placeholder: "Nom de la liste") {
           if list.title.trimmingCharacters(in: .whitespaces).isEmpty {
             list.title = "Nouvelle liste"
@@ -345,6 +352,31 @@ struct SidebarView: View {
 
   // MARK: Ligne générique
 
+  /// Fond d'une ligne de sidebar : sélection (couleur système) en priorité, sinon un survol léger.
+  /// État `@State` propre à cette enveloppe — un survol vit et meurt avec la ligne, il n'y a pas
+  /// besoin de le remonter à `SidebarView`.
+  private struct HoverBackground<Content: View>: View {
+    var isSelected: Bool
+    @ViewBuilder var content: () -> Content
+    @State private var hovering = false
+
+    var body: some View {
+      content()
+        .background(
+          isSelected
+            ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+            : (hovering ? Color.primary.opacity(0.05) : .clear),
+          in: RoundedRectangle(cornerRadius: 6)
+        )
+        .onHover { inside in
+          hovering = inside
+          // `.set()` plutôt que push/pop : les lignes sont des frères non imbriqués, un push/pop
+          // suppose une pile équilibrée que le survol de deux lignes voisines peut désynchroniser.
+          inside ? NSCursor.pointingHand.set() : NSCursor.arrow.set()
+        }
+    }
+  }
+
   /// Une ligne = fond + padding identiques en tout temps, seul le contenu change.
   /// `onRename` (clic sur une ligne déjà sélectionnée) est optionnel : les listes
   /// intelligentes ne se renomment pas.
@@ -357,39 +389,41 @@ struct SidebarView: View {
     isSelected: @escaping () -> Bool,
     verticalPadding: CGFloat = 5,
     action: @escaping () -> Void,
-    @ViewBuilder label: () -> L,
+    @ViewBuilder label: @escaping () -> L,
     onRename: (() -> Void)? = nil
   ) -> some View {
-    label()
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.vertical, verticalPadding)
-      .padding(.horizontal, 8)
-      .contentShape(Rectangle())
-      .background(
-        isSelected() ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor) : .clear,
-        in: RoundedRectangle(cornerRadius: 6)
-      )
-      // Renommage façon Finder — clic sur une ligne DÉJÀ sélectionnée — plutôt qu'un vrai
-      // double-clic : un `TapGesture(count: 2)` simultané à ce tap se fait doubler par CHAQUE
-      // clic qui le compose (le second déclenche aussi le tap simple), sans garantie d'ordre —
-      // le renommage démarrait puis `editingID` retombait aussitôt à nil. Même pattern que
-      // TaskRow (cf. `dragGesture` dans TaskListView).
-      //
-      // Le clic n'est JAMAIS gardé par `editingID == nil` : si un renommage restait
-      // coincé (champ qui ne prend pas le focus), plus une seule ligne de la sidebar
-      // ne répondait. Cliquer ailleurs pendant une édition la valide et sélectionne.
-      .onTapGesture {
-        if isSelected(), editingID == nil, let onRename {
-          onRename()
-        } else {
-          editingID = nil
-          sidebarFocused = true  // le pan sidebar devient actif → ⌫ agit sur cette sélection
-          action()
-        }
+    HoverBackground(isSelected: isSelected()) {
+      label()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, verticalPadding)
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+    }
+    // Renommage façon Finder — clic sur une ligne DÉJÀ sélectionnée — plutôt qu'un vrai
+    // double-clic : un `TapGesture(count: 2)` simultané à ce tap se fait doubler par CHAQUE
+    // clic qui le compose (le second déclenche aussi le tap simple), sans garantie d'ordre —
+    // le renommage démarrait puis `editingID` retombait aussitôt à nil. Même pattern que
+    // TaskRow (cf. `dragGesture` dans TaskListView).
+    //
+    // Le clic n'est JAMAIS gardé par `editingID == nil` : si un renommage restait
+    // coincé (champ qui ne prend pas le focus), plus une seule ligne de la sidebar
+    // ne répondait. Cliquer ailleurs pendant une édition la valide et sélectionne.
+    .onTapGesture {
+      if isSelected(), editingID == nil, let onRename {
+        onRename()
+      } else {
+        editingID = nil
+        action()
       }
+    }
   }
 
   /// Titre qui bascule en champ de saisie pendant le renommage, sans changer de gabarit.
+  /// Édite un BROUILLON local (`draftTitle`), jamais `text` en direct : la sidebar et la page de
+  /// la liste/du projet lisent la même propriété (`list.title`/`project.title`) — la modifier à
+  /// chaque frappe la ferait apparaître aussi dans le titre de la page, EN MÊME TEMPS que la
+  /// sidebar. `text.wrappedValue` n'est réécrit qu'à la SORTIE du champ (Entrée, Échap, clic
+  /// ailleurs) : la page ne se met donc à jour qu'une fois le renommage terminé.
   @ViewBuilder
   private func editableTitle(
     id: PersistentIdentifier,
@@ -398,7 +432,7 @@ struct SidebarView: View {
     commit: @escaping () -> Void
   ) -> some View {
     if editingID == id {
-      TextField(placeholder, text: text)
+      TextField(placeholder, text: $draftTitle)
         .textFieldStyle(.plain)
         .focused($renameFocused)
         // Le focus se pose ICI, quand le champ existe. Le poser depuis startRename()
@@ -407,17 +441,18 @@ struct SidebarView: View {
         // montage : synchrone, il entrait parfois en concurrence avec le relâchement du focus
         // du conteneur sidebar (cf. `startRename`), encore en cours d'application côté AppKit.
         .onAppear {
+          draftTitle = text.wrappedValue
           DispatchQueue.main.async { renameFocused = true }
         }
         .onSubmit {
+          text.wrappedValue = draftTitle
           commit()
           editingID = nil
-          sidebarFocused = true  // rend le focus au conteneur : ⌫ redevient actif sur la ligne
         }
         .onExitCommand {
+          text.wrappedValue = draftTitle
           commit()
           editingID = nil
-          sidebarFocused = true
         }
         .onChange(of: renameFocused) { _, focused in
           if focused {
@@ -430,9 +465,9 @@ struct SidebarView: View {
               (NSApp.keyWindow?.firstResponder as? NSText)?.selectAll(nil)
             }
           } else {
+            text.wrappedValue = draftTitle
             commit()
             editingID = nil
-            sidebarFocused = true
           }
         }
     } else {
@@ -477,11 +512,6 @@ struct SidebarView: View {
   }
 
   private func startRename(_ id: PersistentIdentifier) {
-    // Libère le focus du CONTENEUR sidebar avant de le donner au champ : sinon les deux
-    // `@FocusState` (celui-ci et `renameFocused`) se disputent le premier répondeur — le champ
-    // gagnait le focus un instant (surbrillance visible) puis le reperdait aussitôt au profit
-    // du conteneur, qui restait à `true` depuis le clic de sélection qui précède le renommage.
-    sidebarFocused = false
     editingID = id  // le focus suit dans .onAppear du champ
   }
 
@@ -489,9 +519,6 @@ struct SidebarView: View {
     let project = Project(title: "Nouveau projet")
     project.sortIndex = (projects.map(\.sortIndex).max() ?? -1) + 1
     modelContext.insertAndSave(project)
-    // Un projet vide n'est pas utilisable : il lui faut au moins une liste pour poser une tâche.
-    let list = TodoList(title: "Nouvelle liste", project: project)
-    modelContext.insertAndSave(list)
     selection = .project(project)
     startRename(project.persistentModelID)
   }
@@ -527,17 +554,6 @@ struct SidebarView: View {
 
   private func requestDelete(_ project: Project) {
     if project.lists.isEmpty { delete(project) } else { deletionCandidate = .project(project) }
-  }
-
-  /// ⌫ sur la sélection. Ne fait rien pendant un renommage.
-  private func requestDeleteSelection() {
-    guard editingID == nil else { return }
-    switch selection {
-    case .list(let list): requestDelete(list)
-    case .project(let project): requestDelete(project)
-    default:
-      break  // vues intelligentes, pomodoro : rien à supprimer
-    }
   }
 
   private func performDelete(_ candidate: DeletionCandidate) {

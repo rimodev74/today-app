@@ -9,8 +9,44 @@ struct ThingsCloneApp: App {
   @State private var profile = UserProfile()
 
   init() {
+    Self.prewarmRichTextEditing()
     NSApplication.shared.setActivationPolicy(.regular)
     NSApplication.shared.activate(ignoringOtherApps: true)
+  }
+
+  /// La toute première fois qu'un champ de texte devient premier répondeur dans le process,
+  /// AppKit fait flasher un panneau système une fraction de seconde — observé sur le TITRE d'une
+  /// tâche (un `TextField` SwiftUI ordinaire, passant par le « field editor » partagé d'AppKit,
+  /// instancié paresseusement au tout premier focus) ET sur les notes en texte riche
+  /// (`NSTextView` avec `isRichText`, RTF non vide). Ce sont deux coûts distincts qui se
+  /// chevauchaient jusque-là dans un même flash apparent (confirmé par bissection : en régler un
+  /// laisse l'autre réapparaître seul, sur la prochaine tâche ouverte en premier — notes ou pas).
+  /// On rejoue les deux scènes ici, dans une fenêtre jamais affichée (hors de l'écran, `orderFront`
+  /// jamais appelé) : les coûts sont payés avant l'affichage de la fenêtre principale plutôt qu'au
+  /// premier double-clic de l'utilisateur.
+  private static func prewarmRichTextEditing() {
+    func offscreenWindow(_ view: NSView) -> NSWindow {
+      let window = NSWindow(
+        contentRect: NSRect(x: -10_000, y: -10_000, width: 10, height: 10),
+        styleMask: [.borderless], backing: .buffered, defer: true)
+      window.isReleasedWhenClosed = false
+      window.contentView = view
+      window.makeFirstResponder(view)
+      return window
+    }
+
+    // Titre : champ de texte simple, comme `TextField` — force l'instanciation du field editor
+    // partagé d'AppKit. Fenêtre distincte de celle des notes : réattribuer `contentView` sur une
+    // même fenêtre laisserait planer un doute sur l'ordre exact de démontage du premier champ.
+    _ = offscreenWindow(NSTextField(string: " "))
+
+    // Notes : texte riche avec du RTF non vide à décoder, comme `RichTextEditor`.
+    let textView = NSTextView()
+    textView.isRichText = true
+    textView.isAutomaticLinkDetectionEnabled = true
+    let sample = NotesCodec.encode(NSAttributedString(string: " "))
+    textView.textStorage?.setAttributedString(NotesCodec.decode(sample))
+    _ = offscreenWindow(textView)
   }
 
   /// Le schéma change sans plan de migration à ce stade. Plutôt que de refuser de démarrer

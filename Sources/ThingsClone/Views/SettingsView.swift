@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
   @AppStorage(CompletedTaskRetention.storageKey) private var retentionRaw = CompletedTaskRetention
     .untilViewChange.rawValue
+  @AppStorage(TodoList.autoSortCompletedStorageKey) private var autoSortCompleted = true
   @AppStorage(PomodoroTimer.autoStartStorageKey) private var pomodoroAutoStart = false
   @AppStorage(PomodoroTimer.alertSoundStorageKey) private var pomodoroAlertSound = PomodoroTimer
     .defaultAlertSound
@@ -15,6 +16,8 @@ struct SettingsView: View {
           Text(option.label).tag(option.rawValue)
         }
       }
+
+      Toggle("Descendre les tâches cochées en bas de la liste", isOn: $autoSortCompleted)
 
       Toggle("Pomodoro : enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
 
@@ -30,6 +33,6 @@ struct SettingsView: View {
       }
     }
     .padding(20)
-    .frame(width: 380, height: 190)
+    .frame(width: 380, height: 214)
   }
 }

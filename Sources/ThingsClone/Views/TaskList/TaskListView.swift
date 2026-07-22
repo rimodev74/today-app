@@ -48,13 +48,13 @@ struct TaskListView: View {
         list: list, selection: $selection, searchPresented: $searchPresented,
         pendingTitleFocus: $pendingTitleFocus)
     case .project(let project):
-      ProjectPageView(project: project, selection: $selection)
+      ProjectPageView(project: project, selection: $selection, searchPresented: $searchPresented)
     case .pomodoro:
-      PomodoroView()
+      PomodoroView(searchPresented: $searchPresented)
     case .smartList(let smart):
-      comingSoon(smart.label)
+      comingSoon(smart.label, searchPresented: $searchPresented)
     case nil:
-      comingSoon("Sélectionne une liste")
+      comingSoon("Sélectionne une liste", searchPresented: $searchPresented)
     }
   }
 }
@@ -109,12 +109,12 @@ private struct ListPageView: View {
   // l'édition au relâchement que si elle était DÉJÀ sélectionnée (renommage façon Finder).
   @State private var pressID: PersistentIdentifier?
   @State private var pressWasSelected = false
-  @State private var rowFrames: [PersistentIdentifier: CGRect] = [:]
-  // Hauteur mesurée de la rangée « Nouvelle tâche » de chaque bloc (clé = `TaskBlock.id`). Elle
-  // n'est pas une TaskItem donc absente de `rowFrames` ; il faut pourtant la compter dans le repli
-  // d'un bloc tiré, sinon un trou de sa hauteur subsiste. `draggedFieldHeight` = celle du bloc tiré,
-  // figée à l'empoignade.
-  @State private var fieldHeights: [String: CGFloat] = [:]
+  // Position de repos mesurée de CHAQUE ligne physique, tâche/en-tête RÉELLE (`.task`) ou champ
+  // « Nouvelle tâche » VIRTUEL (`.field`, cf. `RowKey`) — un champ n'est jamais un cas à part, juste
+  // une ligne non déplaçable de plus dans la même séquence et le même calcul de décalage
+  // (`dragTargets`). `draggedFieldHeight` = hauteur du champ du bloc tiré, figée à l'empoignade
+  // (entre dans le repli d'une en-tête tirée).
+  @State private var rowFrames: [RowKey: CGRect] = [:]
   @State private var draggedFieldHeight: CGFloat = 0
   @State private var headerHovering = false
   @State private var pickingListDate = false
@@ -122,8 +122,9 @@ private struct ListPageView: View {
   @FocusState private var notesFocused: Bool
 
   var body: some View {
-    // Position de repos cible de chaque ligne pendant un drag (trou ouvert sous le curseur).
-    // Vide hors drag : chaque ligne reste alors à son offset 0.
+    // Position de repos cible de chaque ligne pendant un drag (trou ouvert sous le curseur) — tâche,
+    // en-tête OU champ « Nouvelle tâche » (cf. `RowKey`) : les trois partagent le même calcul, donc
+    // la même table. Vide hors drag : chaque ligne reste alors à son offset 0.
     let targets = dragTargets()
     let placeholder = dragPlaceholderRect()
     return GeometryReader { geo in
@@ -143,21 +144,37 @@ private struct ListPageView: View {
               draggableRow(for: task, targets: targets)
             }
             // Pendant N'IMPORTE QUEL drag (en-tête OU tâche), TOUS les champs « Nouvelle tâche »
-            // disparaissent : ils encombreraient le déplacement. Pour une en-tête, celui du bloc tiré
-            // voyage en plus avec elle. Leur hauteur est mesurée (clé = block.id) pour entrer dans le
-            // repli — cf. `draggedFieldHeight`.
+            // disparaissent : ils encombreraient le déplacement. Restent MONTÉS (juste rendus
+            // invisibles par opacité, pas retirés de l'arbre) : `rowFrames`/`dragTargets` sont GELÉS
+            // à l'empoignade en supposant que chaque ligne (champs compris) garde sa place dans la
+            // mise en page — les retirer aurait fait s'effondrer cet espace pendant TOUT le drag et
+            // cassé le calcul du trou d'insertion (le placeholder).
+            //
+            // Le décalage vient de `fieldOffset` — EXACTEMENT `rowOffset`, pour un champ : au drop,
+            // la position CIBLE (anticipée dès le live-drag, cf. `dragTargets`) devient la position
+            // RÉELLE (le tri l'a rendue vraie) et le décalage retombe à 0 sans aucun saut, puisque
+            // affichée et réelle coïncidaient déjà. Un champ n'est plus un cas à part : c'est cette
+            // continuité, pas une astuce d'animation, qui rend sa révélation instantanée et fiable.
             let blockLifted = block.header != nil && block.header?.persistentModelID == draggingID
             newTaskRow(for: block)
               .background {
                 GeometryReader { g in
-                  Color.clear.preference(key: FieldHeightKey.self, value: [block.id: g.size.height])
+                  Color.clear.preference(
+                    key: RowFrameKey.self,
+                    value: [.field(block.id): g.frame(in: .named(Self.dragSpace))])
                 }
               }
               .opacity(draggingID != nil ? 0 : 1)
-              .offset(blockLifted ? dragOffset : .zero)
+              .offset(
+                x: blockLifted ? dragOffset.width : 0,
+                y: blockLifted ? dragOffset.height : fieldOffset(for: block, targets: targets)
+              )
               .zIndex(blockLifted ? 1 : 0)
-              .animation(blockLifted ? nil : .snappy(duration: 0.22), value: dragOffset)
-              .animation(.easeInOut(duration: 0.2), value: draggingID != nil)
+              .animation(
+                blockLifted ? nil : .snappy(duration: 0.22),
+                value: fieldOffset(for: block, targets: targets)
+              )
+              .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -186,24 +203,23 @@ private struct ListPageView: View {
           guard draggingID == nil else { return }
           rowFrames = frames
         }
-        .onPreferenceChange(FieldHeightKey.self) { heights in
-          guard draggingID == nil else { return }
-          fieldHeights = heights
-        }
         // Le contenu remplit AU MOINS la hauteur du viewport, pour que son fond (le
         // rattrapeur de clic) couvre aussi le vide SOUS la liste. Un `.background` posé sur
         // le ScrollView lui-même ne reçoit pas les clics de sa zone vide (bug constaté) ;
         // ici le rattrapeur est du CONTENU de ScrollView, où le clic est bien délivré.
         .frame(minHeight: geo.size.height, alignment: .top)
         .background {
-          // Rattrapeur de clic sur le vide : referme l'édition ET retire le focus des
-          // notes (un clic dans du vide ne défocalise pas un champ tout seul).
-          if editingID != nil || notesFocused {
+          // Rattrapeur de clic sur le vide : referme l'édition, retire le focus des notes, ET
+          // quitte un champ « Nouvelle tâche » encore focalisé (un clic dans du vide ne défocalise
+          // aucun de ces champs tout seul). Quitter `focusedDraft` déclenche la création de la
+          // tâche en attente, cf. le `.onChange(of: focusedDraft)` de `newTaskRow`.
+          if editingID != nil || notesFocused || focusedDraft != nil {
             Color.clear
               .contentShape(Rectangle())
               .onTapGesture {
                 dismissEditing()
                 notesFocused = false
+                focusedDraft = nil
               }
           }
         }
@@ -220,13 +236,29 @@ private struct ListPageView: View {
           .keyboardShortcut(.cancelAction)
           .hidden()
       }
-      // Retour arrière (⌫) sur une en-tête SÉLECTIONNÉE (hors édition) : la supprime. Même mécanique
-      // que Échap ci-dessus — bouton caché au niveau fenêtre. Absent en édition (le champ mange ⌫).
-      if editingID == nil, selectedHeader != nil {
-        Button("", action: requestDeleteSelectedHeader)
-          .keyboardShortcut(.delete, modifiers: [])
-          .hidden()
-      }
+    }
+    // ⌘N / ⌘⇧N : PAS de bouton caché + `.keyboardShortcut` (essayé d'abord) — deux raccourcis sur
+    // la même lettre avec des modificateurs différents se marchent dessus sous SwiftUI, ⌘⇧N étant
+    // avalé par le gestionnaire ⌘N. Même moniteur NSEvent que `DeleteKeyMonitor` ci-dessous, qui
+    // contourne déjà cette même classe de problème de routage clavier.
+    .background {
+      KeyCommandMonitor(keyCode: 45, modifiers: [.command], action: createTaskInEditMode)
+      KeyCommandMonitor(keyCode: 45, modifiers: [.command, .shift], action: insertHeader)
+    }
+    // Retour arrière (⌫) sur la sélection courante (tâche OU en-tête, hors édition) : la supprime.
+    // PAS le bouton caché + `.keyboardShortcut` utilisé pour Échap ci-dessus (et pas non plus
+    // `.onKeyPress`, essayé puis abandonné) : ces deux mécanismes exigent qu'un VRAI premier
+    // répondeur existe déjà dans la fenêtre. Un champ d'édition en a un ; une ligne juste
+    // SÉLECTIONNÉE (tap, aucun champ focalisé) n'en établit aucun — la frappe servait alors à
+    // ÉTABLIR le key-view-loop (focus jeté sur le 1er champ focalisable, le « Nouvelle tâche » du
+    // bloc) au lieu d'atteindre le gestionnaire. `DeleteKeyMonitor` voit la touche AVANT sa
+    // distribution normale, indépendamment de tout premier répondeur — et se retire lui-même dès
+    // qu'un VRAI champ de texte a le focus (cf. son check `NSText`), pour ne jamais lui voler ⌫.
+    .background {
+      DeleteKeyMonitor(
+        isActive: { editingID == nil && selectedID != nil },
+        action: requestDeleteSelected
+      )
     }
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
     // supprime directement. Les tâches, elles, ne sont PAS supprimées — l'en-tête retirée, elles
@@ -276,6 +308,15 @@ private struct ListPageView: View {
     return list.tasks.first { $0.persistentModelID == id && $0.isHeader }
   }
 
+  /// Bloc contenant la sélection courante (tâche ou en-tête), ou nil hors sélection. Cible du
+  /// « + » de la toolbar : insérer dans le bloc qu'on regarde, pas systématiquement le dernier.
+  private var selectedBlockID: String? {
+    guard let id = selectedID else { return nil }
+    return blocks.first { block in
+      block.header?.persistentModelID == id || block.tasks.contains { $0.persistentModelID == id }
+    }?.id
+  }
+
   /// Tâches rattachées à une en-tête = celles de son bloc (l'en-tête exclue).
   private func attachedTasks(of header: TaskItem) -> [TaskItem] {
     blocks.first { $0.header?.persistentModelID == header.persistentModelID }?.tasks ?? []
@@ -292,6 +333,18 @@ private struct ListPageView: View {
     }
   }
 
+  /// ⌫ sur la sélection courante : délègue à la confirmation d'en-tête si elle en est une, sinon
+  /// supprime la tâche directement (pas de tâches rattachées à protéger, contrairement à l'en-tête).
+  private func requestDeleteSelected() {
+    guard let id = selectedID, let task = list.tasks.first(where: { $0.persistentModelID == id })
+    else { return }
+    if task.isHeader {
+      requestDeleteSelectedHeader()
+    } else {
+      delete(task)
+    }
+  }
+
   /// Découpe les lignes en blocs : une en-tête et les tâches qui la suivent jusqu'à la prochaine.
   /// Les tâches AVANT toute en-tête forment un bloc sans en-tête ; une liste vide reste un bloc
   /// (avec son champ de création). `id` stable (id de l'en-tête, ou "top") pour l'identité SwiftUI,
@@ -302,17 +355,32 @@ private struct ListPageView: View {
     draggingID != nil && draggedGroup.first?.isHeader == true
   }
 
+  /// Clé d'un bloc : celle de son en-tête, ou `"top"` pour le bloc sans en-tête. Point d'entrée
+  /// UNIQUE (`blocks` et `blockKey(of:in:)` s'appuient dessus) : deux calculs séparés auraient pu
+  /// diverger silencieusement.
+  private func blockKey(_ header: TaskItem?) -> String {
+    header.map { String(describing: $0.persistentModelID) } ?? "top"
+  }
+
+  /// Clé du bloc contenant `task` dans `ordered` : celle de la dernière en-tête qui la précède
+  /// (ou `"top"`). Même règle que `blocks`, mais sans reconstruire tout le tableau — sert à
+  /// `endDrag` à repérer les DEUX blocs dont la composition change lors d'un drag (cf.
+  /// `fieldRefresh`), sans attendre que `blocks` (calculé après l'écriture des `sortIndex`)
+  /// reflète déjà le nouvel état.
+  private func blockKey(of task: TaskItem, in ordered: [TaskItem]) -> String {
+    guard let i = ordered.firstIndex(where: { $0.persistentModelID == task.persistentModelID })
+    else { return blockKey(nil) }
+    return blockKey(ordered[..<i].last(where: \.isHeader))
+  }
+
   private var blocks: [TaskBlock] {
-    func key(_ header: TaskItem?) -> String {
-      header.map { String(describing: $0.persistentModelID) } ?? "top"
-    }
     var result: [TaskBlock] = []
     var header: TaskItem?
     var tasks: [TaskItem] = []
     for item in list.orderedTasks {
       if item.isHeader {
         if header != nil || !tasks.isEmpty {
-          result.append(TaskBlock(id: key(header), header: header, tasks: tasks))
+          result.append(TaskBlock(id: blockKey(header), header: header, tasks: tasks))
         }
         header = item
         tasks = []
@@ -320,13 +388,13 @@ private struct ListPageView: View {
         tasks.append(item)
       }
     }
-    result.append(TaskBlock(id: key(header), header: header, tasks: tasks))
+    result.append(TaskBlock(id: blockKey(header), header: header, tasks: tasks))
     return result
   }
 
   /// Enveloppe drag/drop d'une ligne (en-tête ou tâche), mutualisée entre les deux : mesure de la
   /// position de repos, décalage/soulevé pendant le drag, et le geste unique de la page.
-  private func draggableRow(for task: TaskItem, targets: [PersistentIdentifier: CGFloat])
+  private func draggableRow(for task: TaskItem, targets: [RowKey: CGFloat])
     -> some View
   {
     // `lifted` = cette ligne fait partie du groupe tiré (bloc entier pour une en-tête) → elle se
@@ -339,13 +407,15 @@ private struct ListPageView: View {
     return
       row(for: task)
       // Carte éditée : marge basse pour ne pas coller la ligne suivante (ou « Nouvelle tâche »).
-      .padding(.bottom, editingID == task.persistentModelID ? 12 : 0)
+      // Pas pour une en-tête : elle n'a pas de carte de notes qui s'étend, la marge ne ferait
+      // qu'ajouter un vide sous sa pilule.
+      .padding(.bottom, editingID == task.persistentModelID && !task.isHeader ? 12 : 0)
       // Position de repos mesurée, pour calculer où ouvrir le trou pendant un drag.
       .background {
         GeometryReader { g in
           Color.clear.preference(
             key: RowFrameKey.self,
-            value: [task.persistentModelID: g.frame(in: .named(Self.dragSpace))]
+            value: [.task(task.persistentModelID): g.frame(in: .named(Self.dragSpace))]
           )
         }
       }
@@ -393,7 +463,9 @@ private struct ListPageView: View {
         isDragging: draggingID == task.persistentModelID,
         // Nombre RÉEL de tâches rattachées (badge rouge) ; les calques, eux, sont plafonnés à 3.
         attachedTaskCount: draggingID == task.persistentModelID ? draggedGroup.count - 1 : 0,
-        onEndEditing: { endEditing(task) },
+        moveTargets: allLists.filter { $0.persistentModelID != list.persistentModelID },
+        onEndEditing: { endEditingHeader(task) },
+        onMove: { moveHeader(task, to: $0) },
         onDelete: { delete(task) }
       )
     } else {
@@ -402,6 +474,7 @@ private struct ListPageView: View {
         isSelected: selectedID == task.persistentModelID,
         isEditing: editingID == task.persistentModelID,
         moveTargets: allLists.filter { $0.persistentModelID != list.persistentModelID },
+        onBeginEditing: { beginEditing(task) },
         onEndEditing: { endEditing(task) },
         onMove: { move(task, to: $0) },
         onDuplicate: { duplicate(task) },
@@ -420,6 +493,13 @@ private struct ListPageView: View {
       editingID = nil
       selectedID = task.persistentModelID
     }
+    // Quitte tout focus texte en cours (« Nouvelle tâche », titre de page, notes) : sinon ce champ
+    // reste le VRAI premier répondeur AppKit même une fois la tâche sélectionnée, et ⌫ lui est
+    // alors livré (il "focus" au lieu de supprimer) plutôt qu'à la suppression de la sélection.
+    // Même règle que le rattrapeur de clic sur le vide, plus haut : cliquer AILLEURS — ici sur une
+    // tâche — doit toujours faire sortir d'un champ de saisie, peu importe lequel.
+    focusedDraft = nil
+    notesFocused = false
   }
 
   /// Double-clic : passe en édition.
@@ -428,6 +508,11 @@ private struct ListPageView: View {
       selectedID = task.persistentModelID
       editingID = task.persistentModelID
     }
+    // Cf. `select()` : au cas où la tâche était déjà sélectionnée AVANT ce clic (ce geste n'entre
+    // alors jamais dans `select()`, cf. `dragGesture`), on quitte quand même tout focus texte
+    // resté ouvert ailleurs.
+    focusedDraft = nil
+    notesFocused = false
   }
 
   /// Fin d'édition (Entrée / Échap / clic à l'extérieur) : repasse en état « normal ».
@@ -437,6 +522,14 @@ private struct ListPageView: View {
       editingID = nil
       selectedID = nil
     }
+  }
+
+  /// Entrée sur le titre d'une en-tête : ferme son édition ET enchaîne sur le champ « Nouvelle
+  /// tâche » de SON bloc — même logique que le titre de la liste (cf. `header`, plus bas), pour
+  /// écrire directement la 1re tâche de la section qu'on vient de nommer.
+  private func endEditingHeader(_ header: TaskItem) {
+    endEditing(header)
+    focusedDraft = blocks.first { $0.header?.persistentModelID == header.persistentModelID }?.id
   }
 
   /// Ferme l'édition en cours, quelle que soit la tâche (Échap au niveau fenêtre, clic dehors).
@@ -468,10 +561,34 @@ private struct ListPageView: View {
   /// SwiftUI et un `focusedDraft = <bloc>` ne le déloge pas. Préfixe non imprimable → jamais un `id`.
   private static let titleFocusKey = "\u{1}listTitle"
 
+  /// Ligne physique de la page : une tâche/en-tête RÉELLE, ou le champ « Nouvelle tâche » VIRTUEL de
+  /// fin de bloc. Les deux partagent le MÊME mécanisme de mesure/décalage (`rowFrames`,
+  /// `dragTargets`) : un champ n'est jamais un cas spécial à calculer à la main, juste une ligne non
+  /// déplaçable de plus dans la séquence — c'est cette uniformité qui lui garantit une continuité
+  /// exacte au drop (même principe que la rangée « + Nouvelle liste » de la sidebar, cf.
+  /// `SidebarView.RowKey.addList`, qui participe déjà à son propre moteur de réordonnancement).
+  fileprivate enum RowKey: Hashable {
+    case task(PersistentIdentifier)
+    case field(String)
+  }
+
+  /// Séquence physique complète, dans l'ordre d'affichage : chaque bloc = son en-tête (s'il y en a
+  /// une), ses tâches, puis son champ « Nouvelle tâche ». Base commune du calcul de décalage pour
+  /// les tâches ET les champs (cf. `dragTargets`).
+  private var physicalRows: [RowKey] {
+    var rows: [RowKey] = []
+    for block in blocks {
+      if let header = block.header { rows.append(.task(header.persistentModelID)) }
+      for task in block.tasks { rows.append(.task(task.persistentModelID)) }
+      rows.append(.field(block.id))
+    }
+    return rows
+  }
+
   /// Rectangle englobant d'un ensemble de lignes contiguës (position de repos), pour traiter un bloc
   /// comme une seule « grande ligne ». `nil` tant qu'aucune n'est mesurée.
   private func groupRect(_ items: [TaskItem]) -> CGRect? {
-    let frames = items.compactMap { rowFrames[$0.persistentModelID] }
+    let frames = items.compactMap { rowFrames[.task($0.persistentModelID)] }
     guard let first = frames.first else { return nil }
     let minY = frames.map(\.minY).min() ?? 0
     let maxY = frames.map(\.maxY).max() ?? 0
@@ -490,7 +607,7 @@ private struct ListPageView: View {
   /// en-tête, et les lignes du dessous remontent d'autant. `nil` hors drag d'en-tête.
   private var blockDelta: CGFloat? {
     guard let header = draggedGroup.first, header.isHeader,
-      let hf = rowFrames[header.persistentModelID],
+      let hf = rowFrames[.task(header.persistentModelID)],
       let block = groupRect(draggedGroup)
     else { return nil }
     return block.height - hf.height + draggedFieldHeight
@@ -506,6 +623,10 @@ private struct ListPageView: View {
   ///   son en-tête (les tâches se sont estompées) ; on compare le centre de l'en-tête aux centres
   ///   des blocs restants, corrigés du repli (ceux SOUS le bloc tiré sont remontés de Δ). Sous tous
   ///   les centres → fin de liste. Le placeholder ne se cale qu'aux frontières d'en-têtes.
+  ///
+  /// Rendu en TÂCHES (`[TaskItem]`), pas en `RowKey` : c'est l'espace où `sortIndex` s'écrit
+  /// (`endDrag`). `dragTargets`/`fieldOffset` traduisent ce plan vers l'espace `RowKey` (qui inclut
+  /// les champs) quand il leur faut positionner autre chose qu'une tâche.
   private func dragInsertion() -> (dragged: [TaskItem], others: [TaskItem], index: Int)? {
     guard draggingID != nil, let first = draggedGroup.first,
       let groupF = groupRect(draggedGroup)
@@ -515,7 +636,7 @@ private struct ListPageView: View {
     let others = ordered.filter { !draggedIDs.contains($0.persistentModelID) }
 
     if first.isHeader {
-      guard let hf = rowFrames[first.persistentModelID],
+      guard let hf = rowFrames[.task(first.persistentModelID)],
         let di = blocks.firstIndex(where: {
           $0.header?.persistentModelID == first.persistentModelID
         })
@@ -545,8 +666,9 @@ private struct ListPageView: View {
     let center = groupF.midY + dragOffset.height
     var index = ordered.count
     for i in ordered.indices {
-      guard let f = rowFrames[ordered[i].persistentModelID] else { continue }
-      let nextMid = i + 1 < ordered.count ? rowFrames[ordered[i + 1].persistentModelID]?.midY : nil
+      guard let f = rowFrames[.task(ordered[i].persistentModelID)] else { continue }
+      let nextMid =
+        i + 1 < ordered.count ? rowFrames[.task(ordered[i + 1].persistentModelID)]?.midY : nil
       let boundary = nextMid.map { ($0 + f.midY) / 2 } ?? .greatestFiniteMagnitude
       if center < boundary {
         index = i
@@ -556,41 +678,64 @@ private struct ListPageView: View {
     return (draggedGroup, others, min(index, others.count))
   }
 
-  /// Position de repos cible de chaque ligne, trou réservé à l'emplacement d'insertion.
+  /// Position de repos cible de CHAQUE ligne physique — tâches, en-têtes, ET champs « Nouvelle
+  /// tâche » confondus (cf. `RowKey`/`physicalRows`) — trou réservé à l'emplacement d'insertion.
   ///
   /// Fondé sur les positions de repos MESURÉES (`rowFrames.minY`), pas sur un ré-empilement
   /// contigu : retirer la ligne tirée puis la réinsérer décale les lignes situées ENTRE son
-  /// ancienne et sa nouvelle place d'exactement sa hauteur (les autres ne bougent pas). Partir des
-  /// positions mesurées garde le calcul juste même quand des vues non-tâches (les champs « Nouvelle
-  /// tâche » de chaque bloc) créent des trous entre les lignes.
+  /// ancienne et sa nouvelle place d'exactement sa hauteur (les autres ne bougent pas) — QUEL QUE
+  /// SOIT LE TYPE de ces lignes intermédiaires (tâche, en-tête, champ) : seule compte leur POSITION
+  /// dans la séquence, jamais un cas particulier par bloc à calculer à la main. C'est cette
+  /// continuité, pas une astuce d'animation, qui garantit une révélation de champ instantanée et
+  /// fiable au drop, quelle que soit la situation.
   /// ponytail: recalcul O(n) par rendu de drag — négligeable à l'échelle d'une to-do list.
   ///
-  /// Drag d'une en-tête : calcul dans l'espace REPLIÉ. `h` = hauteur de la SEULE en-tête (le
-  /// placeholder fait la taille d'une en-tête, comme une tâche fait la sienne). Les lignes situées
-  /// sous le bloc tiré (indice `j >= B` dans `others`) sont d'abord remontées de Δ (le bloc s'est
-  /// réduit à son en-tête), puis décalées de ±h selon l'insertion.
-  private func dragTargets() -> [PersistentIdentifier: CGFloat] {
+  /// Drag d'une en-tête : calcul dans l'espace REPLIÉ, TÂCHES SEULEMENT — les champs des AUTRES
+  /// blocs restent simplement invisibles pendant un drag d'en-tête (jamais signalé comme un
+  /// problème, pas de raison d'étendre ce cas). `h` = hauteur de la SEULE en-tête.
+  private func dragTargets() -> [RowKey: CGFloat] {
     guard let (dragged, others, insert) = dragInsertion(),
       let first = dragged.first,
-      let dragFrame = rowFrames[first.persistentModelID],
+      let dragFrame = rowFrames[.task(first.persistentModelID)],
       let origInsert = list.orderedTasks.firstIndex(where: {
         $0.persistentModelID == first.persistentModelID
       })
     else { return [:] }
     let h = dragFrame.height
-    let delta = first.isHeader ? (blockDelta ?? 0) : 0
-    let B = origInsert  // lignes avant le bloc/la ligne = indice d'origine dans `others`
-    var map: [PersistentIdentifier: CGFloat] = [:]
-    for (j, other) in others.enumerated() {
-      guard let home = rowFrames[other.persistentModelID]?.minY else { continue }
-      let base = home - (j >= B ? delta : 0)
+
+    if first.isHeader {
+      let delta = blockDelta ?? 0
+      let B = origInsert
+      var map: [RowKey: CGFloat] = [:]
+      for (j, other) in others.enumerated() {
+        let key = RowKey.task(other.persistentModelID)
+        guard let home = rowFrames[key]?.minY else { continue }
+        let base = home - (j >= B ? delta : 0)
+        let shift: CGFloat =
+          (insert < B && (insert..<B).contains(j)) ? h
+          : (insert > B && (B..<insert).contains(j)) ? -h : 0
+        map[key] = base + shift
+      }
+      return map
+    }
+
+    // Tâche : même formule, dans l'espace `RowKey` COMPLET (tâches, en-têtes ET champs) — un champ
+    // y participe comme n'importe quelle autre ligne, sans traitement séparé.
+    let allRows = physicalRows
+    let draggedKey = RowKey.task(first.persistentModelID)
+    guard let B = allRows.firstIndex(of: draggedKey) else { return [:] }
+    let rowKeyOthers = allRows.filter { $0 != draggedKey }
+    let insertRK: Int =
+      insert < others.count
+      ? (rowKeyOthers.firstIndex(of: .task(others[insert].persistentModelID)) ?? rowKeyOthers.count)
+      : rowKeyOthers.count
+    var map: [RowKey: CGFloat] = [:]
+    for (j, key) in rowKeyOthers.enumerated() {
+      guard let home = rowFrames[key]?.minY else { continue }
       let shift: CGFloat =
-        (insert < B && (insert..<B).contains(j))
-        ? h
-        : (insert > B && (B..<insert).contains(j))
-          ? -h
-          : 0
-      map[other.persistentModelID] = base + shift
+        (insertRK < B && (insertRK..<B).contains(j)) ? h
+        : (insertRK > B && (B..<insertRK).contains(j)) ? -h : 0
+      map[key] = home + shift
     }
     return map
   }
@@ -601,7 +746,7 @@ private struct ListPageView: View {
   /// en-tête et positions corrigées du repli Δ, comme `dragTargets`.
   private func dragPlaceholderRect() -> CGRect? {
     guard let first = draggedGroup.first,
-      let dragFrame = rowFrames[first.persistentModelID],
+      let dragFrame = rowFrames[.task(first.persistentModelID)],
       let (_, others, insert) = dragInsertion(),
       let origInsert = list.orderedTasks.firstIndex(where: {
         $0.persistentModelID == first.persistentModelID
@@ -612,9 +757,9 @@ private struct ListPageView: View {
     let B = origInsert
     let gapTop: CGFloat
     if insert == 0 {
-      gapTop = list.orderedTasks.compactMap { rowFrames[$0.persistentModelID]?.minY }.min() ?? 0
+      gapTop = list.orderedTasks.compactMap { rowFrames[.task($0.persistentModelID)]?.minY }.min() ?? 0
     } else {
-      guard let f = rowFrames[others[insert - 1].persistentModelID] else { return nil }
+      guard let f = rowFrames[.task(others[insert - 1].persistentModelID)] else { return nil }
       let j = insert - 1
       let base = f.minY - (j >= B ? delta : 0)
       let shift: CGFloat = (insert > B && j >= B) ? -h : 0
@@ -625,21 +770,29 @@ private struct ListPageView: View {
 
   /// Décalage d'une ligne : la ligne tirée suit le curseur en 2D (soulevée), les autres rejoignent
   /// verticalement leur cible (différence entre position cible et position de repos mesurée).
-  private func rowOffset(for task: TaskItem, targets: [PersistentIdentifier: CGFloat]) -> CGSize {
+  private func rowOffset(for task: TaskItem, targets: [RowKey: CGFloat]) -> CGSize {
     if draggedGroup.contains(where: { $0.persistentModelID == task.persistentModelID }) {
       return dragOffset
     }
-    guard let target = targets[task.persistentModelID],
-      let home = rowFrames[task.persistentModelID]?.minY
-    else { return .zero }
+    let key = RowKey.task(task.persistentModelID)
+    guard let target = targets[key], let home = rowFrames[key]?.minY else { return .zero }
     return CGSize(width: 0, height: target - home)
+  }
+
+  /// Décalage d'un champ « Nouvelle tâche » : symétrique de `rowOffset`, EXACTEMENT le même
+  /// mécanisme (cible − position de repos mesurée) — aucun calcul spécifique au champ, `targets`
+  /// (produit par `dragTargets`) contient déjà sa cible s'il doit bouger.
+  private func fieldOffset(for block: TaskBlock, targets: [RowKey: CGFloat]) -> CGFloat {
+    let key = RowKey.field(block.id)
+    guard let target = targets[key], let home = rowFrames[key]?.minY else { return 0 }
+    return target - home
   }
 
   /// Ancre du soulevé (agrandissement) : la position relative du point empoigné dans la ligne
   /// tirée. Scaler autour de CE point le laisse fixe sous le curseur ; `.center` par défaut le
   /// ferait dériver d'autant que le curseur est loin du milieu d'une ligne large.
   private var dragAnchor: UnitPoint {
-    guard let draggingID, let f = rowFrames[draggingID], f.width > 0, f.height > 0
+    guard let draggingID, let f = rowFrames[.task(draggingID)], f.width > 0, f.height > 0
     else { return .center }
     return UnitPoint(x: (dragStart.x - f.minX) / f.width, y: (dragStart.y - f.minY) / f.height)
   }
@@ -675,7 +828,7 @@ private struct ListPageView: View {
           // Hauteur de la rangée « Nouvelle tâche » du bloc tiré, pour un repli sans trou résiduel.
           draggedFieldHeight =
             blocks.first { $0.header?.persistentModelID == task.persistentModelID }
-            .flatMap { fieldHeights[$0.id] } ?? 0
+            .flatMap { rowFrames[.field($0.id)]?.height } ?? 0
           dragStart = value.startLocation
         }
         guard draggingID == task.persistentModelID else { return }
@@ -696,13 +849,11 @@ private struct ListPageView: View {
   }
 
   /// Écrit l'ordre atteint dans les `sortIndex` et retombe les décalages à 0. Comme les lignes
-  /// sont déjà visuellement à leur cible, la bascule ordre↔offset ne produit aucun saut.
+  /// (ET les champs « Nouvelle tâche », cf. `dragTargets`) sont déjà visuellement à leur cible, la
+  /// bascule ordre↔offset ne produit aucun saut — révélation immédiate, sans exception.
   private func endDrag() {
     // `dragInsertion` lit `draggingID`/`draggedGroup` : on capture le plan AVANT de désarmer.
     let plan = dragInsertion()
-    // Réordonnancement ET désarmement du drag dans LA MÊME transaction animée. Séparés (l'ancien
-    // `defer` désarmait dans une seconde passe), l'en-tête filait une frame vers son ancienne place
-    // avant de rejoindre la nouvelle — le « fantôme qui part vers le haut en s'estompant ».
     withAnimation(.snappy(duration: 0.22)) {
       if let (dragged, others, insert) = plan {
         var newOrder = others
@@ -737,6 +888,13 @@ private struct ListPageView: View {
       .textFieldStyle(.plain)
       .focused($focusedDraft, equals: block.id)
       .onSubmit { createTask(in: block) }
+      // Clic à l'extérieur (le focus quitte CE champ) avec du texte déjà tapé : la tâche se crée
+      // aussi, pas seulement sur Entrée. Sans `refocus`, sinon on volerait le focus au clic qui
+      // vient justement de partir ailleurs (autre champ, autre ligne).
+      .onChange(of: focusedDraft) { old, new in
+        guard old == block.id, new != block.id else { return }
+        createTask(in: block, refocus: false)
+      }
     }
     // Mêmes paddings qu'une TaskRow au repos (vertical 6, horizontal 10) : la rangée de
     // création garde exactement le rythme des tâches, sans détachement visuel.
@@ -746,10 +904,13 @@ private struct ListPageView: View {
     .onTapGesture { focusedDraft = block.id }
   }
 
-  private func createTask(in block: TaskBlock) {
+  /// `refocus` : garde le focus sur CE champ pour enchaîner la saisie (Entrée). `false` quand la
+  /// création est déclenchée par une PERTE de focus (clic à l'extérieur, cf. `newTaskRow`) —
+  /// reposer le focus ferait la course avec l'endroit où l'utilisateur vient justement de cliquer.
+  private func createTask(in block: TaskBlock, refocus: Bool = true) {
     let trimmed = (drafts[block.id] ?? "").trimmingCharacters(in: .whitespaces)
     guard !trimmed.isEmpty else {
-      focusedDraft = nil
+      if refocus { focusedDraft = nil }
       return
     }
     let task = TaskItem(title: trimmed, list: list)
@@ -762,7 +923,7 @@ private struct ListPageView: View {
       modelContext.insertAndSave(task)
     }
     drafts[block.id] = ""
-    focusedDraft = block.id
+    if refocus { focusedDraft = block.id }
   }
 
   // MARK: En-tête de liste
@@ -846,99 +1007,66 @@ private struct ListPageView: View {
     }
   }
 
-  /// Notes de la liste : encadré au fond légèrement plus foncé que la page, gros rayon.
-  /// `TextEditor` (et pas un `TextField`) pour que Entrée fasse un vrai retour à la ligne.
-  /// Aligné à gauche sur l'anneau/titre (aucun retrait) ; marges haute et basse pour le détacher.
+  /// Notes de la liste : même encadré que celui du projet (cf. `NotesBox`, partagé pour un design
+  /// identique). Entrée y ferme le focus au lieu d'insérer une ligne : sur une page sans tâche,
+  /// elle enchaîne plutôt sur le champ « Nouvelle tâche » — sinon elle referme simplement, comme
+  /// pour le projet. Un retour à la ligne reste possible via Maj+Entrée.
   private var notesBox: some View {
-    ZStack(alignment: .topLeading) {
-      // Placeholder et éditeur SANS retrait propre : le retrait est posé une seule fois sur le
-      // ZStack (padding commun ci-dessous), donc le texte tapé et « Notes » partent du même x.
-      if list.notes.isEmpty {
-        Text("Notes")
-          .font(.body)
-          .foregroundStyle(.tertiary)
-          // Léger retrait : le caret du TextEditor démarre au même x que ce texte, sans
-          // ce décalage il se superposerait au « N ». N'affecte que l'indication (vide).
-          .padding(.leading, 5)
-          .allowsHitTesting(false)
+    NotesBox(
+      notes: $list.notes,
+      font: .systemFont(ofSize: NSFont.systemFontSize),
+      textColor: .labelColor,
+      focused: $notesFocused
+    ) {
+      if list.countableTasks.isEmpty {
+        focusedDraft = blocks.first?.id
+      } else {
+        notesFocused = false
       }
-      RichTextEditor(
-        data: $list.notes,
-        font: .systemFont(ofSize: NSFont.systemFontSize),
-        textColor: .labelColor,
-        // Page sans tâche : Entrée dans les notes saute au champ « Nouvelle tâche » plutôt que
-        // d'ouvrir une ligne — sinon Entrée dans le seul champ actif de la page ressemble à un
-        // « valider » mort. Saut de ligne toujours possible via Maj+Entrée. Liste non vide :
-        // comportement natif inchangé (Entrée = retour à la ligne).
-        handleReturn: { shiftHeld in
-          guard list.countableTasks.isEmpty, !shiftHeld else { return false }
-          focusedDraft = blocks.first?.id
-          return true
-        }
-      )
-      .fixedSize(horizontal: false, vertical: true)
-      .focused($notesFocused)
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 8)
-    .background(
-      Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-    )
-    .padding(.top, 4)
-    .padding(.bottom, 10)
   }
 
   // MARK: Barre d'outils du bas
 
   private var bottomBar: some View {
-    buttonGroup {
-      toolbarButton("plus", "Nouvelle tâche") { focusedDraft = blocks.last?.id }
-      groupDivider
-      toolbarButton("line.3.horizontal", "Insérer une en-tête") { insertHeader() }
-      groupDivider
-      toolbarButton("magnifyingglass", "Recherche") { searchPresented = true }
-    }
-    // Capsule flottante centrée : elle garde sa largeur intrinsèque, le frame full-width la centre.
-    .frame(maxWidth: .infinity, alignment: .center)
-    .padding(.bottom, 16)
+    BottomToolbar(
+      onNewTask: { focusNewTaskField() },
+      onInsertHeader: { insertHeader() },
+      onSearch: { searchPresented = true }
+    )
   }
 
-  /// « Button group » flottant : une capsule unique posée au-dessus du contenu, toutes les actions
-  /// regroupées dedans, séparées par des traits internes. Rendu Liquid Glass natif via `.glassEffect`
-  /// (bouts arrondis + réfraction + ombre portée fournis par le système), `.interactive()` fait réagir
-  /// le verre au survol/press. Repli material + ombre sous macOS 26 (Package.swift cible .v14, donc
-  /// le `#available` est obligatoire — le compilateur refuse l'API sinon).
-  @ViewBuilder
-  private func buttonGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-    let base = HStack(spacing: 2) { content() }
-      .padding(.horizontal, 6)
-      .padding(.vertical, 5)
-    if #available(macOS 26, *) {
-      base.glassEffect(.regular.interactive(), in: Capsule())
-    } else {
-      base
-        .background(.regularMaterial, in: Capsule())
-        .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
-    }
+  /// Cible le bloc de la sélection courante (pas systématiquement le dernier) ; la sélection est
+  /// ensuite retirée pour que la surbrillance lavande ne reste pas affichée pendant qu'on tape
+  /// dans « Nouvelle tâche » — sinon les deux se lisent comme un focus ambigu. Utilisé par le
+  /// bouton « + » de la barre d'outils (saisie rapide, sans ouvrir la carte d'édition complète).
+  private func focusNewTaskField() {
+    let target = selectedBlockID ?? blocks.last?.id
+    withAnimation(taskSelectFade) { selectedID = nil }
+    focusedDraft = target
   }
 
-  private var groupDivider: some View {
-    Divider().frame(height: 18)
-  }
-
-  private func toolbarButton(_ icon: String, _ help: String, action: @escaping () -> Void)
-    -> some View
-  {
-    Button(action: action) {
-      Image(systemName: icon)
-        .font(.system(size: 15))
-        .foregroundStyle(.secondary)
-        .frame(width: 38, height: 30)
-        .contentShape(Rectangle())
+  /// ⌘N : crée une tâche VIDE directement dans le bloc de la sélection courante (ou le dernier) et
+  /// ouvre sa carte d'édition complète — même geste qu'`insertHeader` pour une en-tête, plutôt que
+  /// de se contenter de focaliser le champ « Nouvelle tâche » (cf. `focusNewTaskField`).
+  private func createTaskInEditMode() {
+    guard let block = blocks.first(where: { $0.id == selectedBlockID }) ?? blocks.last else {
+      return
     }
-    .buttonStyle(.plain)
-    .help(help)
+    let task = TaskItem(title: "", list: list)
+    let anchor = block.tasks.last?.sortIndex ?? block.header?.sortIndex ?? -1
+    withAnimation(taskInsert) {
+      for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
+      task.sortIndex = anchor + 1
+      modelContext.insertAndSave(task)
+    }
+    let id = task.persistentModelID
+    DispatchQueue.main.async {
+      withAnimation(taskFlow) {
+        selectedID = id
+        editingID = id
+      }
+    }
   }
 
   // MARK: Actions de liste
@@ -991,6 +1119,23 @@ private struct ListPageView: View {
     try? modelContext.save()
   }
 
+  /// Déplace une en-tête ET son bloc (les tâches rattachées) vers une autre liste, à la fin,
+  /// dans le même ordre. Une en-tête déplacée seule laisserait ses tâches orphelines — le bloc
+  /// voyage donc comme dans le drag de réordonnancement (cf. `dragGroup`).
+  private func moveHeader(_ header: TaskItem, to target: TodoList) {
+    let block = dragGroup(for: header)  // [en-tête, tâches rattachées…], dans l'ordre visuel
+    var next = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
+    for item in block {
+      item.list = target
+      item.sortIndex = next
+      next += 1
+    }
+    // Le bloc quitte la liste affichée : purge sélection/édition qui pointeraient dedans.
+    if block.contains(where: { $0.persistentModelID == selectedID }) { selectedID = nil }
+    if block.contains(where: { $0.persistentModelID == editingID }) { editingID = nil }
+    try? modelContext.save()
+  }
+
   /// Duplique une tâche juste sous l'originale (les suivantes glissent d'un cran).
   private func duplicate(_ task: TaskItem) {
     let clone = TaskItem(
@@ -1008,6 +1153,7 @@ private struct ListPageView: View {
   private func insertHeader() {
     let header = TaskItem(title: "", isHeader: true, list: list)
     header.sortIndex = (list.tasks.map(\.sortIndex).max() ?? -1) + 1
+    header.headerColor = randomUnusedHeaderColor()
     modelContext.insertAndSave(header)
     // Une en-tête ne s'édite plus qu'au double-clic : une en-tête fraîchement créée serait donc
     // vide et en lecture. On ouvre son édition au tour de boucle suivant (la ligne existe alors,
@@ -1020,6 +1166,246 @@ private struct ListPageView: View {
       }
     }
   }
+
+  /// Une couleur pas déjà portée par une en-tête de CETTE liste, pour que les en-têtes se
+  /// distinguent d'un coup d'œil par défaut. Palette épuisée (7 en-têtes déjà toutes teintées) :
+  /// on retombe sur la palette complète — l'utilisateur reste libre de changer la couleur à la main.
+  private func randomUnusedHeaderColor() -> HeaderColor {
+    let used = Set(list.tasks.filter(\.isHeader).compactMap(\.headerColor))
+    let available = HeaderColor.allCases.filter { !used.contains($0) }
+    return (available.isEmpty ? HeaderColor.allCases : available).randomElement()!
+  }
+}
+
+/// Barre d'outils flottante du bas, commune à TOUTES les pages (liste, projet, pomodoro, vues à
+/// venir) : même capsule Liquid Glass partout. `onNewTask`/`onInsertHeader` sont optionnels — une
+/// page projet ou une vue stub n'ont pas de bloc de tâches unique où insérer directement ; le
+/// bouton correspondant disparaît alors plutôt que de faire semblant.
+struct BottomToolbar: View {
+  var onNewTask: (() -> Void)?
+  var onInsertHeader: (() -> Void)?
+  var onSearch: () -> Void
+
+  var body: some View {
+    buttonGroup {
+      if let onNewTask {
+        toolbarButton(
+          "Nouvelle tâche", shortcut: "⌘N",
+          description: "Le raccourci clavier crée la tâche et ouvre directement son édition.",
+          action: onNewTask
+        ) {
+          Image(systemName: "plus").font(.system(size: 16)).foregroundStyle(.secondary)
+        }
+        groupDivider
+      }
+      if let onInsertHeader {
+        toolbarButton(
+          "Insérer une en-tête", shortcut: "⌘⇧N",
+          description: "Couleur attribuée au hasard, modifiable depuis son menu.",
+          action: onInsertHeader
+        ) { headerGlyph }
+        groupDivider
+      }
+      toolbarButton("Recherche", action: onSearch) {
+        Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
+      }
+    }
+    // Capsule flottante centrée : elle garde sa largeur intrinsèque, le frame full-width la centre.
+    .frame(maxWidth: .infinity, alignment: .center)
+    .padding(.bottom, 16)
+    // `.overlayPreferenceValue` rend la bulle dans une couche à PART, au-dessus de tout ce bloc —
+    // et surtout HORS du `.glassEffect`/`.background` de `buttonGroup` : celui-ci compose son
+    // contenu dans une texture bornée à la Capsule, donc une bulle en overlay LOCAL d'un bouton
+    // (essayé d'abord) se faisait rogner par ce bord dès qu'elle dépassait vers le haut.
+    .overlayPreferenceValue(ToolbarTooltipKey.self) { request in
+      if let request { ToolbarTooltipOverlay(request: request) }
+    }
+  }
+
+  /// « Button group » flottant : une capsule unique posée au-dessus du contenu, toutes les actions
+  /// regroupées dedans, séparées par des traits internes. Rendu Liquid Glass natif via `.glassEffect`
+  /// (bouts arrondis + réfraction + ombre portée fournis par le système), `.interactive()` fait réagir
+  /// le verre au survol/press. Repli material + ombre sous macOS 26 (Package.swift cible .v14, donc
+  /// le `#available` est obligatoire — le compilateur refuse l'API sinon).
+  @ViewBuilder
+  private func buttonGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    let base = HStack(spacing: 3) { content() }
+      .padding(.horizontal, 7)
+      .padding(.vertical, 6)
+    if #available(macOS 26, *) {
+      base.glassEffect(.regular.interactive(), in: Capsule())
+    } else {
+      base
+        .background(.regularMaterial, in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+    }
+  }
+
+  private var groupDivider: some View {
+    Divider().frame(height: 20)
+  }
+
+  private func toolbarButton<Icon: View>(
+    _ help: String, shortcut: String? = nil, description: String? = nil,
+    action: @escaping () -> Void, @ViewBuilder icon: @escaping () -> Icon
+  ) -> some View {
+    ToolbarButton(help: help, shortcut: shortcut, description: description, action: action, icon: icon)
+  }
+
+  /// Lettre « T » dans un carré à bordure fine : remplace l'icône générique pour signifier
+  /// « insérer un intertitre texte ». `Color.primary` pour le trait ET la lettre — s'inverse tout
+  /// seul entre light et dark mode, pas de couleur figée à adapter à la main.
+  private var headerGlyph: some View {
+    Text("T")
+      .font(.system(size: 12, weight: .bold, design: .rounded))
+      .foregroundStyle(.primary)
+      .frame(width: 19, height: 19)
+      .overlay {
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+          .strokeBorder(Color.primary, lineWidth: 1.2)
+      }
+  }
+}
+
+/// Un bouton de la toolbar : fond arrondi + léger agrandissement au survol, et curseur en main
+/// (même geste que la sidebar). État `hovering` propre à CHAQUE bouton — c'est pour ça que c'est
+/// une vue à part (une méthode ne peut pas porter de `@State`), sinon tous les boutons du groupe
+/// auraient partagé un seul et même survol.
+private struct ToolbarButton<Icon: View>: View {
+  var help: String
+  /// Non nil ⇒ bulle façon Reminders.app (titre + raccourci + description) au survol, à la place
+  /// du tooltip système `.help` — ce style précis (gras, badge aligné, texte secondaire) n'est pas
+  /// exposé par l'API AppKit publique, cf. `RichTooltip`.
+  var shortcut: String? = nil
+  var description: String? = nil
+  var action: () -> Void
+  @ViewBuilder var icon: () -> Icon
+
+  @State private var hovering = false
+  @State private var showTooltip = false
+
+  var body: some View {
+    let button = Button(action: action) {
+      icon()
+        .frame(width: 41, height: 33)
+        .contentShape(Rectangle())
+        // Capsule, pas un rectangle arrondi : le fond de survol doit reprendre le langage très
+        // arrondi de la pilule qui l'englobe (`buttonGroup`), pas une forme plus carrée qui jure
+        // avec elle.
+        .background(hovering ? Color.primary.opacity(0.09) : .clear, in: Capsule())
+        .scaleEffect(hovering ? 1.08 : 1)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(help)
+    .animation(.easeOut(duration: 0.15), value: hovering)
+    .onHover { inside in
+      hovering = inside
+      inside ? NSCursor.pointingHand.set() : NSCursor.arrow.set()
+      guard shortcut != nil else { return }
+      if inside {
+        // Même délai qu'un tooltip système avant apparition ; `hovering` revérifié à l'échéance
+        // au cas où la souris serait déjà repartie entre-temps.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+          if hovering { withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { showTooltip = true } }
+        }
+      } else {
+        withAnimation(.easeOut(duration: 0.1)) { showTooltip = false }
+      }
+    }
+
+    if let shortcut {
+      button.anchorPreference(key: ToolbarTooltipKey.self, value: .bounds) { anchor in
+        showTooltip
+          ? ToolbarTooltipRequest(
+            title: help, shortcut: shortcut, description: description ?? "", anchor: anchor)
+          : nil
+      }
+    } else {
+      button.help(help)
+    }
+  }
+}
+
+/// Contenu + ancre (position du bouton survolé) transmis par `ToolbarButton` à `BottomToolbar`,
+/// qui rend la bulle hors du groupe de boutons — cf. commentaire sur `.overlayPreferenceValue`.
+private struct ToolbarTooltipRequest {
+  var title: String
+  var shortcut: String
+  var description: String
+  var anchor: Anchor<CGRect>
+}
+
+private struct ToolbarTooltipKey: PreferenceKey {
+  static let defaultValue: ToolbarTooltipRequest? = nil
+  static func reduce(value: inout ToolbarTooltipRequest?, nextValue: () -> ToolbarTooltipRequest?) {
+    if let next = nextValue() { value = next }
+  }
+}
+
+/// Convertit l'ancre du bouton en position réelle (le `GeometryReader` fournit l'espace de coords
+/// de `BottomToolbar`), puis pose la bulle juste au-dessus, centrée sur le bouton. `measuredHeight`
+/// affiné au premier layout (`onAppear`/`onChange` sur sa propre taille) : sans ça, centrer la bulle
+/// par rapport à SA PROPRE hauteur avant de la connaître la ferait d'abord apparaître mal calée.
+private struct ToolbarTooltipOverlay: View {
+  var request: ToolbarTooltipRequest
+  @State private var measuredHeight: CGFloat = 70
+
+  var body: some View {
+    GeometryReader { proxy in
+      let anchor = proxy[request.anchor]
+      RichTooltip(title: request.title, shortcut: request.shortcut, description: request.description)
+        .background {
+          GeometryReader { size in
+            Color.clear
+              .onAppear { measuredHeight = size.size.height }
+              .onChange(of: size.size.height) { _, new in measuredHeight = new }
+          }
+        }
+        .position(x: anchor.midX, y: anchor.minY - 14 - measuredHeight / 2)
+        .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
+    }
+  }
+}
+
+/// Bulle d'aide façon Reminders.app : titre en gras, raccourci aligné à droite sur la même ligne,
+/// description secondaire en dessous. PAS le tooltip système (`.help`, texte plat sans mise en
+/// forme ni badge) — cette mise en page précise n'est pas exposée par l'API AppKit publique, donc
+/// reconstruite à la main. Décor seulement : aucune interaction, jamais de premier plan aux clics.
+private struct RichTooltip: View {
+  var title: String
+  var shortcut: String
+  var description: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .firstTextBaseline, spacing: 10) {
+        Text(title).font(.system(size: 13, weight: .semibold))
+        Spacer(minLength: 8)
+        Text(shortcut)
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
+      }
+      if !description.isEmpty {
+        Text(description)
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(10)
+    .frame(width: 220, alignment: .leading)
+    .background(
+      Color(red: 0xF5 / 255, green: 0xF6 / 255, blue: 0xF7 / 255),
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+    }
+    .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+    .allowsHitTesting(false)
+  }
 }
 
 /// Page d'un projet : ses to-do lists dépliées. Chaque liste montre son titre (cliquable pour
@@ -1028,7 +1414,9 @@ private struct ListPageView: View {
 private struct ProjectPageView: View {
   @Bindable var project: Project
   @Binding var selection: SidebarSelection?
+  @Binding var searchPresented: Bool
   @Environment(RemindersService.self) private var remindersService
+  @FocusState private var notesFocused: Bool
 
   var body: some View {
     // Header dans la List, pour la même raison que sur la page d'une liste : un header
@@ -1041,20 +1429,15 @@ private struct ProjectPageView: View {
             .textFieldStyle(.plain)
             .font(.title.bold())
         }
-        ZStack(alignment: .topLeading) {
-          if project.notes.isEmpty {
-            Text("Notes")
-              .font(.subheadline)
-              .foregroundStyle(.tertiary)
-              .padding(.leading, 5)
-              .allowsHitTesting(false)
-          }
-          RichTextEditor(
-            data: $project.notes,
-            font: .systemFont(ofSize: NSFont.systemFontSize - 1),
-            textColor: .secondaryLabelColor
-          )
-          .fixedSize(horizontal: false, vertical: true)
+        // Même encadré que la page de liste (cf. `NotesBox`) : les deux avaient deux visuels
+        // distincts (ici un simple ZStack sans fond), plus de raison de diverger.
+        NotesBox(
+          notes: $project.notes,
+          font: .systemFont(ofSize: NSFont.systemFontSize),
+          textColor: .labelColor,
+          focused: $notesFocused
+        ) {
+          notesFocused = false
         }
       }
       .padding(.bottom, 14)
@@ -1106,6 +1489,9 @@ private struct ProjectPageView: View {
     .environment(\.defaultMinListRowHeight, 1)
     .padding(.horizontal, gutter - 8)
     .padding(.top, 30)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
+    }
   }
 
   /// Tâche en lecture sous le titre de sa liste. Une en-tête devient un intertitre discret ; une
@@ -1123,7 +1509,10 @@ private struct ProjectPageView: View {
     } else {
       HStack(spacing: 10) {
         TaskCheckbox(isCompleted: task.isCompleted) {
-          task.toggleCompletion()
+          withAnimation(taskInsert) {
+            task.toggleCompletion()
+            if task.isCompleted { task.list?.moveToEndOfSection(task) }
+          }
           Task { await remindersService.pushCompletion(for: task) }
         }
         Text(task.title.isEmpty ? "Sans titre" : task.title)
@@ -1134,6 +1523,52 @@ private struct ProjectPageView: View {
       .padding(.leading, 20)
       .padding(.vertical, 2)
     }
+  }
+}
+
+/// Notes de tâche/liste/projet : encadré au fond légèrement plus foncé que la page, gros rayon,
+/// même retrait pour le placeholder et le texte tapé. Partagé par `ListPageView` et
+/// `ProjectPageView` (auparavant deux visuels distincts : ce cadre est le SEUL, plus de raison de
+/// diverger).
+private struct NotesBox: View {
+  @Binding var notes: Data
+  var font: NSFont
+  var textColor: NSColor
+  var focused: FocusState<Bool>.Binding
+  /// Entrée SANS Maj : ferme le focus des notes plutôt que d'insérer un retour à la ligne — sinon
+  /// une ligne vide traînante grandit le cadre d'une hauteur de ligne sans raison visible. Maj+Entrée
+  /// garde le retour à la ligne natif. `onEnter` permet à l'appelant d'enchaîner sur autre chose
+  /// (ex. le champ « Nouvelle tâche » d'une liste vide) au lieu du simple retrait de focus par défaut.
+  var onEnter: (() -> Void)? = nil
+
+  var body: some View {
+    ZStack(alignment: .topLeading) {
+      // Placeholder et éditeur SANS retrait propre : le retrait est posé une seule fois sur le
+      // ZStack (padding commun ci-dessous), donc le texte tapé et « Notes » partent du même x.
+      if notes.isEmpty {
+        Text("Notes")
+          .font(.body)
+          .foregroundStyle(.tertiary)
+          .allowsHitTesting(false)
+      }
+      RichTextEditor(
+        data: $notes, font: font, textColor: textColor,
+        handleReturn: { shiftHeld in
+          guard !shiftHeld else { return false }
+          if let onEnter { onEnter() } else { focused.wrappedValue = false }
+          return true
+        }
+      )
+      .fixedSize(horizontal: false, vertical: true)
+      .focused(focused)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .background(
+      Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+    )
+    .padding(.top, 4)
+    .padding(.bottom, 10)
   }
 }
 
@@ -1150,6 +1585,7 @@ private struct TaskRow: View {
   let isEditing: Bool
   /// Listes vers lesquelles déplacer la tâche (toutes sauf la sienne).
   var moveTargets: [TodoList]
+  var onBeginEditing: () -> Void
   var onEndEditing: () -> Void
   var onMove: (TodoList) -> Void
   var onDuplicate: () -> Void
@@ -1159,6 +1595,22 @@ private struct TaskRow: View {
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
+  // Révélation du corps d'édition. `editorHeight` = sa hauteur naturelle mesurée (cache, sert de
+  // cible d'ouverture) ; `editorReveal` = la hauteur RÉELLEMENT dévoilée (animée), 0 = fermé. On
+  // anime la fenêtre qui découvre le contenu, jamais le contenu lui-même — il reste figé à sa place.
+  @State private var editorHeight: CGFloat = 0
+  @State private var editorReveal: CGFloat = 0
+  // Le corps d'édition survit à la sortie de `isEditing` : `showEditor` le garde monté pendant la
+  // fermeture animée (la fenêtre rétrécit, le clipping ravale le contenu), puis on le démonte pour
+  // ne pas garder son NSTextView en vie. `editSession` annule un démontage programmé si une nouvelle
+  // session d'édition démarre entre-temps (réouverture rapide).
+  @State private var showEditor = false
+  @State private var editSession = 0
+  // Icône « note » au survol (tâche sans notes) : true entre le clic sur l'icône et l'ouverture de
+  // l'édition, pour que le focus atterrisse dans les notes plutôt que dans le titre (cf.
+  // `.onChange(of: isEditing)`). Retombe à false à la fin de CETTE édition, pas seulement après usage
+  // — sinon une édition suivante ouverte autrement (double-clic) hériterait du focus notes.
+  @State private var focusNotesOnAppear = false
   @State private var showReminderSheet = false
   // UN SEUL popover à la fois. Deux `.popover(isPresented:)` sur la même vue = comportement
   // indéfini sur macOS (le second plantait à l'ouverture de l'échéance). Un seul `.popover(item:)`
@@ -1175,38 +1627,81 @@ private struct TaskRow: View {
   /// l'édition ne fait qu'ajouter le corps sous elle et grossir le padding. SwiftUI a donc une
   /// hauteur continue à animer — un if/else échangerait deux vues d'un coup, d'où le « snap ».
   var body: some View {
-    VStack(alignment: .leading, spacing: isEditing ? 12 : 0) {
+    VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 10) {
         TaskCheckbox(isCompleted: task.isCompleted) {
-          task.toggleCompletion()
+          withAnimation(taskInsert) {
+            task.toggleCompletion()
+            if task.isCompleted { task.list?.moveToEndOfSection(task) }
+          }
           Task { await remindersService.pushCompletion(for: task) }
         }
         if !isEditing { dateTag }
         titleView
+        if !isEditing && task.notes.isEmpty { noteHint }
         Spacer(minLength: 0)
         if !isEditing { trailing }
       }
 
-      if isEditing {
-        // Le fondu fait naître notes + actions avec la carte, au lieu de les révéler
-        // d'un coup pendant que la hauteur, elle, grandit en douceur.
-        editorBody.transition(.opacity)
-      } else if !task.notes.isEmpty {
-        // Au repos : aperçu de la note sous le titre (1 ligne tronquée, façon Things). Aligné
-        // sous le titre (case 16 + espace 10), pas sous la case. Texte brut seulement — la mise
-        // en forme (gras/italique/liens) ne sert qu'en édition.
-        Text(NotesCodec.plainText(task.notes))
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-          .padding(.leading, 26)
-          .padding(.top, 2)
+      // Aperçu de la note au repos : sa première ligne sous le titre. Disparaît en édition — le
+      // corps d'édition ci-dessous prend le relais avec la note complète et modifiable.
+      if !isEditing && !task.notes.isEmpty { notePreview }
+
+      // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
+      if showEditor {
+        // OUVERTURE **ET** FERMETURE PAR RÉVÉLATION, jamais par translation ni disparition sèche. Le
+        // contenu (notes + actions) est posé UNE fois à sa place définitive sous le titre — `fixedSize`
+        // lui garde sa hauteur naturelle — et ne bouge JAMAIS : c'est la fenêtre qui le découvre
+        // (`frame(height: editorReveal)` + `clipped`, ancrée en haut) qui grandit puis rapetisse.
+        // Ouverture : `editorReveal` 0 → hauteur mesurée (le contenu se dévoile du haut vers le bas).
+        // Fermeture : hauteur → 0, le clipping ravale icônes puis notes (tout reste affiché, on ne
+        // masque rien à la main). Une fois refermée et hors édition, le corps est démonté (cf.
+        // `.onChange(of: isEditing)`) pour libérer son NSTextView.
+        editorBody
+          .padding(.top, 12)
+          // Respiration sous les icônes INCLUSE dans la fenêtre révélée (pas en padding externe) :
+          // le bord de découpe coïncide alors avec le bord bas de la carte, donc les icônes émergent
+          // du bord réel de la boîte au lieu d'être tranchées par une ligne 16 pt en retrait.
+          .padding(.bottom, 16)
+          .fixedSize(horizontal: false, vertical: true)
+          .background {
+            GeometryReader { g in
+              Color.clear.preference(key: EditorHeightKey.self, value: g.size.height)
+            }
+          }
+          .frame(height: editorReveal, alignment: .top)
+          .clipped()
+          // Pas d'interaction hors édition : pendant la fermeture le contenu est encore là mais inerte.
+          .allowsHitTesting(isEditing)
+          .onPreferenceChange(EditorHeightKey.self) { h in
+            guard h > 0 else { return }
+            editorHeight = h
+            // Ne (re)déployer QUE si l'on édite : sinon la mesure du contenu encore monté pendant la
+            // fermeture rouvrirait la fenêtre. En édition : 1re mesure → déploie ; sinon suit le
+            // contenu (notes multi-lignes tapées).
+            guard isEditing else { return }
+            if editorReveal == 0 {
+              withAnimation(taskFlow) { editorReveal = h }
+            } else {
+              editorReveal = h
+            }
+          }
+          .onAppear {
+            // Réouverture (hauteur déjà en cache) : déployer tout de suite. Sinon la 1re mesure
+            // ci-dessus s'en charge — l'un OU l'autre déclenche l'animation, jamais un saut.
+            if isEditing, editorHeight > 0 { withAnimation(taskFlow) { editorReveal = editorHeight } }
+          }
+          .transition(.identity)
       }
     }
-    // Le padding grandit en édition : le titre glisse vers l'intérieur de la carte, la
-    // hauteur s'ouvre. Sélection et normal partagent le même padding — seul le fond change,
-    // le texte ne saute donc pas au clic simple.
-    .padding(.vertical, isEditing ? 16 : 6)
+    // Borne le contenu aux limites de la ligne pendant que la carte s'ouvre/se referme.
+    .clipped()
+    // Le padding grandit en édition : la hauteur de la carte s'ouvre autour du titre resté en place.
+    // Sélection et normal partagent le même padding — le texte ne saute donc pas au clic simple.
+    // Bas NUL en édition : la respiration sous les icônes est portée par la fenêtre de révélation
+    // (cf. editorBody), pour que son bord de découpe coïncide avec le bord bas réel de la carte.
+    .padding(.top, isEditing ? 16 : 6)
+    .padding(.bottom, isEditing ? 0 : 6)
     .padding(.horizontal, isEditing ? 16 : 10)
     .background { rowBackground }
     .contentShape(Rectangle())
@@ -1228,8 +1723,35 @@ private struct TaskRow: View {
     // (cf. `dragGesture(for:)`), pour que la sélection réagisse au mouseDown sans voler le drag.
     .onExitCommand(perform: onEndEditing)
     // Le champ titre existe déjà avant l'édition (même TextField) : le focus ne peut plus se
-    // poser à son .onAppear. On le pose/retire au basculement d'état.
-    .onChange(of: isEditing) { _, editing in titleFocused = editing }
+    // poser à son .onAppear. On le pose/retire au basculement d'état — sauf si l'édition a été
+    // ouverte depuis l'icône « note » (`focusNotesOnAppear`), auquel cas le focus doit atterrir dans
+    // les notes, pas dans le titre.
+    // Tâche qui naît déjà en édition (création, insertion d'en-tête) : `onChange` ne se déclenche pas
+    // (pas de transition false→true observée), on monte donc le corps ici.
+    .onAppear { if isEditing { showEditor = true } }
+    .onChange(of: isEditing) { _, editing in
+      if editing {
+        // Nouvelle session : (ré)affiche le corps et invalide un démontage en attente (réouverture
+        // pendant la fermeture animée).
+        editSession += 1
+        showEditor = true
+        titleFocused = !focusNotesOnAppear
+        // Réouverture alors que le corps est encore monté (fermeture en cours) : `onAppear` ne
+        // rejoue pas, on redéploie ici. La 1re ouverture passe, elle, par la mesure (onPreferenceChange).
+        if editorHeight > 0 { withAnimation(taskFlow) { editorReveal = editorHeight } }
+      } else {
+        titleFocused = false
+        focusNotesOnAppear = false
+        // Fermeture ANIMÉE : la fenêtre rétrécit (le clipping ravale notes + icônes, laissés
+        // affichés), puis on démonte le corps une fois à 0 — sauf si une nouvelle session a redémarré.
+        editSession += 1
+        let token = editSession
+        withAnimation(taskFlow) { editorReveal = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+          if token == editSession { showEditor = false }
+        }
+      }
+    }
     // Pas de .animation(value:) ici : les transitions sont déclenchées en explicite
     // (withAnimation) côté page. Une ligne au repos ne porte donc rien à animer → fluide.
   }
@@ -1296,15 +1818,24 @@ private struct TaskRow: View {
   private var notesField: some View {
     ZStack(alignment: .topLeading) {
       if task.notes.isEmpty {
+        // Aucun retrait propre : le retrait est posé une seule fois sur le ZStack (padding
+        // commun ci-dessous), donc le placeholder part exactement du même x que le texte tapé.
         Text("Notes")
           .foregroundStyle(.tertiary)
-          .padding(.leading, 5)
           .allowsHitTesting(false)
       }
       RichTextEditor(
         data: $task.notes,
         font: .systemFont(ofSize: NSFont.systemFontSize),
-        textColor: .secondaryLabelColor
+        textColor: .secondaryLabelColor,
+        // Entrée valide la tâche (comme le titre) plutôt que d'ouvrir une ligne dans la note :
+        // le retour à la ligne reste possible, mais seulement via Maj+Entrée.
+        handleReturn: { shiftHeld in
+          guard !shiftHeld else { return false }
+          onEndEditing()
+          return true
+        },
+        autoFocus: focusNotesOnAppear
       )
       .fixedSize(horizontal: false, vertical: true)
     }
@@ -1315,27 +1846,38 @@ private struct TaskRow: View {
 
   // MARK: Fond
 
-  /// Fond conditionnel, et surtout LÉGER au repos. Une tâche normale ne rend AUCUN fond —
-  /// donc ni ombre, ni forme, rien. Seule la ligne éditée porte l'ombre : un `.shadow`
-  /// permanent sur chaque ligne force un rendu offscreen par ligne et fait saccader le scroll.
-  /// Le fondu (`.transition`) anime l'apparition ; la hauteur est animée par le withAnimation
-  /// parent. La ligne titre reste en place, donc pas de « snap » malgré le fond conditionnel.
-  @ViewBuilder
+  /// UN SEUL fond pour les trois états, jamais deux formes qui se remplacent — c'est ce qui rend
+  /// la transition select→édition fluide (la pilule GRANDIT en carte au lieu qu'une carte d'une
+  /// autre forme apparaisse par-dessus). La même `RoundedRectangle` est toujours là ; seuls des
+  /// nombres varient, et comme la bascule d'état est enveloppée d'un `withAnimation` côté page,
+  /// SwiftUI les interpole :
+  /// - `cornerRadius` 8 → 14 : le coin s'ouvre en même temps que la hauteur.
+  /// - calque lavande : visible en SÉLECTION SEULE (`isSelected && !isEditing`), jamais sous la
+  ///   carte. S'il restait à pleine opacité pendant l'édition, la fermeture (blanc + lavande qui
+  ///   s'effacent ensemble) le laisserait transparaître une fraction de seconde sous le blanc qui
+  ///   part → un flash « edit → select → normal ». Caché en édition, il n'a rien à révéler.
+  /// - calque blanc : ne monte qu'en édition, par-dessus le lavande → à l'ouverture la pilule
+  ///   « devient » carte (crossfade lavande→blanc sur le même rect qui grandit).
+  /// - bordure : ne se révèle qu'en édition.
+  /// On n'interpole PAS entre deux `Color` dynamiques (lavande accent ↔ blanc système), ce qui
+  /// scintille ; on anime l'OPACITÉ de calques à couleur fixe, c'est stable.
+  ///
+  /// L'ombre reste à zéro hors édition : un `.shadow` réellement rendu sur chaque ligne force un
+  /// rendu offscreen et fait saccader le scroll. À couleur `.clear` / rayon 0, Core Animation
+  /// court-circuite la passe d'ombre — le coût n'existe que sur la ligne éditée (une seule à la fois).
+  /// ponytail: si le scroll saccade malgré le rayon nul, remettre l'ombre derrière un garde d'état.
   private var rowBackground: some View {
-    if isEditing {
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .fill(Color(nsColor: .controlBackgroundColor))
-        .overlay {
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
-        .transition(.opacity)
-    } else if isSelected {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(thingsSelectionFill)
-        .transition(.opacity)
+    let radius: CGFloat = isEditing ? 14 : 8
+    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+    return ZStack {
+      shape.fill(thingsSelectionFill).opacity(isSelected && !isEditing ? 1 : 0)
+      shape.fill(Color(nsColor: .controlBackgroundColor)).opacity(isEditing ? 1 : 0)
+      shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        .opacity(isEditing ? 1 : 0)
     }
+    .shadow(
+      color: .black.opacity(isEditing ? 0.18 : 0),
+      radius: isEditing ? 12 : 0, y: isEditing ? 4 : 0)
   }
 
   // MARK: Date
@@ -1451,6 +1993,36 @@ private struct TaskRow: View {
   }
 
   // MARK: Actions au survol / clic droit
+
+  /// Icône discrète révélée au survol quand la tâche n'a pas encore de notes : sans elle,
+  /// l'existence même du champ notes (caché derrière un double-clic) n'est pas devinable. Un clic
+  /// ouvre directement l'édition avec le focus posé dans les notes (cf. `focusNotesOnAppear`).
+  private var noteHint: some View {
+    Button {
+      focusNotesOnAppear = true
+      onBeginEditing()
+    } label: {
+      Image(systemName: "note.text")
+        .font(.system(size: 12, weight: .regular))
+        .foregroundStyle(.tertiary)
+    }
+    .buttonStyle(.plain)
+    .opacity(hovering ? 1 : 0)
+    .animation(.easeOut(duration: 0.15), value: hovering)
+  }
+
+  /// Aperçu de la note au repos : sa première ligne en gris, tronquée. Rappelle le CONTENU de la
+  /// note sans l'ouvrir — une simple icône dirait juste « il y en a une », pas ce qu'elle contient.
+  /// Aligné sous le titre (case 16 + espace 10 = 26), comme le champ d'édition. Une ligne : les
+  /// retours à la ligne sont repliés en amont (cf. `NotesCodec.plainText`).
+  private var notePreview: some View {
+    Text(NotesCodec.plainText(task.notes))
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .padding(.leading, 26)
+  }
 
   /// Zone de droite, collée au bord. Badge d'échéance et menu ••• sont SUPERPOSÉS (ZStack), pas
   /// côte à côte : le badge n'a donc aucun espace réservé à sa droite (le ••• ne le pousse plus).
@@ -1571,7 +2143,10 @@ private struct HeaderRow: View {
   let isDragging: Bool
   /// Nombre réel de tâches rattachées, connu seulement pendant le drag (0 sinon).
   let attachedTaskCount: Int
+  /// Autres listes où déplacer l'en-tête (et son bloc). Vide ⇒ entrée de menu désactivée.
+  let moveTargets: [TodoList]
   var onEndEditing: () -> Void
+  var onMove: (TodoList) -> Void
   var onDelete: () -> Void
 
   @FocusState private var titleFocused: Bool
@@ -1663,6 +2238,17 @@ private struct HeaderRow: View {
             }
           }
         }
+        Menu {
+          if moveTargets.isEmpty {
+            Text("Aucune autre liste")
+          } else {
+            ForEach(moveTargets) { target in
+              Button(target.title) { onMove(target) }
+            }
+          }
+        } label: {
+          Text("Déplacer vers…")
+        }
         Divider()
         Button("Supprimer", role: .destructive, action: onDelete)
       } label: {
@@ -1738,6 +2324,142 @@ private struct TaskCheckbox: View {
     // ButtonStyle dédié ; le tracé + le fond restent animés par le withAnimation de la page.
     .buttonStyle(PressBounceButtonStyle())
     .animation(.bouncy(duration: 0.3, extraBounce: 0.15), value: isCompleted)
+    // PAS `.onHover` + `NSCursor.set()` (une fois sur deux dans les faits) : cette case vit DANS
+    // une ligne qui a déjà son propre `.onHover` (révéler le ••• au survol, cf. `TaskRow`), et
+    // deux zones de survol SwiftUI imbriquées (la ligne ET la case) se disputent alors les
+    // événements mouseEntered/mouseExited — le curseur ne change qu'une frappe sur deux selon qui
+    // gagne la course. Les cursor rects AppKit sont un mécanisme séparé, résolu par la fenêtre à
+    // partir de la géométrie plutôt que d'événements de survol concurrents : aucun conflit
+    // possible avec l'`.onHover` englobant.
+    .overlay { PointingHandCursorArea().allowsHitTesting(false) }
+  }
+}
+
+/// Curseur « main » fiable sur une zone précise, via les cursor rects AppKit natifs — cf. le
+/// commentaire sur `TaskCheckbox`. `resetCursorRects()` est appelé par AppKit lui-même à chaque
+/// invalidation de layout, pas par un `.onHover` concurrent d'une vue englobante.
+private struct PointingHandCursorArea: NSViewRepresentable {
+  final class CursorView: NSView {
+    override func resetCursorRects() {
+      super.resetCursorRects()
+      addCursorRect(bounds, cursor: .pointingHand)
+    }
+  }
+
+  func makeNSView(context: Context) -> NSView { CursorView() }
+  func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Surveille ⌫ (retour arrière, keyCode 51) au niveau de la fenêtre, hors du système de focus
+/// SwiftUI : `.keyboardShortcut`/`.onKeyPress` sans modificateur n'atteignent leur gestionnaire que
+/// s'il existe DÉJÀ un premier répondeur AppKit dans la fenêtre — une ligne juste sélectionnée
+/// (tap, aucun champ focalisé) n'en établit aucun. Un moniteur local d'événements voit la touche
+/// AVANT sa distribution normale, quel que soit le premier répondeur : ni la sélection d'une ligne
+/// ni son absence n'entrent en jeu. Il se retire lui-même dès qu'un VRAI champ de texte a le focus
+/// (même check `NSText` que `SidebarView.editableTitle`) pour ne jamais lui voler la frappe.
+private struct DeleteKeyMonitor: NSViewRepresentable {
+  var isActive: () -> Bool
+  var action: () -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(isActive: isActive, action: action) }
+
+  func makeNSView(context: Context) -> NSView {
+    context.coordinator.install()
+    return NSView(frame: .zero)
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    context.coordinator.isActive = isActive
+    context.coordinator.action = action
+  }
+
+  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    coordinator.uninstall()
+  }
+
+  final class Coordinator {
+    var isActive: () -> Bool
+    var action: () -> Void
+    private var monitor: Any?
+
+    init(isActive: @escaping () -> Bool, action: @escaping () -> Void) {
+      self.isActive = isActive
+      self.action = action
+    }
+
+    func install() {
+      guard monitor == nil else { return }
+      let ignoredMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        guard let self, event.keyCode == 51,
+          event.modifierFlags.intersection(ignoredMods).isEmpty, self.isActive()
+        else { return event }
+        // Un vrai champ de texte a le focus (renommage, notes, « Nouvelle tâche »…) : on le
+        // laisse gérer sa propre frappe, ⌫ ne doit jamais lui échapper.
+        if NSApp.keyWindow?.firstResponder is NSText { return event }
+        self.action()
+        return nil
+      }
+    }
+
+    func uninstall() {
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+    }
+  }
+}
+
+/// Raccourci clavier sur `keyCode` + un jeu EXACT de modificateurs, câblé en direct sur NSEvent
+/// (même mécanisme que `DeleteKeyMonitor` ci-dessus) — pour ⌘N/⌘⇧N : deux `.keyboardShortcut` sur
+/// la même lettre avec des modificateurs différents se marchent dessus sous SwiftUI (⌘⇧N avalé
+/// par le gestionnaire ⌘N), ce moniteur compare les modificateurs à l'égalité et évite le conflit.
+private struct KeyCommandMonitor: NSViewRepresentable {
+  var keyCode: UInt16
+  var modifiers: NSEvent.ModifierFlags
+  var action: () -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(modifiers: modifiers, action: action) }
+
+  func makeNSView(context: Context) -> NSView {
+    context.coordinator.install(keyCode: keyCode)
+    return NSView(frame: .zero)
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    context.coordinator.modifiers = modifiers
+    context.coordinator.action = action
+  }
+
+  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    coordinator.uninstall()
+  }
+
+  final class Coordinator {
+    var modifiers: NSEvent.ModifierFlags
+    var action: () -> Void
+    private var monitor: Any?
+
+    init(modifiers: NSEvent.ModifierFlags, action: @escaping () -> Void) {
+      self.modifiers = modifiers
+      self.action = action
+    }
+
+    func install(keyCode: UInt16) {
+      guard monitor == nil else { return }
+      let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        guard let self, event.keyCode == keyCode,
+          event.modifierFlags.intersection(relevantMods) == self.modifiers
+        else { return event }
+        self.action()
+        return nil
+      }
+    }
+
+    func uninstall() {
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+    }
   }
 }
 
@@ -1778,25 +2500,30 @@ private struct TaskBlock: Identifiable {
   var rowCount: Int { (header == nil ? 0 : 1) + tasks.count }
 }
 
+/// Hauteur naturelle du corps d'édition d'une tâche (notes + rangée d'actions), pour animer sa
+/// RÉVÉLATION — la fenêtre qui s'ouvre — sans faire bouger le contenu. Une seule tâche est éditée à
+/// la fois, donc une seule valeur en vol ; `max` par prudence si deux mesures se chevauchent.
+private struct EditorHeightKey: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = max(value, nextValue())
+  }
+}
+
+/// Position de repos de chaque ligne physique — tâche/en-tête RÉELLE ou champ « Nouvelle tâche »
+/// VIRTUEL, cf. `ListPageView.RowKey` — dans le même espace de coordonnées. Une seule clé pour les
+/// deux : un champ participe au MÊME calcul de décalage qu'une tâche (cf. `dragTargets`), jamais un
+/// cas séparé à maintenir à la main.
 private struct RowFrameKey: PreferenceKey {
-  static let defaultValue: [PersistentIdentifier: CGRect] = [:]
+  static let defaultValue: [ListPageView.RowKey: CGRect] = [:]
   static func reduce(
-    value: inout [PersistentIdentifier: CGRect], nextValue: () -> [PersistentIdentifier: CGRect]
+    value: inout [ListPageView.RowKey: CGRect], nextValue: () -> [ListPageView.RowKey: CGRect]
   ) {
     value.merge(nextValue(), uniquingKeysWith: { $1 })
   }
 }
 
-/// Hauteur de la rangée « Nouvelle tâche » de chaque bloc (clé = `TaskBlock.id`). Elle n'est pas une
-/// TaskItem — donc absente de `RowFrameKey` — mais il faut la compter dans le repli d'un bloc tiré.
-private struct FieldHeightKey: PreferenceKey {
-  static let defaultValue: [String: CGFloat] = [:]
-  static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
-    value.merge(nextValue(), uniquingKeysWith: { $1 })
-  }
-}
-
-private func comingSoon(_ title: String) -> some View {
+private func comingSoon(_ title: String, searchPresented: Binding<Bool>) -> some View {
   VStack(alignment: .leading, spacing: 8) {
     Text(title).font(.title.bold())
     Text("À rebrancher.").foregroundStyle(.tertiary)
@@ -1804,4 +2531,8 @@ private func comingSoon(_ title: String) -> some View {
   .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   .padding(.top, 30)
   .padding(.horizontal, gutter)
+  .safeAreaInset(edge: .bottom, spacing: 0) {
+    BottomToolbar(
+      onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented.wrappedValue = true })
+  }
 }

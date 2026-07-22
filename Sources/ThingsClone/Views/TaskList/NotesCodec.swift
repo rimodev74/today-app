@@ -23,7 +23,12 @@ enum NotesCodec {
   }
 
   /// Texte brut, pour l'aperçu tronqué (une ligne, sans mise en forme) sous une tâche au repos.
+  /// Retours à la ligne et espaces multiples repliés en un seul espace : l'aperçu reste une ligne
+  /// continue que la vue tronque à sa largeur, au lieu de s'arrêter au premier `\n` d'une note
+  /// multi-lignes (ex. une consigne suivie de ses détails).
   static func plainText(_ data: Data) -> String {
     decode(data).string
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespaces)
   }
 }

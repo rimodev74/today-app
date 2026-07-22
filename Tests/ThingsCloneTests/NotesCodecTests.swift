@@ -36,4 +36,9 @@ final class NotesCodecTests: XCTestCase {
   func testPlainText_ofEmptyData_isEmpty() {
     XCTAssertEqual(NotesCodec.plainText(Data()), "")
   }
+
+  func testPlainText_collapsesNewlinesToSingleLine() {
+    let data = NotesCodec.encode(NSAttributedString(string: "Créer les dossiers\net ranger les rushes"))
+    XCTAssertEqual(NotesCodec.plainText(data), "Créer les dossiers et ranger les rushes")
+  }
 }

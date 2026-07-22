@@ -16,6 +16,14 @@ struct WindowConfigurator: NSViewRepresentable {
     DispatchQueue.main.async {
       guard let window = view.window else { return }
       configure(window)
+      // AppKit assigne par défaut un "premier répondeur" initial au 1er champ de texte
+      // focalisable rencontré (ici, un champ « Nouvelle tâche » ou le titre de page) — SANS
+      // qu'aucune interaction réelle ne l'ait demandé. Résultat : `firstResponder` pointe déjà un
+      // champ de texte avant même le premier clic, ce qui trompait `DeleteKeyMonitor` (il croit
+      // qu'un champ a le focus et lui laisse ⌫, au lieu de supprimer la tâche qu'on vient de
+      // sélectionner). Une seule fois, au lancement, avant toute interaction : on résigne ce
+      // focus fantôme pour repartir d'un premier répondeur neutre (`nil` = la fenêtre).
+      window.makeFirstResponder(nil)
       // SwiftUI (WindowGroup) réimpose son titre par défaut à chaque flush de la fenêtre
       // (ex. clic sur la sidebar) → on réapplique le masquage à chaque update plutôt
       // qu'une seule fois au lancement.

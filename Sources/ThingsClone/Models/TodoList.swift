@@ -44,4 +44,29 @@ final class TodoList {
     guard !countableTasks.isEmpty else { return 0 }
     return Double(countableTasks.filter(\.isCompleted).count) / Double(countableTasks.count)
   }
+
+  /// Réglage (Réglages) : descendre automatiquement une tâche cochée en bas de sa section.
+  /// Activé par défaut — `object(forKey:)` plutôt que `bool(forKey:)` pour distinguer « jamais
+  /// réglé » (→ true) de « explicitement désactivé ».
+  static let autoSortCompletedStorageKey = "autoSortCompletedToBottom"
+
+  private static var autoSortCompletedEnabled: Bool {
+    UserDefaults.standard.object(forKey: autoSortCompletedStorageKey) as? Bool ?? true
+  }
+
+  /// Renvoie `task` en bas de sa section (juste avant l'en-tête suivant, ou la fin de liste) en
+  /// réécrivant les `sortIndex` — appelé quand une tâche passe cochée, pour que les tâches
+  /// terminées descendent sous celles encore à faire sans mélanger les sections entre elles.
+  /// No-op si l'utilisateur a désactivé ce comportement dans les réglages.
+  func moveToEndOfSection(_ task: TaskItem) {
+    guard Self.autoSortCompletedEnabled else { return }
+    var ordered = orderedTasks
+    guard let taskIndex = ordered.firstIndex(where: { $0.persistentModelID == task.persistentModelID })
+    else { return }
+    let nextHeaderIndex = ordered[(taskIndex + 1)...].firstIndex(where: \.isHeader) ?? ordered.count
+    guard nextHeaderIndex > taskIndex + 1 else { return }
+    let moved = ordered.remove(at: taskIndex)
+    ordered.insert(moved, at: nextHeaderIndex - 1)
+    for (index, t) in ordered.enumerated() { t.sortIndex = index }
+  }
 }

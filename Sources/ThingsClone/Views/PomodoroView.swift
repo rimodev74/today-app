@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PomodoroView: View {
   @Environment(PomodoroTimer.self) private var timer
+  @Binding var searchPresented: Bool
 
   var body: some View {
     @Bindable var timer = timer
@@ -36,6 +37,9 @@ struct PomodoroView: View {
       .frame(maxWidth: 280)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
+    }
   }
 }
 
