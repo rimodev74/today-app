@@ -1668,12 +1668,7 @@ private struct TaskRow: View {
 
       // Sous-tâches : affichées dépliées sous la tâche, au repos comme en édition (PAS dans le
       // corps révélé `editorBody`, pour ne pas perturber l'animation pilule → carte). Rien si aucune.
-      if !task.orderedSubtasks.isEmpty {
-        subtasksSection
-        // Séparateur sous-tâches / notes : en édition l'éditeur de notes s'ouvre juste en dessous —
-        // le trait marque la frontière entre les deux (les sous-tâches sont une entité à part).
-        if isEditing { Divider().padding(.top, 8) }
-      }
+      if !task.orderedSubtasks.isEmpty { subtasksSection }
 
       // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
       if showEditor {
@@ -1757,6 +1752,10 @@ private struct TaskRow: View {
     // Tâche qui naît déjà en édition (création, insertion d'en-tête) : `onChange` ne se déclenche pas
     // (pas de transition false→true observée), on monte donc le corps ici.
     .onAppear { if isEditing { showEditor = true } }
+    // Pas de sous-tâche vide : dès que le focus quitte une sous-tâche restée sans texte, on la
+    // supprime (annule une création vide). Couvre aussi la fermeture de la tâche — le focus retombe
+    // alors à `nil`, ce qui déclenche la vérification sur la dernière sous-tâche éditée.
+    .onChange(of: focusedSubtask) { old, _ in deleteIfEmpty(old) }
     .onChange(of: isEditing) { _, editing in
       if editing {
         // Nouvelle session : (ré)affiche le corps et invalide un démontage en attente (réouverture
@@ -1770,17 +1769,6 @@ private struct TaskRow: View {
       } else {
         titleFocused = false
         focusNotesOnAppear = false
-        // Purge des sous-tâches au titre vide : on ne persiste jamais une ligne vide (comme les
-        // brouillons de nouvelle tâche). SNAPSHOT via `filter` AVANT de supprimer : itérer
-        // `task.subtasks` en direct pendant qu'on supprime mute la relation en pleine énumération
-        // (maintenance de l'inverse CoreData → `_maintainInverseRelationship`), ce qui crashe
-        // (SIGABRT) et laisse le store incohérent.
-        let emptySubtasks = task.subtasks.filter {
-          $0.title.trimmingCharacters(in: .whitespaces).isEmpty
-        }
-        for subtask in emptySubtasks {
-          modelContext.delete(subtask)
-        }
         // Fermeture ANIMÉE : la fenêtre rétrécit (le clipping ravale notes + icônes, laissés
         // affichés), puis on démonte le corps une fois à 0 — sauf si une nouvelle session a redémarré.
         editSession += 1
@@ -2069,6 +2057,17 @@ private struct TaskRow: View {
 
   /// Suppression d'une sous-tâche (corbeille au survol ou clic droit).
   private func removeSubtask(_ subtask: Subtask) {
+    modelContext.delete(subtask)
+  }
+
+  /// Supprime la sous-tâche d'uuid donné si son titre est vide (appelé au départ du focus). Suppression
+  /// d'un SEUL objet retrouvé par uuid — pas d'énumération de `task.subtasks` pendant la mutation
+  /// (le piège qui a causé le crash `_maintainInverseRelationship`).
+  private func deleteIfEmpty(_ uuid: UUID?) {
+    guard let uuid,
+      let subtask = task.subtasks.first(where: { $0.uuid == uuid }),
+      subtask.title.trimmingCharacters(in: .whitespaces).isEmpty
+    else { return }
     modelContext.delete(subtask)
   }
 
