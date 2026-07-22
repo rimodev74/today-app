@@ -2029,7 +2029,9 @@ private struct TaskRow: View {
   private var subtasksSection: some View {
     VStack(alignment: .leading, spacing: 4) {
       subtasksHeader
-      if subtasksExpanded {
+      // En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
+      // est piloté par `subtasksExpanded`.
+      if isEditing || subtasksExpanded {
         VStack(alignment: .leading, spacing: 2) {
           ForEach(task.orderedSubtasks, id: \.uuid) { subtask in
             SubtaskRowView(
@@ -2070,16 +2072,19 @@ private struct TaskRow: View {
         .buttonStyle(.plain)
       }
       Spacer(minLength: 0)
-      Button {
-        withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
-      } label: {
-        Image(systemName: "chevron.right")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.tertiary)
-          .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
-          .contentShape(Rectangle())
+      // Chevron de repli UNIQUEMENT en mode normal : en édition la liste est toujours dépliée.
+      if !isEditing {
+        Button {
+          withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
+        } label: {
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
     }
   }
 
