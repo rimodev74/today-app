@@ -1875,7 +1875,17 @@ private struct TaskRow: View {
     }
     .font(.body)
     .foregroundStyle(.secondary)
-    .padding(.leading, 26)
+    // Fond d'input : boîte légèrement contrastée par rapport au fond de la carte pour que la zone
+    // Notes se lise comme un vrai champ. `primary.opacity` s'adapte au thème (assombrit en clair,
+    // éclaircit en sombre — dans les deux cas la zone se détache). Le texte reste aligné sous le
+    // titre : retrait interne 8 + retrait externe 18 = 26 (case 16 + espace 10).
+    .padding(.vertical, 6)
+    .padding(.horizontal, 8)
+    .background(
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .fill(Color.primary.opacity(0.06))
+    )
+    .padding(.leading, 18)
   }
 
   // MARK: Fond
