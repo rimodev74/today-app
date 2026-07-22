@@ -1592,6 +1592,10 @@ private struct TaskRow: View {
   var onDelete: () -> Void
 
   @Environment(RemindersService.self) private var remindersService
+  @Environment(\.modelContext) private var modelContext
+  /// Focus de la sous-tâche en cours d'édition (clé = identifiant persistant), pour poser le focus
+  /// sur celle qu'on vient de créer.
+  @FocusState private var focusedSubtask: PersistentIdentifier?
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
@@ -1646,6 +1650,10 @@ private struct TaskRow: View {
       // Aperçu de la note au repos : sa première ligne sous le titre. Disparaît en édition — le
       // corps d'édition ci-dessous prend le relais avec la note complète et modifiable.
       if !isEditing && !task.notes.isEmpty { notePreview }
+
+      // Sous-tâches : affichées dépliées sous la tâche, au repos comme en édition (PAS dans le
+      // corps révélé `editorBody`, pour ne pas perturber l'animation pilule → carte). Rien si aucune.
+      if !task.orderedSubtasks.isEmpty { subtasksSection }
 
       // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
       if showEditor {
@@ -1802,10 +1810,13 @@ private struct TaskRow: View {
       HStack(spacing: 16) {
         Spacer(minLength: 0)
         dateControl
-        // ponytail: tags et checklist sont décoratifs pour l'instant (présents dans le
-        // visuel Things demandé). À brancher quand le modèle les portera.
+        // ponytail: tags décoratif pour l'instant (présent dans le visuel Things demandé).
+        // À brancher quand le modèle le portera.
         actionIcon("tag")
-        actionIcon("list.bullet")
+        Button(action: addNewSubtask) {
+          actionIcon("list.bullet", active: !task.subtasks.isEmpty)
+        }
+        .buttonStyle(.plain)
         priorityControl
       }
     }
@@ -1989,6 +2000,39 @@ private struct TaskRow: View {
     case let d where d > 1: return "dans \(d) jours"
     case -1: return "hier"
     case let d: return "il y a \(-d) jours"
+    }
+  }
+
+  private var subtasksSection: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      ForEach(task.orderedSubtasks) { subtask in
+        SubtaskRowView(
+          subtask: subtask,
+          isEditing: isEditing,
+          focus: $focusedSubtask,
+          onEnter: { enterOnSubtask(subtask) },
+          onDeleteEmpty: {}  // branché en Task 5
+        )
+      }
+    }
+    // Aligné sous le titre (case 16 + espace 10 = 26), comme l'aperçu de note.
+    .padding(.leading, 26)
+    .padding(.top, 4)
+  }
+
+  /// Icône checklist : crée une sous-tâche vide et pose le focus dessus.
+  private func addNewSubtask() {
+    focusedSubtask = task.addSubtask().persistentModelID
+  }
+
+  /// Entrée sur une sous-tâche : vide → termine (défocalise) ; non vide → nouvelle sous-tâche + focus.
+  /// ponytail: la nouvelle va toujours en FIN (pas d'insertion au milieu) — sans réordonnancement,
+  /// le flux « taper, Entrée, taper » reste toujours sur la dernière, donc « en dessous » en pratique.
+  private func enterOnSubtask(_ subtask: Subtask) {
+    if subtask.title.trimmingCharacters(in: .whitespaces).isEmpty {
+      focusedSubtask = nil
+    } else {
+      focusedSubtask = task.addSubtask().persistentModelID
     }
   }
 
