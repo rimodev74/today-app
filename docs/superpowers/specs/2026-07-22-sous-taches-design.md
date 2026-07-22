@@ -60,9 +60,15 @@ var orderedSubtasks: [Subtask] {
 - *Blob `Codable` sur `TaskItem`* — reste un changement de schéma (donc même effacement de base),
   perd la requête SwiftData, et cocher une case ré-encoderait tout le tableau.
 
-**⚠️ Effacement de la base :** ajouter le `@Model Subtask` change le schéma → `ThingsCloneApp.container`
-supprime le store au prochain lancement (pas de plan de migration à ce stade, cf. `CLAUDE.md`).
-Accepté : les données de test actuelles seront perdues.
+**Effacement de la base — nuancé :** `ThingsCloneApp.container` ne supprime le store *que si* son
+ouverture avec le nouveau schéma **échoue** (fallback `try? ... else removeItem`). Or nos
+changements sont **purement additifs** (nouvelle entité `Subtask` + relation optionnelle `subtasks`
+défaut `[]`) — le type de changement que SwiftData sait faire en **migration légère automatique**,
+même sans plan de migration. Donc l'ouverture devrait réussir et **les données être préservées**.
+Non garanti à 100 % (le fallback efface si l'ouverture échoue). **Filet de sécurité :** le store a
+été sauvegardé avant implémentation dans
+`~/Library/Application Support/thingsclone-db-backup-2026-07-22/` (les 3 fichiers `.store`, `-shm`,
+`-wal`) ; restauration par `cp` inverse si besoin.
 
 ## UI & interactions
 
