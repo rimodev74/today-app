@@ -2056,7 +2056,7 @@ private struct TaskRow: View {
     return HStack(spacing: 8) {
       SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
         .frame(width: 13, height: 13)
-      Text("\(done)/\(total)")
+      Text("\(done)/\(total) sous-tâches")
         .font(.callout)
         .foregroundStyle(.secondary)
         .monospacedDigit()
