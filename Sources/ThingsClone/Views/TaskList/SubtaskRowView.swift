@@ -1,18 +1,17 @@
 import SwiftData
 import SwiftUI
 
-/// Une sous-tâche dans la carte d'une `TaskItem` : coche RONDE secondaire (cercle vide / cercle
-/// coché, volontairement plus discrète que la case carrée pleine d'une tâche — une sous-tâche est un
-/// détail de la tâche, pas son égale) + titre. La coche agit au repos comme en édition ; le titre
-/// n'est éditable qu'en édition. Suppression : Retour arrière sur un champ vide (cf. `SubtaskField`),
-/// clic droit, ou l'icône corbeille au survol.
+/// Une sous-tâche dans la carte d'une `TaskItem` : coche CARRÉE secondaire (case vide / cochée,
+/// grise — volontairement plus discrète que la case pleine accentuée d'une tâche) + titre. La coche
+/// agit au repos comme en édition ; le titre n'est éditable qu'en édition. Suppression : uniquement
+/// via l'icône corbeille au survol ou le clic droit (pas de suppression au clavier).
 struct SubtaskRowView: View {
   @Bindable var subtask: Subtask
   let isEditing: Bool
-  /// uuid de la sous-tâche à focaliser (partagé par `TaskRow`, cf. `SubtaskField`).
-  @Binding var focused: UUID?
+  /// Focus partagé avec `TaskRow`, clé = uuid stable (pas `persistentModelID`, qui mute à l'autosave
+  /// et ferait sauter le focus).
+  @FocusState.Binding var focus: UUID?
   var onEnter: () -> Void
-  var onDeleteEmpty: () -> Void
   var onDelete: () -> Void
 
   @State private var hovering = false
@@ -22,7 +21,7 @@ struct SubtaskRowView: View {
       Button {
         subtask.isDone.toggle()
       } label: {
-        Image(systemName: subtask.isDone ? "checkmark.circle" : "circle")
+        Image(systemName: subtask.isDone ? "checkmark.square" : "square")
           .font(.system(size: 15))
           .foregroundStyle(subtask.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
           .contentShape(Rectangle())
@@ -30,9 +29,11 @@ struct SubtaskRowView: View {
       .buttonStyle(.plain)
 
       if isEditing {
-        SubtaskField(
-          text: $subtask.title, id: subtask.uuid, focused: $focused,
-          onEnter: onEnter, onDeleteEmpty: onDeleteEmpty)
+        TextField("Sous-tâche", text: $subtask.title)
+          .textFieldStyle(.plain)
+          .foregroundStyle(.secondary)
+          .focused($focus, equals: subtask.uuid)
+          .onSubmit(onEnter)
       } else {
         Text(subtask.title)
           .strikethrough(subtask.isDone)
@@ -41,7 +42,7 @@ struct SubtaskRowView: View {
 
       Spacer(minLength: 0)
 
-      // Corbeille au survol (comme le ••• d'une tâche) : supprime une sous-tâche même non vide.
+      // Corbeille au survol (comme le ••• d'une tâche) : supprime une sous-tâche, vide ou non.
       // Opacité (pas insertion/retrait) pour ne pas décaler la rangée au survol.
       Button(action: onDelete) {
         Image(systemName: "trash")

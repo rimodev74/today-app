@@ -1609,9 +1609,8 @@ private struct TaskRow: View {
   @Environment(\.modelContext) private var modelContext
   /// Focus de la sous-tâche en cours d'édition (clé = uuid stable, pas `persistentModelID` qui
   /// mute à l'autosave), pour poser le focus sur celle qu'on vient de créer.
-  /// uuid de la sous-tâche à focaliser. `@State` (pas `@FocusState`) : le focus est géré côté AppKit
-  /// par `SubtaskField` (premier répondeur), ce binding ne fait que dire QUI doit l'avoir.
-  @State private var focusedSubtask: UUID?
+  /// uuid de la sous-tâche à focaliser (clé de focus stable, cf. `SubtaskRowView`).
+  @FocusState private var focusedSubtask: UUID?
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
@@ -1669,7 +1668,12 @@ private struct TaskRow: View {
 
       // Sous-tâches : affichées dépliées sous la tâche, au repos comme en édition (PAS dans le
       // corps révélé `editorBody`, pour ne pas perturber l'animation pilule → carte). Rien si aucune.
-      if !task.orderedSubtasks.isEmpty { subtasksSection }
+      if !task.orderedSubtasks.isEmpty {
+        subtasksSection
+        // Séparateur sous-tâches / notes : en édition l'éditeur de notes s'ouvre juste en dessous —
+        // le trait marque la frontière entre les deux (les sous-tâches sont une entité à part).
+        if isEditing { Divider().padding(.top, 8) }
+      }
 
       // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
       if showEditor {
@@ -2036,9 +2040,8 @@ private struct TaskRow: View {
         SubtaskRowView(
           subtask: subtask,
           isEditing: isEditing,
-          focused: $focusedSubtask,
+          focus: $focusedSubtask,
           onEnter: { enterOnSubtask(subtask) },
-          onDeleteEmpty: { deleteSubtask(subtask) },
           onDelete: { removeSubtask(subtask) }
         )
       }
@@ -2064,20 +2067,7 @@ private struct TaskRow: View {
     }
   }
 
-  /// Retour arrière sur une sous-tâche vide : la supprime et refocalise la précédente (ou rien).
-  private func deleteSubtask(_ subtask: Subtask) {
-    let ordered = task.orderedSubtasks
-    let index = ordered.firstIndex { $0.uuid == subtask.uuid }
-    modelContext.delete(subtask)
-    if let index, index > 0 {
-      focusedSubtask = ordered[index - 1].uuid
-    } else {
-      focusedSubtask = nil
-    }
-  }
-
-  /// Suppression directe (corbeille au survol ou clic droit), sans refocalisation : l'utilisateur
-  /// n'édite pas forcément cette rangée.
+  /// Suppression d'une sous-tâche (corbeille au survol ou clic droit).
   private func removeSubtask(_ subtask: Subtask) {
     modelContext.delete(subtask)
   }
