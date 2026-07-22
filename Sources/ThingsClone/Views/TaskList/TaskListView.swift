@@ -1672,7 +1672,12 @@ private struct TaskRow: View {
 
       // Sous-tâches : affichées dépliées sous la tâche, au repos comme en édition (PAS dans le
       // corps révélé `editorBody`, pour ne pas perturber l'animation pilule → carte). Rien si aucune.
-      if !task.orderedSubtasks.isEmpty { subtasksSection }
+      if !task.orderedSubtasks.isEmpty {
+        // Trait de séparation notes / sous-tâches (au repos, les notes sont juste au-dessus). En
+        // édition l'éditeur de notes est ailleurs (plus bas) : pas de trait ici.
+        if !isEditing { Divider().padding(.vertical, 6) }
+        subtasksSection
+      }
 
       // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
       if showEditor {
@@ -1861,7 +1866,7 @@ private struct TaskRow: View {
       RichTextEditor(
         data: $task.notes,
         font: .systemFont(ofSize: NSFont.systemFontSize),
-        textColor: .secondaryLabelColor,
+        textColor: .labelColor,
         // Entrée valide la tâche (comme le titre) plutôt que d'ouvrir une ligne dans la note :
         // le retour à la ligne reste possible, mais seulement via Maj+Entrée.
         handleReturn: { shiftHeld in
@@ -1875,17 +1880,7 @@ private struct TaskRow: View {
     }
     .font(.body)
     .foregroundStyle(.secondary)
-    // Fond d'input : boîte légèrement contrastée par rapport au fond de la carte pour que la zone
-    // Notes se lise comme un vrai champ. `primary.opacity` s'adapte au thème (assombrit en clair,
-    // éclaircit en sombre — dans les deux cas la zone se détache). Le texte reste aligné sous le
-    // titre : retrait interne 8 + retrait externe 18 = 26 (case 16 + espace 10).
-    .padding(.vertical, 6)
-    .padding(.horizontal, 8)
-    .background(
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
-        .fill(Color.primary.opacity(0.06))
-    )
-    .padding(.leading, 18)
+    .padding(.leading, 26)
   }
 
   // MARK: Fond
@@ -2069,18 +2064,16 @@ private struct TaskRow: View {
       SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
         .frame(width: 13, height: 13)
       Text("\(done)/\(total) sous-tâches")
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .font(.body.weight(.semibold))
+        .foregroundStyle(.primary)
         .monospacedDigit()
-      if isEditing {
-        Button(action: addNewSubtask) {
-          Image(systemName: "plus")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+      Button(action: addNewSubtask) {
+        Image(systemName: "plus")
+          .font(.system(size: 13))
+          .foregroundStyle(.secondary)
+          .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
       Spacer(minLength: 0)
       // Chevron de repli UNIQUEMENT en mode normal : en édition la liste est toujours dépliée.
       if !isEditing {
@@ -2098,9 +2091,12 @@ private struct TaskRow: View {
     }
   }
 
-  /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus.
+  /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus. Au repos,
+  /// ouvre d'abord l'édition de la tâche — sinon la nouvelle sous-tâche s'afficherait en lecture
+  /// seule (`Text`), impossible à nommer.
   private func addNewSubtask() {
     subtasksExpanded = true
+    if !isEditing { onBeginEditing() }
     focusedSubtask = task.addSubtask().uuid
   }
 
@@ -2156,8 +2152,8 @@ private struct TaskRow: View {
   /// retours à la ligne sont repliés en amont (cf. `NotesCodec.plainText`).
   private var notePreview: some View {
     Text(NotesCodec.plainText(task.notes))
-      .font(.callout)
-      .foregroundStyle(.secondary)
+      .font(.body)
+      .foregroundStyle(.primary)
       .lineLimit(1)
       .truncationMode(.tail)
       .padding(.leading, 26)

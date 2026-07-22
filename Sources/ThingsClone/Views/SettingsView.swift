@@ -8,9 +8,16 @@ struct SettingsView: View {
   @AppStorage(PomodoroTimer.autoStartStorageKey) private var pomodoroAutoStart = false
   @AppStorage(PomodoroTimer.alertSoundStorageKey) private var pomodoroAlertSound = PomodoroTimer
     .defaultAlertSound
+  @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
 
   var body: some View {
     Form {
+      Picker("Thème", selection: $themeRaw) {
+        ForEach(AppTheme.allCases) { option in
+          Text(option.label).tag(option.rawValue)
+        }
+      }
+
       Picker("Tâches cochées", selection: $retentionRaw) {
         ForEach(CompletedTaskRetention.allCases) { option in
           Text(option.label).tag(option.rawValue)
@@ -33,6 +40,6 @@ struct SettingsView: View {
       }
     }
     .padding(20)
-    .frame(width: 380, height: 214)
+    .frame(width: 380, height: 248)
   }
 }

@@ -7,6 +7,7 @@ struct ThingsCloneApp: App {
   @State private var pomodoroTimer = PomodoroTimer()
   @State private var remindersService = RemindersService()
   @State private var profile = UserProfile()
+  @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
 
   init() {
     Self.prewarmRichTextEditing()
@@ -71,6 +72,7 @@ struct ThingsCloneApp: App {
         .environment(pomodoroTimer)
         .environment(remindersService)
         .environment(profile)
+        .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
     .modelContainer(Self.container)
     .defaultSize(width: 1400, height: 900)
