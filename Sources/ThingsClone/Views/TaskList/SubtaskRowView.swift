@@ -1,45 +1,61 @@
 import SwiftData
 import SwiftUI
 
-/// Une sous-tâche dans la carte d'une `TaskItem` : case RONDE + titre. La case fonctionne au repos
-/// comme en édition ; le titre n'est éditable qu'en édition (au repos il est en lecture seule, seule
-/// la coche agit). Aligné sous le titre de la tâche par le retrait porté côté `TaskRow`.
+/// Une sous-tâche dans la carte d'une `TaskItem` : coche RONDE secondaire (cercle vide / cercle
+/// coché, volontairement plus discrète que la case carrée pleine d'une tâche — une sous-tâche est un
+/// détail de la tâche, pas son égale) + titre. La coche agit au repos comme en édition ; le titre
+/// n'est éditable qu'en édition. Suppression : Retour arrière sur un champ vide (cf. `SubtaskField`),
+/// clic droit, ou l'icône corbeille au survol.
 struct SubtaskRowView: View {
   @Bindable var subtask: Subtask
   let isEditing: Bool
-  /// Focus partagé avec `TaskRow`, clé = uuid stable de la sous-tâche (pas `persistentModelID`,
-  /// qui mute à l'autosave et ferait sauter le focus — pour poser le focus sur celle qu'on vient
-  /// de créer).
-  @FocusState.Binding var focus: UUID?
-  /// Entrée dans le champ (ajouter la suivante / terminer — logique côté `TaskRow`).
+  /// uuid de la sous-tâche à focaliser (partagé par `TaskRow`, cf. `SubtaskField`).
+  @Binding var focused: UUID?
   var onEnter: () -> Void
-  /// Retour arrière sur un champ vide (supprimer — logique côté `TaskRow`).
   var onDeleteEmpty: () -> Void
+  var onDelete: () -> Void
+
+  @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 10) {
-      TaskCheckbox(isCompleted: subtask.isDone, circular: true) {
+      Button {
         subtask.isDone.toggle()
+      } label: {
+        Image(systemName: subtask.isDone ? "checkmark.circle" : "circle")
+          .font(.system(size: 15))
+          .foregroundStyle(subtask.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+          .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
 
       if isEditing {
-        TextField("Sous-tâche", text: $subtask.title)
-          .textFieldStyle(.plain)
-          .focused($focus, equals: subtask.uuid)
-          .onSubmit(onEnter)
-          // Retour arrière sur un champ vide → supprimer (sinon laisser le champ effacer un
-          // caractère). `.delete` = la touche Retour arrière (0x7F), pas la suppression avant.
-          .onKeyPress(.delete) {
-            guard subtask.title.isEmpty else { return .ignored }
-            onDeleteEmpty()
-            return .handled
-          }
+        SubtaskField(
+          text: $subtask.title, id: subtask.uuid, focused: $focused,
+          onEnter: onEnter, onDeleteEmpty: onDeleteEmpty)
       } else {
         Text(subtask.title)
           .strikethrough(subtask.isDone)
-          .foregroundStyle(subtask.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+          .foregroundStyle(.secondary)
       }
+
+      Spacer(minLength: 0)
+
+      // Corbeille au survol (comme le ••• d'une tâche) : supprime une sous-tâche même non vide.
+      // Opacité (pas insertion/retrait) pour ne pas décaler la rangée au survol.
+      Button(action: onDelete) {
+        Image(systemName: "trash")
+          .font(.system(size: 12))
+          .foregroundStyle(.tertiary)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .opacity(hovering ? 1 : 0)
     }
     .font(.body)
+    .onHover { hovering = $0 }
+    .contextMenu {
+      Button("Supprimer", role: .destructive, action: onDelete)
+    }
   }
 }

@@ -1609,7 +1609,9 @@ private struct TaskRow: View {
   @Environment(\.modelContext) private var modelContext
   /// Focus de la sous-tâche en cours d'édition (clé = uuid stable, pas `persistentModelID` qui
   /// mute à l'autosave), pour poser le focus sur celle qu'on vient de créer.
-  @FocusState private var focusedSubtask: UUID?
+  /// uuid de la sous-tâche à focaliser. `@State` (pas `@FocusState`) : le focus est géré côté AppKit
+  /// par `SubtaskField` (premier répondeur), ce binding ne fait que dire QUI doit l'avoir.
+  @State private var focusedSubtask: UUID?
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
@@ -2034,9 +2036,10 @@ private struct TaskRow: View {
         SubtaskRowView(
           subtask: subtask,
           isEditing: isEditing,
-          focus: $focusedSubtask,
+          focused: $focusedSubtask,
           onEnter: { enterOnSubtask(subtask) },
-          onDeleteEmpty: { deleteSubtask(subtask) }
+          onDeleteEmpty: { deleteSubtask(subtask) },
+          onDelete: { removeSubtask(subtask) }
         )
       }
     }
@@ -2071,6 +2074,12 @@ private struct TaskRow: View {
     } else {
       focusedSubtask = nil
     }
+  }
+
+  /// Suppression directe (corbeille au survol ou clic droit), sans refocalisation : l'utilisateur
+  /// n'édite pas forcément cette rangée.
+  private func removeSubtask(_ subtask: Subtask) {
+    modelContext.delete(subtask)
   }
 
   // MARK: Actions au survol / clic droit
