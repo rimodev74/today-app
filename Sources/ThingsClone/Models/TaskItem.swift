@@ -26,6 +26,7 @@ final class TaskItem {
   /// Couleur de l'en-tête (uniquement significatif si `isHeader`). `nil` = style par défaut.
   /// Stocke `HeaderColor.rawValue` — voir `headerColor` ci-dessous, même pattern que `priority`.
   var headerColorRaw: String?
+  @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
 
   init(
     title: String,
@@ -60,5 +61,20 @@ final class TaskItem {
   func toggleCompletion() {
     isCompleted.toggle()
     completedAt = isCompleted ? Date() : nil
+  }
+
+  /// Ordre manuel des sous-tâches ; `createdAt` départage les ex æquo (même pattern que
+  /// `TodoList.orderedTasks`).
+  var orderedSubtasks: [Subtask] {
+    subtasks.sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
+  }
+
+  /// Crée une sous-tâche vide en fin de liste et la renvoie (pour poser le focus dessus).
+  @discardableResult
+  func addSubtask() -> Subtask {
+    let subtask = Subtask()
+    subtask.sortIndex = (orderedSubtasks.last?.sortIndex ?? -1) + 1
+    subtasks.append(subtask)
+    return subtask
   }
 }

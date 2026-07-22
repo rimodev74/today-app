@@ -54,7 +54,7 @@ struct ThingsCloneApp: App {
   /// ponytail: acceptable tant qu'il n'y a pas de donnée réelle — écrire un VersionedSchema
   /// le jour où l'app est utilisée pour de vrai.
   private static let container: ModelContainer = {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self])
+    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let configuration = ModelConfiguration(schema: schema)
     if let existing = try? ModelContainer(for: schema, configurations: configuration) {
       return existing
