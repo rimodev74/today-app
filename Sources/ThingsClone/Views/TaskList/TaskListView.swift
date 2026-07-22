@@ -2288,50 +2288,58 @@ private struct HeaderRow: View {
 ///
 /// Custom et pas `.toggleStyle(.checkbox)` : la case native de macOS 26 est un carré **plein**,
 /// impossible d'en tirer ce rendu par un simple restylage.
-private struct TaskCheckbox: View {
+struct TaskCheckbox: View {
   let isCompleted: Bool
+  /// Sous-tâche = cercle ; tâche = rectangle arrondi (défaut). Même case, seule la forme change :
+  /// on ne duplique pas le tracé du check animé, le bounce ni le curseur main.
+  var circular: Bool = false
   var onToggle: () -> Void
 
   private static let size: CGFloat = 16
-  private static let shape = RoundedRectangle(cornerRadius: 4.5, style: .continuous)
 
   var body: some View {
     Button(action: onToggle) {
-      Self.shape
-        .fill(isCompleted ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
-        // Bordure et check coexistent en permanence (opacité / trim pilotés par isCompleted) :
-        // pas de `if` qui insère/retire une vue, sinon le trim n'aurait rien à animer.
-        .overlay {
-          Self.shape
-            .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
-            .opacity(isCompleted ? 0 : 1)
+      // Forme branchée UNE fois en gardant un type `InsettableShape` concret (Circle /
+      // RoundedRectangle) : `.strokeBorder` (trait posé À L'INTÉRIEUR du contour, cf. le rendu
+      // Things d'origine) n'existe que sur `InsettableShape`, pas sur un `AnyShape` type-effacé.
+      Group {
+        if circular {
+          fillAndBorder(Circle())
+        } else {
+          fillAndBorder(RoundedRectangle(cornerRadius: 4.5, style: .continuous))
         }
-        .overlay {
-          // `.trim` = strokeEnd de Core Animation exposé en SwiftUI : le trait se *trace*
-          // (0→1) au lieu d'apparaître. lineCap/Join .round pour la même douceur que Things.
-          Checkmark()
-            .trim(from: 0, to: isCompleted ? 1 : 0)
-            .stroke(
-              .white,
-              style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
-            )
-            .frame(width: Self.size * 0.55, height: Self.size * 0.55)
-        }
-        .frame(width: Self.size, height: Self.size)
-        .contentShape(Rectangle())
+      }
+      .overlay {
+        // `.trim` = strokeEnd de Core Animation exposé en SwiftUI : le trait se *trace*
+        // (0→1) au lieu d'apparaître. lineCap/Join .round pour la même douceur que Things.
+        Checkmark()
+          .trim(from: 0, to: isCompleted ? 1 : 0)
+          .stroke(.white, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+          .frame(width: Self.size * 0.55, height: Self.size * 0.55)
+      }
+      .frame(width: Self.size, height: Self.size)
+      .contentShape(Rectangle())
     }
-    // Bounce au press/release (l'état pressé du bouton, pas la pression trackpad) via un
-    // ButtonStyle dédié ; le tracé + le fond restent animés par le withAnimation de la page.
+    // Bounce au press/release via un ButtonStyle dédié ; le tracé + le fond restent animés par le
+    // withAnimation de la page.
     .buttonStyle(PressBounceButtonStyle())
     .animation(.bouncy(duration: 0.3, extraBounce: 0.15), value: isCompleted)
-    // PAS `.onHover` + `NSCursor.set()` (une fois sur deux dans les faits) : cette case vit DANS
-    // une ligne qui a déjà son propre `.onHover` (révéler le ••• au survol, cf. `TaskRow`), et
-    // deux zones de survol SwiftUI imbriquées (la ligne ET la case) se disputent alors les
-    // événements mouseEntered/mouseExited — le curseur ne change qu'une frappe sur deux selon qui
-    // gagne la course. Les cursor rects AppKit sont un mécanisme séparé, résolu par la fenêtre à
-    // partir de la géométrie plutôt que d'événements de survol concurrents : aucun conflit
-    // possible avec l'`.onHover` englobant.
+    // PAS `.onHover` + `NSCursor.set()` : cette case vit DANS une ligne qui a déjà son propre
+    // `.onHover` ; les cursor rects AppKit sont résolus par la fenêtre à partir de la géométrie.
     .overlay { PointingHandCursorArea().allowsHitTesting(false) }
+  }
+
+  /// Fond + bordure d'une case, génériques sur la forme concrète (donc `.strokeBorder` disponible).
+  /// Bordure et fond coexistent en permanence (opacité pilotée par isCompleted) : pas de `if` qui
+  /// insère/retire une vue, sinon l'anim n'aurait rien à interpoler.
+  private func fillAndBorder<S: InsettableShape>(_ shape: S) -> some View {
+    shape
+      .fill(isCompleted ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
+      .overlay {
+        shape
+          .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
+          .opacity(isCompleted ? 0 : 1)
+      }
   }
 }
 
