@@ -1670,15 +1670,6 @@ private struct TaskRow: View {
       // corps d'édition ci-dessous prend le relais avec la note complète et modifiable.
       if !isEditing && !task.notes.isEmpty { notePreview }
 
-      // Sous-tâches : affichées dépliées sous la tâche, au repos comme en édition (PAS dans le
-      // corps révélé `editorBody`, pour ne pas perturber l'animation pilule → carte). Rien si aucune.
-      if !task.orderedSubtasks.isEmpty {
-        // Trait de séparation notes / sous-tâches (au repos, les notes sont juste au-dessus). En
-        // édition l'éditeur de notes est ailleurs (plus bas) : pas de trait ici.
-        if !isEditing { Divider().padding(.vertical, 6) }
-        subtasksSection
-      }
-
       // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
       if showEditor {
         // OUVERTURE **ET** FERMETURE PAR RÉVÉLATION, jamais par translation ni disparition sèche. Le
@@ -1691,10 +1682,9 @@ private struct TaskRow: View {
         // `.onChange(of: isEditing)`) pour libérer son NSTextView.
         editorBody
           .padding(.top, 12)
-          // Respiration sous les icônes INCLUSE dans la fenêtre révélée (pas en padding externe) :
-          // le bord de découpe coïncide alors avec le bord bas de la carte, donc les icônes émergent
-          // du bord réel de la boîte au lieu d'être tranchées par une ligne 16 pt en retrait.
-          .padding(.bottom, 16)
+          // Petite respiration sous les icônes, DANS la fenêtre révélée : l'éditeur n'est plus le bas
+          // de la carte (le trait + les sous-tâches suivent), inutile d'y porter toute la marge basse.
+          .padding(.bottom, 4)
           .fixedSize(horizontal: false, vertical: true)
           .background {
             GeometryReader { g in
@@ -1725,15 +1715,23 @@ private struct TaskRow: View {
           }
           .transition(.identity)
       }
+
+      // Sous-tâches : montées au repos comme en édition, APRÈS l'éditeur de notes pour respecter
+      // l'ordre titre → notes → sous-tâches. Séparées de ce qui précède (aperçu de note au repos,
+      // éditeur de notes en édition) par un trait.
+      if !task.orderedSubtasks.isEmpty {
+        Divider().padding(.vertical, 6)
+        subtasksSection
+      }
     }
     // Borne le contenu aux limites de la ligne pendant que la carte s'ouvre/se referme.
     .clipped()
     // Le padding grandit en édition : la hauteur de la carte s'ouvre autour du titre resté en place.
     // Sélection et normal partagent le même padding — le texte ne saute donc pas au clic simple.
-    // Bas NUL en édition : la respiration sous les icônes est portée par la fenêtre de révélation
-    // (cf. editorBody), pour que son bord de découpe coïncide avec le bord bas réel de la carte.
+    // Bas en édition : les sous-tâches sont désormais le dernier élément de la carte (après
+    // l'éditeur), il leur faut une respiration jusqu'au bord bas.
     .padding(.top, isEditing ? 16 : 6)
-    .padding(.bottom, isEditing ? 0 : 6)
+    .padding(.bottom, isEditing ? 14 : 6)
     .padding(.horizontal, isEditing ? 16 : 10)
     .background { rowBackground }
     .contentShape(Rectangle())
@@ -2067,13 +2065,15 @@ private struct TaskRow: View {
         .font(.body.weight(.semibold))
         .foregroundStyle(.primary)
         .monospacedDigit()
-      Button(action: addNewSubtask) {
-        Image(systemName: "plus")
-          .font(.system(size: 13))
-          .foregroundStyle(.secondary)
-          .contentShape(Rectangle())
+      if isEditing {
+        Button(action: addNewSubtask) {
+          Image(systemName: "plus")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
       Spacer(minLength: 0)
       // Chevron de repli UNIQUEMENT en mode normal : en édition la liste est toujours dépliée.
       if !isEditing {
@@ -2091,12 +2091,9 @@ private struct TaskRow: View {
     }
   }
 
-  /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus. Au repos,
-  /// ouvre d'abord l'édition de la tâche — sinon la nouvelle sous-tâche s'afficherait en lecture
-  /// seule (`Text`), impossible à nommer.
+  /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus.
   private func addNewSubtask() {
     subtasksExpanded = true
-    if !isEditing { onBeginEditing() }
     focusedSubtask = task.addSubtask().uuid
   }
 
