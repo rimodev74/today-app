@@ -1750,6 +1750,12 @@ private struct TaskRow: View {
       } else {
         titleFocused = false
         focusNotesOnAppear = false
+        // Purge des sous-tâches au titre vide : on ne persiste jamais une ligne vide (comme les
+        // brouillons de nouvelle tâche).
+        for subtask in task.subtasks
+        where subtask.title.trimmingCharacters(in: .whitespaces).isEmpty {
+          modelContext.delete(subtask)
+        }
         // Fermeture ANIMÉE : la fenêtre rétrécit (le clipping ravale notes + icônes, laissés
         // affichés), puis on démonte le corps une fois à 0 — sauf si une nouvelle session a redémarré.
         editSession += 1
@@ -2011,7 +2017,7 @@ private struct TaskRow: View {
           isEditing: isEditing,
           focus: $focusedSubtask,
           onEnter: { enterOnSubtask(subtask) },
-          onDeleteEmpty: {}  // branché en Task 5
+          onDeleteEmpty: { deleteSubtask(subtask) }
         )
       }
     }
@@ -2033,6 +2039,18 @@ private struct TaskRow: View {
       focusedSubtask = nil
     } else {
       focusedSubtask = task.addSubtask().persistentModelID
+    }
+  }
+
+  /// Retour arrière sur une sous-tâche vide : la supprime et refocalise la précédente (ou rien).
+  private func deleteSubtask(_ subtask: Subtask) {
+    let ordered = task.orderedSubtasks
+    let index = ordered.firstIndex { $0.persistentModelID == subtask.persistentModelID }
+    modelContext.delete(subtask)
+    if let index, index > 0 {
+      focusedSubtask = ordered[index - 1].persistentModelID
+    } else {
+      focusedSubtask = nil
     }
   }
 
