@@ -834,21 +834,20 @@ private struct ListPageView: View {
       let delta = blockDelta ?? 0
       // Centre de l'EN-TÊTE (le bloc replié ne fait plus que sa hauteur) sous le curseur.
       let center = hf.midY + dragOffset.height
-      let all = blocks
-      var acc = 0
       var flat = others.count
-      for (bi, b) in all.enumerated() {
+      for (bi, b) in blocks.enumerated() {
         if bi == di { continue }  // le bloc tiré n'est pas dans `others`
-        if let r = groupRect(b.items) {
-          // Un bloc entier est soit tout au-dessus, soit tout au-dessous du bloc tiré : son centre
-          // replié remonte de Δ s'il est en dessous.
-          let blockCenter = r.midY - (bi > di ? delta : 0)
-          if center < blockCenter {
-            flat = acc
-            break
-          }
-        }
-        acc += b.rowCount
+        guard let r = groupRect(b.items) else { continue }
+        // Un bloc entier est soit tout au-dessus, soit tout au-dessous du bloc tiré : son centre
+        // replié remonte de Δ s'il est en dessous.
+        let blockCenter = r.midY - (bi > di ? delta : 0)
+        guard center < blockCenter else { continue }
+        // Index dans `others`, PAS un cumul de `rowCount` : `blocks` a écarté les tâches archivées
+        // (cf. `isArchived`) alors qu'`others` les contient — additionner les lignes visibles
+        // donnait un index trop petit d'autant de tâches cochées, et l'en-tête se posait trop haut.
+        flat = others.firstIndex { $0.persistentModelID == b.items.first?.persistentModelID }
+          ?? others.count
+        break
       }
       return (draggedGroup, others, min(flat, others.count))
     }
@@ -952,13 +951,28 @@ private struct ListPageView: View {
       gapTop =
         list.orderedTasks.compactMap { rowFrames[.task($0.persistentModelID)]?.minY }.min() ?? 0
     } else {
-      guard let f = rowFrames[.task(others[insert - 1].persistentModelID)] else { return nil }
-      let j = insert - 1
+      // Dernière ligne MESURÉE au-dessus du trou, pas forcément `insert - 1` : `others` contient
+      // les tâches archivées, qui ne sont pas rendues et n'ont donc pas de cadre. Sans ce recul,
+      // déposer juste après une tâche cochée faisait disparaître le placeholder.
+      guard
+        let j = (0..<insert).reversed().first(where: {
+          rowFrames[.task(others[$0].persistentModelID)] != nil
+        }),
+        let f = rowFrames[.task(others[j].persistentModelID)]
+      else { return nil }
       let base = f.minY - (j >= B ? delta : 0)
       let shift: CGFloat = (insert > B && j >= B) ? -h : 0
       gapTop = base + shift + f.height
     }
-    return CGRect(x: dragFrame.minX, y: gapTop, width: dragFrame.width, height: h)
+    // `h` reste la hauteur de RANGÉE partout au-dessus (c'est d'elle que les voisines s'écartent,
+    // cf. `dragTargets`). Le rectangle DESSINÉ, lui, se ramène à la pilule : une en-tête porte ses
+    // marges hors de son fond, un trou à la hauteur de la rangée serait visiblement plus grand que
+    // ce qu'on transporte. Une tâche a ses marges dedans → rien à retirer, `inset` vaut 0.
+    let top = first.isHeader ? HeaderRow.topInset : 0
+    let bottom = first.isHeader ? HeaderRow.bottomInset : 0
+    return CGRect(
+      x: dragFrame.minX, y: gapTop + top,
+      width: dragFrame.width, height: h - top - bottom)
   }
 
   /// Décalage d'une ligne : la ligne tirée suit le curseur en 2D (soulevée), les autres rejoignent
@@ -1673,8 +1687,11 @@ private struct RichTooltip: View {
     }
     .padding(10)
     .frame(width: 220, alignment: .leading)
+    // Matériau et PAS un gris figé (#F5F6F7 auparavant) : en sombre, ce fond clair restait clair
+    // sous un texte `.primary` devenu blanc — bulle illisible. `.regularMaterial` est déjà la
+    // surface flottante de l'app (cf. la carte de `QuickFindPanel`) et suit les deux apparences.
     .background(
-      Color(red: 0xF5 / 255, green: 0xF6 / 255, blue: 0xF7 / 255),
+      .regularMaterial,
       in: RoundedRectangle(cornerRadius: 10, style: .continuous)
     )
     .overlay {
@@ -2580,9 +2597,42 @@ private struct HeaderRow: View {
   /// comme des cartes (des tons quasi blancs ne montraient que leur ombre → aspect brouillon).
   private static let layerStep: CGFloat = 7
   private static let layerInset: CGFloat = 6
-  private static let dragTop = Color(red: 202 / 255, green: 225 / 255, blue: 255 / 255)  // #CAE1FF
-  private static let dragLayer1 = Color(red: 220 / 255, green: 234 / 255, blue: 255 / 255)  // #DCEAFF
-  private static let dragLayer2 = Color(red: 234 / 255, green: 241 / 255, blue: 255 / 255)  // #EAF1FF
+
+  /// Marges de la RANGÉE autour de la pilule. Nommées parce que `dragPlaceholderRect` les retire :
+  /// une en-tête, contrairement à une tâche, porte ses marges À L'EXTÉRIEUR de son fond — le trou
+  /// d'insertion doit valoir la pilule qu'on transporte, pas la rangée qui la contient.
+  static let topInset: CGFloat = 20
+  static let bottomInset: CGFloat = 4
+
+  /// Les trois teintes de la cascade, du calque le plus proche au plus lointain.
+  ///
+  /// Elles doivent rester OPAQUES (les calques se recouvrent : la moindre translucidité les ferait
+  /// transparaître les uns à travers les autres), donc figées, donc à doubler pour le mode sombre —
+  /// même contrainte et même solution que `SidebarView.rowFill`. Sans ce doublon, tout le drag
+  /// d'en-tête s'affichait en bleu pâle de mode clair par-dessus une page sombre.
+  ///
+  /// Les valeurs claires sont celles de la maquette Things. Les sombres ne sont pas inventées : ce
+  /// sont les équivalents OPAQUES de la pilule AU REPOS en sombre (`thingsSelectionFill`, soit
+  /// l'accent à 28 % sur le fond de page), déclinés dans les mêmes proportions que les claires. La
+  /// pilule tirée garde donc exactement la teinte perçue qu'elle a au repos, et le titre en accent
+  /// y conserve la lisibilité qu'il avait déjà — aucun pari de contraste à prendre.
+  private static let dragTop = dragLayer(light: 0xCA_E1FF, dark: 0x18_3A5D)
+  private static let dragLayer1 = dragLayer(light: 0xDC_EAFF, dark: 0x1A_3149)
+  private static let dragLayer2 = dragLayer(light: 0xEA_F1FF, dark: 0x1C_2937)
+
+  private static func dragLayer(light: Int, dark: Int) -> Color {
+    func srgb(_ hex: Int) -> NSColor {
+      NSColor(
+        srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+        green: CGFloat((hex >> 8) & 0xFF) / 255,
+        blue: CGFloat(hex & 0xFF) / 255,
+        alpha: 1)
+    }
+    return Color(
+      nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? srgb(dark) : srgb(light)
+      })
+  }
 
   var body: some View {
     let active = isSelected || isEditing
@@ -2614,8 +2664,8 @@ private struct HeaderRow: View {
         pill(active: active)
       }
     }
-    .padding(.top, 20)
-    .padding(.bottom, 4)
+    .padding(.top, Self.topInset)
+    .padding(.bottom, Self.bottomInset)
     // Bulle rouge du compte réel, en haut à gauche de la pilule (elle déborde le coin).
     .overlay(alignment: .topLeading) {
       if isDragging && attachedTaskCount > 0 {

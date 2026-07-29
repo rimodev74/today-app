@@ -125,6 +125,9 @@ struct SidebarView: View {
       Text(alertMessage(candidate))
     }
     .onChange(of: editingID) { _, id in clickOutsideMonitor(active: id != nil) }
+    // Le moniteur ne se démonte QUE sur `editingID` : disparaître pendant un renommage (fermeture
+    // de la fenêtre, sidebar repliée) le laissait installé pour la vie du process.
+    .onDisappear { clickOutsideMonitor(active: false) }
   }
 
   /// Sortie du renommage au clic AILLEURS dans la fenêtre. Rien ne le provoque tout seul : cliquer

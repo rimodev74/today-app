@@ -21,6 +21,10 @@ struct TodayPageView: View {
   // Le temps restant fond pendant que la page est ouverte : sans re-rendu régulier, la barre
   // affiche la capacité de l'instant où l'on a ouvert la page, pas celle de maintenant.
   @State private var now = Date()
+  // `@State` et pas un `let` construit dans le body : le tick change `now`, donc le body se
+  // ré-évalue, donc un publisher construit là serait remplacé à chaque minute — `onReceive` se
+  // réabonnerait, invalidant puis recréant un Timer à chaque fois. Ici il est créé une seule fois.
+  @State private var ticker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
   /// Brouillon de la tâche libre (sans liste ni projet) créable depuis cette page.
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
@@ -56,7 +60,7 @@ struct TodayPageView: View {
         onNewTask: { draftFocused = true }, onInsertHeader: nil,
         onSearch: { searchPresented = true })
     }
-    .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { now = $0 }
+    .onReceive(ticker) { now = $0 }
   }
 
   private var header: some View {

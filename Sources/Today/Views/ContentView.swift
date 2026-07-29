@@ -21,7 +21,7 @@ private let sidebarBackground = Color(
 struct ContentView: View {
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.colorScheme) private var colorScheme
-  @Query private var tasks: [TaskItem]
+  @Environment(\.modelContext) private var modelContext
 
   @State private var selection: SidebarSelection? = .smartList(.all)
   @State private var searchPresented = false
@@ -238,16 +238,25 @@ struct ContentView: View {
 
   /// Recopie la complétion des rappels liés sur leurs tâches (Rappels → app). L'inverse (app →
   /// Rappels) n'est pas branché ici, donc pas de boucle : on ne réécrit que `isCompleted`.
+  ///
+  /// Fetch à la demande et PAS un `@Query` : posé sur cette vue racine, il ferait dépendre TOUT
+  /// l'arbre (sidebar comprise) de la moindre mutation d'une tâche — une frappe dans un titre
+  /// réinvalidait la fenêtre entière. Les tâches liées se relisent deux fois par notification,
+  /// c'est le seul endroit qui en a besoin.
   private func syncCompletionsFromReminders() {
-    let linked = tasks.filter { $0.reminderIdentifier != nil }
-    guard !linked.isEmpty else { return }
+    let descriptor = FetchDescriptor<TaskItem>(
+      predicate: #Predicate { $0.reminderIdentifier != nil })
+    guard let linked = try? modelContext.fetch(descriptor), !linked.isEmpty else { return }
     let states = remindersService.completionStates(for: linked.compactMap(\.reminderIdentifier))
+    var changed = false
     for task in linked {
       guard let id = task.reminderIdentifier, let done = states[id], task.isCompleted != done
       else { continue }
       task.isCompleted = done
       task.completedAt = done ? Date() : nil
+      changed = true
     }
+    if changed { try? modelContext.save() }
   }
 
   /// Seules les listes et projets sont des destinations « récentes » ; les vues intelligentes
