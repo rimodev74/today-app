@@ -16,9 +16,10 @@ swift build -c "${CONFIG}" --product "${TARGET}"
 
 echo "→ Bundle ${APP}…"
 rm -rf "${APP}"
-mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources" "${APP}/Contents/Frameworks"
 cp "${BIN}" "${APP}/Contents/MacOS/${TARGET}"
 cp "Sources/App.icns" "${APP}/Contents/Resources/App.icns"
+cp -r ".build/arm64-apple-macosx/${CONFIG}/Sparkle.framework" "${APP}/Contents/Frameworks/"
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -32,7 +33,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>        <string>App</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
-    <key>CFBundleShortVersionString</key>    <string>0.1</string>
+    <key>CFBundleShortVersionString</key>    <string>0.2</string>
     <key>CFBundleVersion</key>         <string>1</string>
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
@@ -41,6 +42,9 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+echo "→ Fix rpath…"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "${APP}/Contents/MacOS/${TARGET}"
 
 echo "→ Signature ad-hoc…"
 codesign --force --sign - "${APP}"

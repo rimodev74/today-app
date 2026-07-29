@@ -14,42 +14,50 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
-      Picker("Thème", selection: $themeRaw) {
-        ForEach(AppTheme.allCases) { option in
-          Text(option.label).tag(option.rawValue)
-        }
-      }
-
-      Picker("Tâches cochées", selection: $retentionRaw) {
-        ForEach(CompletedTaskRetention.allCases) { option in
-          Text(option.label).tag(option.rawValue)
-        }
-      }
-
-      Toggle("Descendre les tâches cochées en bas de la liste", isOn: $autoSortCompleted)
-
-      // Borne du compte à rebours de la barre de capacité d'« Aujourd'hui ». 6 h → 23 h : au-delà
-      // la barre n'aurait plus de sens (une journée qui finit à 2 h du matin n'a pas de fin).
-      Picker("Fin de journée", selection: $endOfDayHour) {
-        ForEach(6...23, id: \.self) { hour in
-          Text("\(hour) h").tag(hour)
-        }
-      }
-
-      Toggle("Pomodoro : enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
-
-      HStack {
-        Picker("Pomodoro : son d'alarme", selection: $pomodoroAlertSound) {
-          ForEach(PomodoroTimer.availableSounds, id: \.self) { name in
-            Text(name).tag(name)
+      Section("Général") {
+        Picker("Thème", selection: $themeRaw) {
+          ForEach(AppTheme.allCases) { option in
+            Text(option.label).tag(option.rawValue)
           }
         }
-        Button("Tester") {
-          NSSound(named: pomodoroAlertSound)?.play()
+
+        Picker("Fin de journée", selection: $endOfDayHour) {
+          ForEach(6...23, id: \.self) { hour in
+            Text("\(hour) h").tag(hour)
+          }
+        }
+
+        Button("Rechercher une mise à jour") {
+          SparkleUpdater.shared.checkForUpdates()
+        }
+      }
+
+      Section("Tâches") {
+        Picker("Tâches cochées", selection: $retentionRaw) {
+          ForEach(CompletedTaskRetention.allCases) { option in
+            Text(option.label).tag(option.rawValue)
+          }
+        }
+
+        Toggle("Descendre les tâches cochées en bas de la liste", isOn: $autoSortCompleted)
+      }
+
+      Section("Pomodoro") {
+        Toggle("Enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
+
+        HStack {
+          Picker("Son d'alarme", selection: $pomodoroAlertSound) {
+            ForEach(PomodoroTimer.availableSounds, id: \.self) { name in
+              Text(name).tag(name)
+            }
+          }
+          Button("Tester") {
+            NSSound(named: pomodoroAlertSound)?.play()
+          }
         }
       }
     }
     .padding(20)
-    .frame(width: 380, height: 248)
+    .frame(width: 400, height: 320)
   }
 }
