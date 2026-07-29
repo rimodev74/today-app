@@ -93,8 +93,9 @@ trap restore_on_failure EXIT
 sed -i '' "s/^SHORT_VERSION=\".*\"$/SHORT_VERSION=\"${NEW_SHORT}\"/" "${MAKE_APP}"
 sed -i '' "s/^BUILD=\".*\"$/BUILD=\"${NEW_BUILD}\"/" "${MAKE_APP}"
 
-# Build, signature EdDSA, release GitHub et régénération de l'appcast.
-./Scripts/release.sh
+# Build, signature EdDSA, release GitHub et régénération de l'appcast. Le message sert aussi
+# de résumé en tête des notes : sans lui, la fenêtre de mise à jour ne dit rien de ce qui change.
+./Scripts/release.sh "${MESSAGE}"
 
 # --- Un seul commit : tes modifs + le bump + l'apperçu signé ----------------
 echo "→ Commit et push…"
