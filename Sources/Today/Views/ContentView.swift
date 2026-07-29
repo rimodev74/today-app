@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Fonds opaques des deux colonnes. En clair : valeurs Things exactes (#ffffff / #f9f9fa) ;
 /// en sombre : couleurs système natives, faute de valeurs de référence fournies.
-let pageBackground = Color(
+private let pageBackground = Color(
   nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
       ? .textBackgroundColor
@@ -20,6 +20,7 @@ private let sidebarBackground = Color(
 
 struct ContentView: View {
   @Environment(RemindersService.self) private var remindersService
+  @Environment(\.colorScheme) private var colorScheme
   @Query private var tasks: [TaskItem]
 
   @State private var selection: SidebarSelection? = .smartList(.all)
@@ -68,7 +69,15 @@ struct ContentView: View {
       .frame(width: max(effectiveWidth, Self.minSidebarWidth), alignment: .leading)
       .frame(width: effectiveWidth, alignment: .leading)
       .clipped()
-      .background { Rectangle().fill(sidebarBackground).ignoresSafeArea() }
+      // En sombre, les fonds opaques natifs des deux colonnes sont la MÊME valeur (#1E1E1E pour
+      // window/text/controlBackgroundColor) : les colonnes se confondaient, seul le séparateur les
+      // distinguait. Le matériau `.bar` rend l'étagement vibrant d'une sidebar native (Finder,
+      // Réglages) sans inventer de teinte. En clair on garde la valeur Things exacte.
+      .background {
+        Rectangle()
+          .fill(colorScheme == .dark ? AnyShapeStyle(.bar) : AnyShapeStyle(sidebarBackground))
+          .ignoresSafeArea()
+      }
 
       if effectiveWidth > 0 {
         Divider().ignoresSafeArea()

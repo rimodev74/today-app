@@ -19,19 +19,12 @@ struct SettingsView: View {
 
 // ponytail: shared sizing only, pas de wrapper générique de pane
 private struct SettingsPane<Content: View>: View {
-  @Environment(\.colorScheme) private var colorScheme
   @ViewBuilder var content: Content
 
   var body: some View {
     Form { content }
       .formStyle(.grouped)
       .frame(height: 300)
-      // En sombre, le fond gris par défaut du `Form` groupé (windowBackgroundColor) jure avec le
-      // canvas quasi noir de l'app : on repose le fond de page des listes, les cartes de `Section`
-      // restant plus claires par-dessus — même étagement à deux tons que sidebar/page. En clair,
-      // les valeurs système sont déjà celles de l'app, rien à surcharger.
-      .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
-      .background(colorScheme == .dark ? pageBackground : .clear)
   }
 }
 
