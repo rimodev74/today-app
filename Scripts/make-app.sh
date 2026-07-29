@@ -13,8 +13,8 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.3"
-BUILD="2"
+SHORT_VERSION="0.4"
+BUILD="3"
 
 echo "→ Build ${TARGET} (${CONFIG})…"
 swift build -c "${CONFIG}" --product "${TARGET}"
@@ -41,7 +41,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>    <string>${SHORT_VERSION}</string>
     <key>CFBundleVersion</key>         <string>${BUILD}</string>
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>
-    <key>SUFeedURL</key>               <string>https://raw.githubusercontent.com/rimodev74/today-app/main/appcast.xml</string>
+    <key>SUFeedURL</key>               <string>https://raw.githubusercontent.com/rimodev74/today-dist/main/appcast.xml</string>
     <key>SUPublicEDKey</key>           <string>fyuXhkBwVnpJBNSFH2AkeIqyVXCZo9V52foTzkNoZIo=</string>
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>NSHighResolutionCapable</key> <true/>

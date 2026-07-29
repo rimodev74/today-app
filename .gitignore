@@ -11,3 +11,6 @@ ThingsClone.app/
 # distribués via les releases GitHub — jamais versionnés.
 Today.app/
 *.dmg
+
+# Clone local du dépôt public de distribution (voir Scripts/release.sh).
+.dist/

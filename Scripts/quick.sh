@@ -62,7 +62,7 @@ CURRENT_BUILD=$(sed -n 's/^BUILD="\(.*\)"$/\1/p' "${MAKE_APP}")
 NEW_SHORT="${FORCED_VERSION:-$(bump_short "${CURRENT_SHORT}")}"
 NEW_BUILD=$((CURRENT_BUILD + 1))
 
-if gh release view "v${NEW_SHORT}" -R rimodev74/today-app &>/dev/null; then
+if gh release view "v${NEW_SHORT}" -R rimodev74/today-dist &>/dev/null; then
   echo "✗ La release v${NEW_SHORT} existe déjà. Passe une version explicite :"
   echo "    git quick \"${MESSAGE}\" 1.0"
   exit 1
@@ -83,7 +83,7 @@ restore_on_failure() {
     echo
     echo "✗ Échec — ${MAKE_APP} restauré (versions inchangées)."
     echo "  Si la release v${NEW_SHORT} a été créée, supprime-la :"
-    echo "      gh release delete v${NEW_SHORT} -R rimodev74/today-app --cleanup-tag"
+    echo "      gh release delete v${NEW_SHORT} -R rimodev74/today-dist --cleanup-tag"
   fi
   rm -f "${BACKUP}"
   exit $code
@@ -103,14 +103,14 @@ git commit -q -m "${MESSAGE}
 
 Version ${NEW_SHORT} (build ${NEW_BUILD})."
 
-# main porte le flux que l'app interroge ; la branche de travail suit.
-git push -q origin "HEAD:main"
+# Le code seulement : le flux et les DMG vivent dans le dépôt de distribution,
+# release.sh les y a déjà poussés.
 git push -q origin "HEAD:${BRANCH}"
 
 trap - EXIT
 rm -f "${BACKUP}"
 
 echo
-echo "✓ v${NEW_SHORT} publiée et poussée (main + ${BRANCH})."
+echo "✓ v${NEW_SHORT} publiée (today-dist) et code poussé (${BRANCH})."
 echo "  L'app la proposera au prochain contrôle (≤ 1 h), ou tout de suite via"
 echo "  Réglages → Général → Rechercher une mise à jour."
