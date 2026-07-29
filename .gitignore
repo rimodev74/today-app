@@ -6,3 +6,8 @@ DerivedData/
 ThingsClone.app/
 .omc/
 .claude/settings.local.json
+
+# Artefacts de build : régénérés par Scripts/make-app.sh et make-dmg.sh,
+# distribués via les releases GitHub — jamais versionnés.
+Today.app/
+*.dmg
