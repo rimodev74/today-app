@@ -51,18 +51,27 @@ struct TodayApp: App {
     _ = offscreenWindow(textView)
   }
 
-  /// Le schéma change sans plan de migration à ce stade. Plutôt que de refuser de démarrer
-  /// sur un store incompatible, on repart d'un store vide.
-  /// ponytail: acceptable tant qu'il n'y a pas de donnée réelle — écrire un VersionedSchema
-  /// le jour où l'app est utilisée pour de vrai.
+  /// Le store est ouvert à travers `TodayMigrationPlan` : les changements de schéma passent
+  /// désormais par une migration déclarée (cf. `SchemaV1`), plus par une base repartie de zéro.
+  ///
+  /// Le plan B ne SUPPRIME plus rien : un store illisible est mis de côté sous un nom horodaté
+  /// (cf. `StoreQuarantine`) et l'app redémarre sur une base neuve. L'utilisateur voit une app
+  /// vide — ce qui se remarque — au lieu de perdre son travail sans trace récupérable.
   private static let container: ModelContainer = {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema(versionedSchema: SchemaV1.self)
     let configuration = ModelConfiguration(schema: schema)
-    if let existing = try? ModelContainer(for: schema, configurations: configuration) {
-      return existing
+    func open() throws -> ModelContainer {
+      try ModelContainer(
+        for: schema, migrationPlan: TodayMigrationPlan.self, configurations: configuration)
     }
-    try? FileManager.default.removeItem(at: configuration.url)
-    return try! ModelContainer(for: schema, configurations: configuration)
+    do {
+      return try open()
+    } catch {
+      StoreQuarantine.quarantine(configuration.url)
+      // Si ça échoue encore, la base neuve elle-même est impossible à créer (disque plein, droits) :
+      // il n'y a plus d'app à lancer, autant planter ici avec l'erreur sous les yeux.
+      return try! open()
+    }
   }()
 
   var body: some Scene {
