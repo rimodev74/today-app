@@ -33,9 +33,24 @@ LENGTH=$(echo "${SIG_LINE}" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
 [[ -n "${ED_SIG}" && -n "${LENGTH}" ]] || { echo "✗ Signature échouée : ${SIG_LINE}"; exit 1; }
 
 echo "→ Publication de la release GitHub (avant l'appcast, sinon le DMG serait en 404)…"
+# L'app est signée ad-hoc, pas notarisée : Gatekeeper bloque la PREMIÈRE
+# installation. Les mises à jour suivantes passent, Sparkle levant lui-même la
+# quarantaine. Ces instructions disparaîtront le jour d'un certificat Developer ID.
 gh release create "${TAG}" "${DMG}" -R "${REPO}" \
   --title "Today ${SHORT_VERSION}" \
-  --notes "Version ${SHORT_VERSION} (build ${BUILD})"
+  --notes "Version ${SHORT_VERSION} (build ${BUILD})
+
+## Installation
+
+1. Ouvre le \`.dmg\` et glisse **Today** dans Applications.
+2. Au premier lancement, macOS affiche « Apple n'a pas pu vérifier que
+   *Today* ne contient pas de logiciel malveillant ». C'est normal : l'app
+   n'est pas notarisée par Apple. Pour l'autoriser :
+   **Réglages Système → Confidentialité et sécurité**, puis
+   **Ouvrir quand même** en bas de la section Sécurité.
+
+À faire une seule fois : les mises à jour suivantes s'installent
+directement depuis l'app (Réglages → Général → Rechercher une mise à jour)."
 
 echo "→ Génération de appcast.xml…"
 cat > appcast.xml <<XML
