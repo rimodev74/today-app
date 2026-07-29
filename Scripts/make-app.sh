@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
-TARGET="${2:-ThingsClone}"
+TARGET="${2:-Today}"
 APP="${TARGET}.app"
 BIN=".build/${CONFIG}/${TARGET}"
 
@@ -16,8 +16,9 @@ swift build -c "${CONFIG}" --product "${TARGET}"
 
 echo "→ Bundle ${APP}…"
 rm -rf "${APP}"
-mkdir -p "${APP}/Contents/MacOS"
+mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN}" "${APP}/Contents/MacOS/${TARGET}"
+cp "Sources/App.icns" "${APP}/Contents/Resources/App.icns"
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,6 +29,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key>     <string>${TARGET}</string>
     <key>CFBundleIdentifier</key>      <string>com.ryanmonnier.${TARGET}</string>
     <key>CFBundleExecutable</key>      <string>${TARGET}</string>
+    <key>CFBundleIconFile</key>        <string>App</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
     <key>CFBundleShortVersionString</key>    <string>0.1</string>
@@ -35,7 +37,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>NSHighResolutionCapable</key> <true/>
-    <key>NSRemindersFullAccessUsageDescription</key> <string>ThingsClone crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>
+    <key>NSRemindersFullAccessUsageDescription</key> <string>Today crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>
 </dict>
 </plist>
 PLIST

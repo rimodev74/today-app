@@ -1,0 +1,44 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:things-clone}",
+      "name": "Debug ThingsClone",
+      "target": "ThingsClone",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug ThingsClone"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:things-clone}",
+      "name": "Release ThingsClone",
+      "target": "ThingsClone",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release ThingsClone"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:things-clone}",
+      "name": "Debug Today",
+      "target": "Today",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Today"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:things-clone}",
+      "name": "Release Today",
+      "target": "Today",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Today"
+    }
+  ]
+}

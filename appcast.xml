@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Today Updates</title>
+    <link>https://github.com/rimodev74/today-app</link>
+    <description>Auto-updates for Today app</description>
+    <item>
+      <title>v0.1.0</title>
+      <pubDate>Tue, 29 Jul 2026 22:50:00 +0200</pubDate>
+      <sparkle:version>0.1.0</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:releaseNotesLink>https://github.com/rimodev74/today-app/releases/tag/v0.1.0</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/rimodev74/today-app/releases/download/v0.1.0/Today-release.dmg" length="2723045" type="application/octet-stream" sparkle:version="0.1.0" sparkle:shortVersionString="0.1.0" />
+    </item>
+  </channel>
+</rss>
