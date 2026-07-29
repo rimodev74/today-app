@@ -88,7 +88,16 @@ struct ContentView: View {
         pendingTitleFocus: $pendingTitleFocus
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background { Rectangle().fill(pageBackground).ignoresSafeArea() }
+      // Matériau plus épais que celui de la sidebar : les deux colonnes gardent des tons distincts
+      // (une même vibrance des deux côtés les refondrait en une seule surface, cf. le cas des fonds
+      // opaques ci-dessus), tout en partageant la teinte que le matériau prélève sur le bureau.
+      // ponytail: façon Réglages Système (fenêtre entièrement en matériau) plutôt que Finder/Mail,
+      // qui gardent une zone de contenu OPAQUE — c'est un choix d'app, pas le défaut d'AppKit.
+      .background {
+        Rectangle()
+          .fill(colorScheme == .dark ? AnyShapeStyle(.thickMaterial) : AnyShapeStyle(pageBackground))
+          .ignoresSafeArea()
+      }
     }
     // Poignée : clic = replier/déplier, glisser = redimensionner. En overlay (pas dans le HStack)
     // pour rester visible sidebar repliée, où il n'y a plus de séparateur auquel s'accrocher.
