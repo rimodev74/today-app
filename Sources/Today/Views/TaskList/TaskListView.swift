@@ -845,7 +845,8 @@ private struct ListPageView: View {
         // Index dans `others`, PAS un cumul de `rowCount` : `blocks` a écarté les tâches archivées
         // (cf. `isArchived`) alors qu'`others` les contient — additionner les lignes visibles
         // donnait un index trop petit d'autant de tâches cochées, et l'en-tête se posait trop haut.
-        flat = others.firstIndex { $0.persistentModelID == b.items.first?.persistentModelID }
+        flat =
+          others.firstIndex { $0.persistentModelID == b.items.first?.persistentModelID }
           ?? others.count
         break
       }
@@ -1353,21 +1354,9 @@ private struct ListPageView: View {
     let copy = TodoList(title: list.title + " copie", notes: list.notes, project: list.project)
     copy.sortIndex = list.sortIndex + 1
     modelContext.insert(copy)
+    // `TaskItem.copy(into:)` recopie tout, `sortIndex` compris : la liste dupliquée garde son ordre.
     for task in list.orderedTasks {
-      let clone = TaskItem(
-        title: task.title, notes: task.notes, when: task.when,
-        isHeader: task.isHeader, list: copy
-      )
-      clone.sortIndex = task.sortIndex
-      clone.priority = task.priority
-      clone.headerColor = task.headerColor
-      for sub in task.orderedSubtasks {
-        let subCopy = Subtask(title: sub.title)
-        subCopy.isDone = sub.isDone
-        subCopy.sortIndex = sub.sortIndex
-        clone.subtasks.append(subCopy)
-      }
-      modelContext.insert(clone)
+      modelContext.insert(task.copy(into: copy))
     }
     try? modelContext.save()
     selection = .list(copy)
@@ -1415,23 +1404,9 @@ private struct ListPageView: View {
 
   /// Duplique une tâche juste sous l'originale (les suivantes glissent d'un cran).
   private func duplicate(_ task: TaskItem) {
-    let clone = TaskItem(
-      title: task.title, notes: task.notes, when: task.when,
-      isHeader: task.isHeader, list: list
-    )
-    clone.priority = task.priority
-    clone.deadline = task.deadline
-    clone.headerColor = task.headerColor
+    let clone = task.copy(into: list)
     for t in list.tasks where t.sortIndex > task.sortIndex { t.sortIndex += 1 }
-    clone.sortIndex = task.sortIndex + 1
-    // La checklist fait partie de la tâche : sans ça, dupliquer perdrait silencieusement les
-    // sous-tâches (même piège que la couleur d'en-tête jadis oubliée ici).
-    for sub in task.orderedSubtasks {
-      let subCopy = Subtask(title: sub.title)
-      subCopy.isDone = sub.isDone
-      subCopy.sortIndex = sub.sortIndex
-      clone.subtasks.append(subCopy)
-    }
+    clone.sortIndex = task.sortIndex + 1  // écrase celui repris par `copy(into:)`
     modelContext.insertAndSave(clone)
   }
 

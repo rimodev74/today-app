@@ -72,6 +72,36 @@ final class TaskItem {
     subtasks.sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
   }
 
+  /// Copie complète de la tâche, posée dans `list` — contenu, réglages et checklist.
+  ///
+  /// SEUL endroit qui sait ce qu'est « la même tâche ». Les deux chemins de duplication (une
+  /// tâche via son menu, une liste entière via le sien) recopiaient chacun leur propre liste de
+  /// champs et divergeaient à chaque ajout au modèle : la couleur d'en-tête, puis les sous-tâches,
+  /// puis la durée estimée ont chacune été oubliées d'un côté ou de l'autre. Un champ ajouté à
+  /// `TaskItem` se recopie désormais ici, ou nulle part.
+  ///
+  /// Volontairement NON copiés : la complétion (`isCompleted`/`completedAt` — une copie est une
+  /// tâche à faire) et `reminderIdentifier` (un rappel Apple appartient à une seule tâche ; le
+  /// partager ferait que cocher la copie cocherait l'originale).
+  func copy(into list: TodoList?) -> TaskItem {
+    let clone = TaskItem(title: title, notes: notes, when: when, isHeader: isHeader, list: list)
+    clone.hasTime = hasTime
+    clone.deadline = deadline
+    clone.estimateMinutes = estimateMinutes
+    clone.sortIndex = sortIndex
+    // Les bruts (`…Raw`) et pas les propriétés calculées : ce sont eux que SwiftData persiste,
+    // les lire ici rend la liste des champs à recopier vérifiable d'un coup d'œil sur le modèle.
+    clone.priorityRaw = priorityRaw
+    clone.headerColorRaw = headerColorRaw
+    for sub in orderedSubtasks {
+      let subCopy = Subtask(title: sub.title)
+      subCopy.isDone = sub.isDone
+      subCopy.sortIndex = sub.sortIndex
+      clone.subtasks.append(subCopy)
+    }
+    return clone
+  }
+
   /// Crée une sous-tâche vide en fin de liste et la renvoie (pour poser le focus dessus).
   @discardableResult
   func addSubtask() -> Subtask {

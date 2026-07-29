@@ -592,9 +592,13 @@ struct SidebarView: View {
     pendingTitleFocus = list.persistentModelID
   }
 
+  // Enregistrement explicite comme partout ailleurs dans l'app : s'en remettre à l'autosave
+  // laissait une fenêtre où une suppression en cascade (un projet emporte ses listes, qui
+  // emportent leurs tâches) n'était pas encore sur le disque.
   private func delete(_ project: Project) {
     if selection == .project(project) { selection = .smartList(.all) }
     modelContext.delete(project)
+    try? modelContext.save()
   }
 
   private func delete(_ list: TodoList) {
@@ -602,6 +606,7 @@ struct SidebarView: View {
       selection = list.project.map { .project($0) } ?? .smartList(.all)
     }
     modelContext.delete(list)
+    try? modelContext.save()
   }
 
   /// Suppression directe si l'élément est vide (liste sans tâche, projet sans liste), sinon

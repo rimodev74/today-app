@@ -95,7 +95,9 @@ struct ContentView: View {
       // qui gardent une zone de contenu OPAQUE — c'est un choix d'app, pas le défaut d'AppKit.
       .background {
         Rectangle()
-          .fill(colorScheme == .dark ? AnyShapeStyle(.thickMaterial) : AnyShapeStyle(pageBackground))
+          .fill(
+            colorScheme == .dark ? AnyShapeStyle(.thickMaterial) : AnyShapeStyle(pageBackground)
+          )
           .ignoresSafeArea()
       }
     }

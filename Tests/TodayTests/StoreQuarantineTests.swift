@@ -65,6 +65,7 @@ final class StoreQuarantineTests: XCTestCase {
   }
 
   func testQuarantine_onMissingStoreDoesNothing() {
-    XCTAssertTrue(StoreQuarantine.quarantine(directory.appendingPathComponent("absent.store")).isEmpty)
+    XCTAssertTrue(
+      StoreQuarantine.quarantine(directory.appendingPathComponent("absent.store")).isEmpty)
   }
 }
