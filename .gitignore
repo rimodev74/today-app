@@ -3,7 +3,6 @@
 DerivedData/
 *.xcuserstate
 .DS_Store
-ThingsClone.app/
 .omc/
 .claude/settings.local.json
 
