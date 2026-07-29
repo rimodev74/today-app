@@ -23,6 +23,13 @@ final class SparkleUpdater {
     if UserDefaults.standard.object(forKey: "SUEnableAutomaticChecks") == nil {
       updater.automaticallyChecksForUpdates = true
     }
+
+    // Sparkle vérifie toutes les 24 h par défaut, trop lent pour un rythme de
+    // publication quotidien : une version poussée le matin ne serait proposée
+    // que le lendemain. 1 h reste discret (Sparkle ne notifie que s'il trouve
+    // vraiment une mise à jour) et rend `git quick` visible dans la journée.
+    updater.updateCheckInterval = 3600
+
     try? updater.start()
   }
 
