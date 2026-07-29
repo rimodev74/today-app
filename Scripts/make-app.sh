@@ -11,6 +11,11 @@ TARGET="${2:-Today}"
 APP="${TARGET}.app"
 BIN=".build/${CONFIG}/${TARGET}"
 
+# Source unique de vérité des versions — Scripts/release.sh les relit ici.
+# BUILD est un entier incrémental : c'est lui que Sparkle compare.
+SHORT_VERSION="0.3"
+BUILD="2"
+
 echo "→ Build ${TARGET} (${CONFIG})…"
 swift build -c "${CONFIG}" --product "${TARGET}"
 
@@ -33,9 +38,11 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>        <string>App</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
-    <key>CFBundleShortVersionString</key>    <string>0.2</string>
-    <key>CFBundleVersion</key>         <string>1</string>
+    <key>CFBundleShortVersionString</key>    <string>${SHORT_VERSION}</string>
+    <key>CFBundleVersion</key>         <string>${BUILD}</string>
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>
+    <key>SUFeedURL</key>               <string>https://raw.githubusercontent.com/rimodev74/today-app/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>           <string>fyuXhkBwVnpJBNSFH2AkeIqyVXCZo9V52foTzkNoZIo=</string>
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSRemindersFullAccessUsageDescription</key> <string>Today crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>

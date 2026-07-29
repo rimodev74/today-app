@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Fonds opaques des deux colonnes. En clair : valeurs Things exactes (#ffffff / #f9f9fa) ;
 /// en sombre : couleurs système natives, faute de valeurs de référence fournies.
-private let pageBackground = Color(
+let pageBackground = Color(
   nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
       ? .textBackgroundColor

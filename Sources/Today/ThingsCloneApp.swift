@@ -92,7 +92,10 @@ struct TodayApp: App {
     }
 
     Settings {
+      // Même thème que la fenêtre principale : sans ça, choisir « Sombre » avec un système clair
+      // laissait la fenêtre de réglages en clair (le scheme n'est pas hérité entre Scenes).
       SettingsView()
+        .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
 
     MenuBarExtra {
