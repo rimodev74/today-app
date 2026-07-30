@@ -61,18 +61,23 @@ struct TodayPageView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
+        // `header` (le titre de l'onglet) reste HORS du fondu, cf. `PageReveal`.
         header
-        eventsSection
 
-        // ponytail: barre de capacité masquée à la demande de Ryan (« je jugerai plus tard ») —
-        // le code (`capacityBar`, `capacity`, `planned`/`remaining`) reste intact pour la
-        // rebrancher d'une ligne plutôt que de la reconstruire si elle revient.
-        ForEach(tasks) { task in
-          TodayRow(task: task, onToggle: { toggle(task) })
+        Group {
+          eventsSection
+
+          // ponytail: barre de capacité masquée à la demande de Ryan (« je jugerai plus tard ») —
+          // le code (`capacityBar`, `capacity`, `planned`/`remaining`) reste intact pour la
+          // rebrancher d'une ligne plutôt que de la reconstruire si elle revient.
+          ForEach(tasks) { task in
+            TodayRow(task: task, onToggle: { toggle(task) })
+          }
+          newTaskRow
+
+          remindersSection
         }
-        newTaskRow
-
-        remindersSection
+        .pageReveal()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)

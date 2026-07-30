@@ -44,17 +44,21 @@ struct UpcomingPageView: View {
     let agenda = agenda
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
+        // `header` (le titre de l'onglet) reste HORS du fondu, cf. `PageReveal`.
         header
 
-        ForEach(agenda.nearDays) { group in
-          DaySection(group: group, onToggleTask: toggle, onToggleReminder: completeReminder)
-        }
-        ForEach(agenda.monthBands) { band in
-          MonthBandHeader(name: band.name, rangeLabel: band.rangeLabel)
-          ForEach(band.days) { group in
+        Group {
+          ForEach(agenda.nearDays) { group in
             DaySection(group: group, onToggleTask: toggle, onToggleReminder: completeReminder)
           }
+          ForEach(agenda.monthBands) { band in
+            MonthBandHeader(name: band.name, rangeLabel: band.rangeLabel)
+            ForEach(band.days) { group in
+              DaySection(group: group, onToggleTask: toggle, onToggleReminder: completeReminder)
+            }
+          }
         }
+        .pageReveal()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)

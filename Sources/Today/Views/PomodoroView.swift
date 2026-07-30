@@ -37,6 +37,10 @@ struct PomodoroView: View {
       .frame(maxWidth: 280)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // Fondu sur TOUTE la vue, contrairement aux autres onglets : Pomodoro n'a ni anneau de
+    // progression, ni titre de page, ni encadré de notes — rien à préserver du fondu (cf.
+    // `PageReveal`). Son minuteur est du contenu, pas un en-tête.
+    .pageReveal()
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
     }

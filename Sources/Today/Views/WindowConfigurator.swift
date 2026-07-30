@@ -25,17 +25,26 @@ struct WindowConfigurator: NSViewRepresentable {
       // focus fantôme pour repartir d'un premier répondeur neutre (`nil` = la fenêtre).
       window.makeFirstResponder(nil)
       // SwiftUI (WindowGroup) réimpose son titre par défaut à chaque flush de la fenêtre
-      // (ex. clic sur la sidebar) → on réapplique le masquage à chaque update plutôt
-      // qu'une seule fois au lancement.
+      // (ex. clic sur la sidebar) → il faut le remasquer après coup.
+      //
+      // Mais SEULEMENT le titre, et seulement s'il a bougé. `didUpdateNotification` est posté à
+      // la fréquence d'affichage — mesuré ici : 120 fois par seconde, EN CONTINU, fenêtre au
+      // repos et sans la moindre interaction. Y rejouer tout `configure()` réécrivait `styleMask`
+      // et `toolbarStyle` à chaque image, ce qui resalit la fenêtre… qui reposte un `didUpdate` :
+      // la boucle s'auto-entretenait et l'app ne redescendait jamais au repos.
       coordinator.observer = NotificationCenter.default.addObserver(
         forName: NSWindow.didUpdateNotification, object: window, queue: .main
-      ) { _ in configure(window) }
+      ) { _ in
+        if !window.title.isEmpty { window.title = "" }
+      }
     }
     return view
   }
 
   func updateNSView(_ nsView: NSView, context: Context) {}
 
+  /// Appelée UNE fois, au montage. Cf. l'observateur de `didUpdateNotification` ci-dessus pour
+  /// pourquoi elle n'est pas rejouée ensuite.
   private func configure(_ window: NSWindow) {
     window.styleMask.insert(.fullSizeContentView)
     window.titlebarAppearsTransparent = true

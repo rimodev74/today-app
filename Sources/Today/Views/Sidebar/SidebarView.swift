@@ -404,8 +404,13 @@ struct SidebarView: View {
   /// besoin de le remonter à `SidebarView`.
   private struct HoverBackground<Content: View>: View {
     var isSelected: Bool
+    /// Reçoit le `clickCount` de l'événement AppKit courant : 1 = sélection, 2 = renommage.
+    var onPress: (Int) -> Void
     @ViewBuilder var content: () -> Content
     @State private var hovering = false
+    // Un appui ne doit déclencher qu'UNE sélection : `onChanged` est rappelé à chaque mouvement
+    // de souris tant que le bouton est enfoncé, pas seulement au mouseDown.
+    @State private var pressed = false
 
     var body: some View {
       content()
@@ -416,6 +421,31 @@ struct SidebarView: View {
         // Pas de curseur « main » : ces lignes sont de la navigation, pas des liens — le curseur
         // flèche reste celui du reste de l'app.
         .onHover { hovering = $0 }
+        // Sélection au mouseDOWN, comme une sidebar AppKit native (Finder, Mail) — et NON un
+        // `.onTapGesture`, qui agit au relâchement.
+        //
+        // Le renommage est décidé ICI, à partir du `clickCount` de l'événement AppKit, et
+        // SURTOUT PAS avec un `.onTapGesture(count: 2)` sur le titre. Mesuré : dès qu'un tel
+        // geste couvre la zone cliquée, SwiftUI retient TOUT geste concurrent pendant ~351 ms
+        // (son délai interne de multi-tap, distinct des 500 ms de `NSEvent.doubleClickInterval`)
+        // le temps de voir si un second clic arrive. La navigation partait donc 450 ms après le
+        // mouseDown quand le clic tombait sur le texte du titre, et en 1,3 ms quand il tombait à
+        // côté — d'où une sidebar « lente sur les listes au nom long, rapide sur les noms
+        // courts ». Le rendu de la page, lui, n'a jamais dépassé 0,4 ms.
+        //
+        // Le premier `onChanged` d'un `DragGesture(minimumDistance: 0)` EST le mouseDown : rien
+        // à départager, plus aucune attente. Même mécanique que `TaskListView.dragGesture` et
+        // que la poignée de `ContentView`. Un double-clic sélectionne donc au 1er clic puis
+        // renomme au 2e, exactement comme un renommage Finder.
+        .gesture(
+          DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+              guard !pressed else { return }
+              pressed = true
+              onPress(NSApp.currentEvent?.clickCount ?? 1)
+            }
+            .onEnded { _ in pressed = false }
+        )
     }
   }
 
@@ -435,16 +465,23 @@ struct SidebarView: View {
     action: @escaping () -> Void,
     @ViewBuilder label: @escaping () -> L
   ) -> some View {
-    HoverBackground(isSelected: isSelected()) {
+    HoverBackground(
+      isSelected: isSelected(),
+      onPress: { clickCount in
+        if let editingID, editingID != id { endRename() }  // valide le renommage d'une autre ligne
+        // 2e clic sur une rangée renommable : on passe en édition (le 1er l'a déjà sélectionnée).
+        if clickCount >= 2, let id {
+          startRename(id)
+        } else {
+          action()
+        }
+      }
+    ) {
       label()
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, verticalPadding)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
-    }
-    .onTapGesture {
-      if let editingID, editingID != id { endRename() }  // valide le renommage d'une autre ligne
-      action()
     }
   }
 
@@ -500,10 +537,10 @@ struct SidebarView: View {
       Text(text.wrappedValue)
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Double-clic sur le TITRE seul — le geste attendu, et nulle part ailleurs sur la rangée
-        // (ni le chevron, ni l'icône, ni le badge). Le tap simple de la rangée continue de passer
-        // et de sélectionner : c'est `sidebarRow` qui garantit qu'il ne referme pas cette édition.
-        .onTapGesture(count: 2) { startRename(id) }
+      // AUCUN geste ici. Un `.onTapGesture(count: 2)` sur ce titre gelait ~351 ms tout geste
+      // concurrent de la rangée le temps d'attendre un éventuel second clic — c'était TOUTE la
+      // lenteur de navigation de la sidebar (cf. le commentaire du geste dans `HoverBackground`,
+      // qui porte désormais le double-clic via le `clickCount` de l'événement AppKit).
     }
   }
 

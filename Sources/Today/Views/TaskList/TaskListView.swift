@@ -30,6 +30,70 @@ struct PageHeaderIcon: View {
   }
 }
 
+/// Instant de la première ouverture de l'onglet courant, posé par `TaskListView`.
+///
+/// Un HORODATAGE et non un compteur : d'un onglet à l'autre, les lignes n'ont pas la même
+/// identité, elles sont donc CRÉÉES par le changement de page et ne reçoivent aucun `onChange`.
+/// Il leur faut une valeur qu'elles peuvent consulter à leur naissance pour savoir si elles
+/// arrivent avec leur page ou bien plus tard. Passe par l'environnement plutôt que par les
+/// initialiseurs : une page qui ne veut pas de fondu n'a rien à déclarer.
+struct PageOpenedAtKey: EnvironmentKey {
+  static let defaultValue = Date.distantPast
+}
+
+extension EnvironmentValues {
+  var pageOpenedAt: Date {
+    get { self[PageOpenedAtKey.self] }
+    set { self[PageOpenedAtKey.self] = newValue }
+  }
+}
+
+/// Fondu d'ouverture, à poser sur le CONTENU d'une page — jamais sur son en-tête.
+///
+/// L'anneau de progression, le titre de l'onglet et l'encadré de notes en sont volontairement
+/// exclus : ce sont le cadre fixe de la vue. Les faire pâlir donnait l'impression que la page
+/// entière tanguait, et surtout ça noyait l'animation propre de l'anneau — qui, lui, doit
+/// VRAIMENT parcourir sa valeur (cf. `ProgressRing`) plutôt que se contenter d'un fondu.
+///
+/// Opacité SEULE, aucun effet géométrique : un `offset` ou un `scaleEffect` posé ici entrerait
+/// dans les `rowFrames` que `ListPageView` mesure dans `dragSpace`, et le calcul du trou
+/// d'insertion travaillerait sur des positions de repos fausses — même famille de piège que la
+/// boucle offset→cadre→offset documentée plus bas.
+struct PageReveal: ViewModifier {
+  @Environment(\.pageOpenedAt) private var openedAt
+  @State private var opacity: Double = 1
+
+  /// Passé ce délai, ce qui apparaît le fait NET. C'est ce qui distingue « l'onglet vient de
+  /// s'ouvrir » de « le LazyVStack vient de créer cette rangée parce qu'on a fait défiler » :
+  /// sans cette fenêtre, chaque ligne atteinte au défilement serait apparue en fondu.
+  private static let window = 0.35
+
+  func body(content: Content) -> some View {
+    content
+      .opacity(opacity)
+      // Les deux déclencheurs sont nécessaires et ne se recouvrent pas : `onAppear` couvre ce que
+      // le changement d'onglet CRÉE (la quasi-totalité), `onChange` ce que SwiftUI réutilise et
+      // qui ne réapparaît donc jamais.
+      .onAppear(perform: reveal)
+      .onChange(of: openedAt) { reveal() }
+  }
+
+  private func reveal() {
+    guard Date().timeIntervalSince(openedAt) < Self.window else {
+      opacity = 1
+      return
+    }
+    // Le repli part sans animation, le retour à net est animé : un fondu montant, jamais un
+    // clignotement.
+    opacity = 0.55
+    withAnimation(.easeOut(duration: 0.18)) { opacity = 1 }
+  }
+}
+
+extension View {
+  func pageReveal() -> some View { modifier(PageReveal()) }
+}
+
 /// Le lavande de sélection de Things : #D1DFFC. Teinte de l'accent système, translucide, résolue par
 /// apparence : périwinkle clair sur fond blanc, bleu voilé sur fond sombre — et suit la couleur
 /// d'accent choisie par l'utilisateur. Plus opaque en sombre : sur le fond navy, une même alpha
@@ -62,7 +126,36 @@ struct TaskListView: View {
   @Binding var pendingTitleFocus: PersistentIdentifier?
   @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
 
+  /// Onglets déjà ouverts dans cette session — au sens de la sidebar : liste, projet, Pomodoro,
+  /// Tâches, Aujourd'hui, À venir, Archives. Tout ce qui passe par `selection`, donc, et rien
+  /// d'autre : les Réglages sont une fenêtre à part, ils ne traversent jamais ce code.
+  ///
+  /// Le fondu ne joue qu'à la PREMIÈRE ouverture de chacun. Y revenir est une navigation courante,
+  /// pas une découverte — rejouer le fondu à chaque aller-retour finissait par se lire comme une
+  /// lourdeur.
+  @State private var seen: Set<SidebarSelection> = []
+  /// `.distantPast` au départ : la page affichée au lancement n'est l'ouverture de personne, elle
+  /// s'affiche d'un bloc. « Tâches » reste alors non-vu — le premier CLIC dessus fera son fondu.
+  @State private var openedAt = Date.distantPast
+
   var body: some View {
+    page
+      .environment(\.pageOpenedAt, openedAt)
+      // Ni `.transition` ni `.id(...)` : les deux exigeraient que SwiftUI détruise puis
+      // reconstruise la page à chaque liste (NSTextView des notes, tous les TextField, le
+      // ScrollView) — précisément ce qui avait été retiré ici, cf. le cas `.list` ci-dessous.
+      //
+      // Et ceci ne retarde RIEN : quand on arrive ici la sélection est déjà appliquée et la page
+      // déjà construite (~1 ms, cf. le geste de `SidebarView`). On ne fait qu'horodater son
+      // arrivée à l'écran ; le fondu découvre ce qui est déjà posé.
+      .onChange(of: selection) { _, new in
+        guard let new, seen.insert(new).inserted else { return }
+        openedAt = Date()
+      }
+  }
+
+  @ViewBuilder
+  private var page: some View {
     switch selection {
     case .smartList(.all):
       // `inboxLists` est peuplée dès le lancement (cf. `ThingsCloneApp.ensureInbox`) ; le repli
@@ -240,13 +333,14 @@ private struct ListPageView: View {
                 value: fieldOffset(for: block, targets: targets)
               )
               .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
+              .pageReveal()
           }
 
           // Repliée pendant un drag : elle n'entre pas dans `rowFrames`/`dragTargets` (gelés à
           // l'empoignade), une ouverture en cours de drag décalerait le calcul du trou.
           if draggingID == nil {
-            dormantSummary
-            archiveSection
+            dormantSummary.pageReveal()
+            archiveSection.pageReveal()
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -619,6 +713,10 @@ private struct ListPageView: View {
         dragGesture(for: task),
         including: editingID == task.persistentModelID ? .subviews : .all
       )
+      // Posé sur la LIGNE et non sur un `Group` englobant : un modificateur sur le `ForEach` d'un
+      // `LazyVStack` risque de lui faire évaluer d'un coup toutes ses rangées — la lenteur qu'on
+      // vient justement de retirer. `pageHeader` (anneau, titre, notes) reste au-dessus, intact.
+      .pageReveal()
   }
 
   /// En-tête de section ou tâche : deux rendus distincts, même enveloppe drag/drop (posée par
@@ -755,6 +853,14 @@ private struct ListPageView: View {
   /// tâche » resté ouvert. Un clic SUR une ligne ne fait rien ici : son propre geste (sélection,
   /// édition) s'en charge déjà.
   private func dismissSelectionIfOutside(_ point: CGPoint) {
+    // Rien d'ouvert : on ne touche à RIEN. Ce moniteur voit TOUS les mouseDown de la fenêtre
+    // (sidebar, barre du bas, bouton Réglages compris). Sans cette garde il rejouait, à chaque
+    // appui, une transaction animée (`dismissEditing`) et deux résignations de focus — donc une
+    // résignation de premier répondeur AppKit ENTRE le mouseDown et le mouseUp du contrôle visé.
+    // Le contrôle perdait le suivi de son appui : son action ne partait pas, et il fallait
+    // cliquer une seconde fois (là où l'état, déjà vide, ne provoquait plus rien).
+    guard editingID != nil || selectedID != nil || focusedDraft != nil || notesFocused
+    else { return }
     let insideRow = blocks.contains { block in
       if let header = block.header,
         rowFrames[.task(header.persistentModelID)]?.contains(point) == true
@@ -1798,9 +1904,13 @@ private struct ProjectPageView: View {
         }
         .buttonStyle(.plain)
         .listRowSeparator(.hidden)
+        // Par rangée : une `List` est paresseuse elle aussi (même précaution que
+        // `ListPageView.draggableRow`). Le bloc anneau + titre + notes au-dessus reste hors du
+        // fondu.
+        .pageReveal()
 
         ForEach(list.orderedTasks) { task in
-          taskRow(task).listRowSeparator(.hidden)
+          taskRow(task).listRowSeparator(.hidden).pageReveal()
         }
 
         if list.tasks.isEmpty {
@@ -1810,6 +1920,7 @@ private struct ProjectPageView: View {
             .padding(.leading, 26)
             .listRowSeparator(.hidden)
             .selectionDisabled()
+            .pageReveal()
         }
       }
 
@@ -3161,8 +3272,9 @@ private struct RowFrameKey: PreferenceKey {
 
 private func comingSoon(_ title: String, searchPresented: Binding<Bool>) -> some View {
   VStack(alignment: .leading, spacing: 8) {
+    // Le titre de l'onglet reste hors du fondu, comme partout ailleurs.
     Text(title).font(.title.bold())
-    Text("À rebrancher.").foregroundStyle(.tertiary)
+    Text("À rebrancher.").foregroundStyle(.tertiary).pageReveal()
   }
   .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   .padding(.top, 30)

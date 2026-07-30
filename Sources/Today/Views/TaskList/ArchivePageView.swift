@@ -22,20 +22,24 @@ struct ArchivePageView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
+        // `header` (le titre de l'onglet) reste HORS du fondu, cf. `PageReveal`.
         header
 
-        if archived.isEmpty {
-          Text("Aucune tâche archivée.")
-            .foregroundStyle(.tertiary)
-        } else {
-          ForEach(archiveMonths(archived)) { month in
-            ArchiveMonthSection(
-              month: month,
-              onToggle: { restore($0) },
-              onDelete: { delete($0) }
-            )
+        Group {
+          if archived.isEmpty {
+            Text("Aucune tâche archivée.")
+              .foregroundStyle(.tertiary)
+          } else {
+            ForEach(archiveMonths(archived)) { month in
+              ArchiveMonthSection(
+                month: month,
+                onToggle: { restore($0) },
+                onDelete: { delete($0) }
+              )
+            }
           }
         }
+        .pageReveal()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
