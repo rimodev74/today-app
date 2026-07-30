@@ -64,15 +64,49 @@ struct TodayApp: App {
       try ModelContainer(
         for: schema, migrationPlan: TodayMigrationPlan.self, configurations: configuration)
     }
+    let container: ModelContainer
     do {
-      return try open()
+      container = try open()
     } catch {
       StoreQuarantine.quarantine(configuration.url)
       // Si ça échoue encore, la base neuve elle-même est impossible à créer (disque plein, droits) :
       // il n'y a plus d'app à lancer, autant planter ici avec l'erreur sous les yeux.
-      return try! open()
+      container = try! open()
     }
+    ensureInbox(in: container)
+    return container
   }()
+
+  /// Garantit l'existence de la liste singleton « Tâches » (Inbox) et lui rattache les tâches
+  /// laissées sans liste par l'ancien champ libre d'« Aujourd'hui » — sans ça, ces tâches
+  /// resteraient orphelines et invisibles après l'introduction de la page « Tâches ».
+  /// Idempotent : no-op dès le second lancement (plus aucune tâche n'est créée avec `list: nil`).
+  private static func ensureInbox(in container: ModelContainer) {
+    let context = ModelContext(container)
+    let inbox: TodoList
+    if let existing = try? context.fetch(FetchDescriptor<TodoList>(
+      predicate: #Predicate { $0.isInbox }
+    )).first {
+      inbox = existing
+    } else {
+      inbox = TodoList(title: "Tâches")
+      inbox.isInbox = true
+      context.insert(inbox)
+    }
+
+    let orphans = (try? context.fetch(FetchDescriptor<TaskItem>(
+      predicate: #Predicate { $0.list == nil },
+      sortBy: [SortDescriptor(\.createdAt)]
+    ))) ?? []
+    var next = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
+    for task in orphans {
+      task.list = inbox
+      task.sortIndex = next
+      next += 1
+    }
+
+    try? context.save()
+  }
 
   var body: some Scene {
     // Titre vide explicite : sinon SwiftUI ré-assigne "Today" (nom du bundle) à la

@@ -12,6 +12,9 @@ final class TodoList {
   var scheduledWhen: Date?
   var priorityRaw: Int = 0
   var project: Project?
+  /// La liste singleton qui porte les tâches sans projet — page « Tâches » de la sidebar
+  /// (équivalent d'« À classer » dans Things). Créée une fois au lancement (cf. `ThingsCloneApp`).
+  var isInbox: Bool = false
   @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem]
 
   // Stocké en Int comme sur TaskItem : SwiftData persiste le stocké, pas le calculé.

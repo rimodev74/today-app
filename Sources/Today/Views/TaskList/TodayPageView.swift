@@ -1,3 +1,4 @@
+import EventKit
 import SwiftData
 import SwiftUI
 
@@ -16,6 +17,10 @@ struct TodayPageView: View {
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.modelContext) private var modelContext
   @Query private var allTasks: [TaskItem]
+  // Destination de la tâche libre créée depuis cette page (cf. `createTask`) : l'Inbox, comme
+  // toute tâche sans projet — « Aujourd'hui » ne fait que la filtrer par date, ce n'est pas sa
+  // liste propre.
+  @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
   @AppStorage(DayCapacity.endOfDayHourKey) private var endOfDayHour = DayCapacity
     .defaultEndOfDayHour
   // Le temps restant fond pendant que la page est ouverte : sans re-rendu régulier, la barre
@@ -28,9 +33,22 @@ struct TodayPageView: View {
   /// Brouillon de la tâche libre (sans liste ni projet) créable depuis cette page.
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
+  // Rappels/événements Apple du jour — lecture seule, cf. `refreshAppleItems`.
+  @State private var events: [EKEvent] = []
+  @State private var reminders: [EKReminder] = []
 
   private var tasks: [TaskItem] {
     SmartList.today.sort(SmartList.today.filter(allTasks))
+  }
+
+  /// Rappels Apple déjà rattachés à une tâche de l'app : à exclure de la section « Rappels »
+  /// pour ne pas les montrer deux fois (une fois comme tâche, une fois comme rappel brut).
+  private var linkedReminderIdentifiers: Set<String> {
+    Set(allTasks.compactMap(\.reminderIdentifier))
+  }
+
+  private var unlinkedReminders: [EKReminder] {
+    reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
   }
 
   private var capacity: DayCapacity {
@@ -41,15 +59,17 @@ struct TodayPageView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
+        eventsSection
 
-        if !tasks.isEmpty {
-          capacityBar
-            .padding(.bottom, 18)
-        }
+        // ponytail: barre de capacité masquée à la demande de Ryan (« je jugerai plus tard ») —
+        // le code (`capacityBar`, `capacity`, `planned`/`remaining`) reste intact pour la
+        // rebrancher d'une ligne plutôt que de la reconstruire si elle revient.
         ForEach(tasks) { task in
           TodayRow(task: task, onToggle: { toggle(task) })
         }
         newTaskRow
+
+        remindersSection
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
@@ -61,13 +81,30 @@ struct TodayPageView: View {
         onSearch: { searchPresented = true })
     }
     .onReceive(ticker) { now = $0 }
+    .task { await refreshAppleItems() }
+    // Un rappel/événement peut changer côté Rappels/Calendrier pendant que Today est ouvert ou
+    // en arrière-plan — même double déclencheur que `ContentView.syncCompletionsFromReminders`.
+    .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
+      Task { await refreshAppleItems() }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
+      Task { await refreshAppleItems() }
+    }
+  }
+
+  /// Silencieux si l'accès Rappels/Calendrier est refusé : les sections restent vides, le reste
+  /// de la page fonctionne normalement (pas d'écran d'erreur pour une section informative).
+  private func refreshAppleItems() async {
+    reminders = await remindersService.reminders(dueOn: now)
+    if await remindersService.requestEventAccess() {
+      events = remindersService.events(on: now)
+    }
   }
 
   private var header: some View {
-    HStack(spacing: 12) {
-      Image(systemName: SmartList.today.systemImage)
-        .font(.title2)
-        .foregroundStyle(SmartList.today.color)
+    HStack(spacing: 10) {
+      PageHeaderIcon(systemImage: SmartList.today.systemImage, tint: SmartList.today.color)
       Text(SmartList.today.label)
         .font(.title.bold())
       Spacer(minLength: 0)
@@ -121,11 +158,28 @@ struct TodayPageView: View {
     Task { await remindersService.pushCompletion(for: task) }
   }
 
+  /// Coche le VRAI rappel Apple (`RemindersService.setCompleted`, déjà utilisé pour les tâches
+  /// liées à un rappel) — retrait optimiste immédiat de la liste locale, comme `toggle(_:)` pour
+  /// une tâche : on ne montre jamais que des rappels non complétés, cocher en fait donc sortir un
+  /// tout de suite plutôt que d'attendre le prochain rafraîchissement.
+  private func completeReminder(_ reminder: EKReminder) {
+    let id = reminder.calendarItemIdentifier
+    withAnimation(taskInsert) { reminders.removeAll { $0.calendarItemIdentifier == id } }
+    Task { try? await remindersService.setCompleted(true, identifier: id) }
+  }
+
   /// Champ de création d'une tâche libre : ni liste ni projet, seulement datée d'aujourd'hui.
   /// Même retrait que `TodayRow` (case à cocher fantôme) pour rester aligné avec les titres.
   private var newTaskRow: some View {
     HStack(spacing: 10) {
-      Color.clear.frame(width: 16, height: 16)
+      RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
+        .overlay {
+          Image(systemName: "plus")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.tertiary)
+        }
+        .frame(width: 16, height: 16)
       TextField("Nouvelle tâche…", text: $draft)
         .textFieldStyle(.plain)
         .focused($draftFocused)
@@ -141,9 +195,148 @@ struct TodayPageView: View {
       draftFocused = false
       return
     }
-    let task = TaskItem(title: title, when: Calendar.current.startOfDay(for: Date()))
+    let task = TaskItem(
+      title: title, when: Calendar.current.startOfDay(for: Date()), list: inboxLists.first)
     withAnimation(taskInsert) { modelContext.insertAndSave(task) }
     draftFocused = true
+  }
+
+  // MARK: Rappels et événements Apple (lecture seule)
+
+  /// Absente si vide — une page neuve ne montre pas une section sans rien dedans (même
+  /// convention que `archiveSection`/`dormantSummary` de `ListPageView`).
+  @ViewBuilder private var remindersSection: some View {
+    if !unlinkedReminders.isEmpty {
+      AppleItemsSection(title: "Rappels", systemImage: "bell") {
+        ForEach(unlinkedReminders, id: \.calendarItemIdentifier) { reminder in
+          ReminderRow(reminder: reminder, onToggle: { completeReminder(reminder) })
+        }
+      }
+    }
+  }
+
+  /// Pas de bandeau ni de `Divider` ici (contrairement à « Rappels ») : à la demande de Ryan,
+  /// les événements s'affichent seuls, tout en haut de la page.
+  @ViewBuilder private var eventsSection: some View {
+    if !events.isEmpty {
+      VStack(alignment: .leading, spacing: 6) {
+        ForEach(events, id: \.eventIdentifier) { EventRow(event: $0) }
+      }
+      .padding(.top, 10)
+      .padding(.bottom, 20)
+    }
+  }
+}
+
+/// Bandeau + contenu partagés par les sections « Rappels » et « Événements » : lecture seule,
+/// donc pas de champ de création ni de menu — juste un titre et ses lignes.
+private struct AppleItemsSection<Content: View>: View {
+  let title: String
+  let systemImage: String
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Divider().padding(.vertical, 10)
+      HStack(spacing: 6) {
+        Image(systemName: systemImage)
+          .font(.system(size: 11))
+        Text(title)
+      }
+      .font(.subheadline.weight(.semibold))
+      .foregroundStyle(.secondary)
+      .padding(.bottom, 6)
+      content
+    }
+    .padding(.top, 8)
+  }
+}
+
+/// Ligne d'un rappel Apple — MÊME design qu'une tâche (`TaskCheckbox`, titre, sous-titre), pour
+/// qu'il se lise comme une tâche du jour parmi les autres. La case est cochable : cocher coche
+/// le vrai rappel (cf. `TodayPageView.completeReminder`) — un tag à droite rappelle sa source,
+/// seule différence visuelle avec une tâche de l'app.
+struct ReminderRow: View {
+  let reminder: EKReminder
+  var onToggle: () -> Void
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      TaskCheckbox(isCompleted: false, onToggle: onToggle)
+
+      VStack(alignment: .leading, spacing: 1) {
+        Text((reminder.title?.isEmpty == false ? reminder.title : nil) ?? "Sans titre")
+        if let listTitle {
+          Text(listTitle)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
+      Spacer(minLength: 0)
+      SourceTag(label: dueTime.map { "Rappels · \($0)" } ?? "Rappels")
+    }
+    .padding(.vertical, 4)
+    .contentShape(Rectangle())
+  }
+
+  private var listTitle: String? {
+    reminder.calendar.title.isEmpty ? nil : reminder.calendar.title
+  }
+
+  /// `nil` si le rappel n'a qu'une date sans heure (`dueDateComponents.hour` absent).
+  private var dueTime: String? {
+    guard let components = reminder.dueDateComponents, components.hour != nil,
+      let date = Calendar.current.date(from: components)
+    else { return nil }
+    return date.formatted(date: .omitted, time: .shortened)
+  }
+}
+
+/// Ligne d'un événement du Calendrier Apple — encadré teinté de la couleur du calendrier
+/// d'origine, plutôt qu'une simple pastille : c'est le repère visuel le plus direct pour
+/// distinguer un rendez-vous fixe d'une tâche ou d'un rappel.
+struct EventRow: View {
+  let event: EKEvent
+
+  private var tint: Color { Color(cgColor: event.calendar.cgColor) }
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Text(timeLabel)
+        .foregroundStyle(tint)
+        .monospacedDigit()
+      Text(event.title ?? "Sans titre")
+      Spacer(minLength: 0)
+    }
+    .font(.callout)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(tint.opacity(0.4))
+    )
+  }
+
+  private var timeLabel: String {
+    event.isAllDay ? "Toute la journée" : event.startDate.formatted(date: .omitted, time: .shortened)
+  }
+}
+
+/// Pastille neutre indiquant qu'une ligne vient de Rappels/Calendrier — même gabarit
+/// qu'`EstimateTag` (même hauteur de ligne), teinte volontairement neutre : ce n'est pas une
+/// donnée actionnable de l'app, juste un repère de provenance.
+struct SourceTag: View {
+  let label: String
+
+  var body: some View {
+    Text(label)
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+      .fixedSize()
   }
 }
 

@@ -117,6 +117,62 @@ final class RemindersService {
     return states
   }
 
+  // MARK: Lecture — page « Aujourd'hui » (rappels + événements Apple, affichage seul)
+
+  var eventAuthorizationStatus: EKAuthorizationStatus {
+    EKEventStore.authorizationStatus(for: .event)
+  }
+
+  /// Demande l'accès au Calendrier. Autorisation séparée de celle des Rappels. Pas de type
+  /// d'erreur dédié : rien n'affiche l'échec à l'écran (section informative, silencieuse si
+  /// refusée) — le booléen suffit à l'appelant pour savoir s'il peut fetcher.
+  @discardableResult
+  func requestEventAccess() async -> Bool {
+    switch eventAuthorizationStatus {
+    case .fullAccess: return true
+    case .denied, .restricted, .writeOnly: return false
+    case .notDetermined: fallthrough
+    @unknown default: return (try? await store.requestFullAccessToEvents()) ?? false
+    }
+  }
+
+  /// Événements du calendrier compris entre `start` et `end`, triés par heure de début. Vide tant
+  /// que l'accès n'est pas accordé — même convention que `writableLists`.
+  func events(from start: Date, to end: Date) -> [EKEvent] {
+    guard eventAuthorizationStatus == .fullAccess else { return [] }
+    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+    return store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
+  }
+
+  /// Événements qui touchent `day` — cf. `events(from:to:)`.
+  func events(on day: Date) -> [EKEvent] {
+    let start = Calendar.current.startOfDay(for: day)
+    let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? day
+    return events(from: start, to: end)
+  }
+
+  /// Rappels dont l'échéance tombe entre `start` et `end` et pas encore complétés — même règle
+  /// que la liste intelligente « Aujourd'hui » de l'app Rappels. `fetchReminders` d'EventKit est
+  /// à callback, d'où la continuation.
+  func reminders(dueFrom start: Date, to end: Date) async -> [EKReminder] {
+    try? await requestAccess()
+    guard authorizationStatus == .fullAccess else { return [] }
+    let predicate = store.predicateForIncompleteReminders(
+      withDueDateStarting: start, ending: end, calendars: nil)
+    return await withCheckedContinuation { continuation in
+      store.fetchReminders(matching: predicate) { reminders in
+        continuation.resume(returning: reminders ?? [])
+      }
+    }
+  }
+
+  /// Rappels dont l'échéance tombe le `day` donné — cf. `reminders(dueFrom:to:)`.
+  func reminders(dueOn day: Date) async -> [EKReminder] {
+    let start = Calendar.current.startOfDay(for: day)
+    let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? day
+    return await reminders(dueFrom: start, to: end)
+  }
+
   /// Pousse la complétion d'une tâche vers son rappel (app → Rappels), en miroir du retour
   /// `completionStates`. No-op si la tâche n'est pas liée ou si l'accès n'est pas accordé.
   /// Silencieux : cocher une tâche ne doit jamais lever d'alerte. Sans ce push, le retour

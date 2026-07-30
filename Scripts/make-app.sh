@@ -13,8 +13,8 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.5"
-BUILD="4"
+SHORT_VERSION="0.6"
+BUILD="5"
 
 echo "→ Build ${TARGET} (${CONFIG})…"
 swift build -c "${CONFIG}" --product "${TARGET}"
@@ -46,6 +46,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSRemindersFullAccessUsageDescription</key> <string>Today crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key> <string>Today affiche les événements de votre calendrier sur la page Aujourd'hui.</string>
 </dict>
 </plist>
 PLIST

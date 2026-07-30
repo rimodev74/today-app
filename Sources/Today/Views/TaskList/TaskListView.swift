@@ -6,6 +6,30 @@ import UniformTypeIdentifiers
 /// vit dans son propre fichier et doit se caler sur la même marge que les pages de liste.
 let gutter: CGFloat = 75
 
+/// Retrait interne d'une ligne de tâche : la respiration du fond de sélection, entre le bord de
+/// section et la case à cocher. C'est lui qui définit la colonne des cases — donc celle sur
+/// laquelle l'en-tête de page doit se caler (cf. `pageHeader`), sinon le titre de la page flotte
+/// 10 pt à gauche de toutes les tâches qu'il coiffe.
+let rowInset: CGFloat = 10
+
+/// Icône d'un bandeau de page (« Tâches », « Aujourd'hui », « Archives »). Dessinée à la taille du
+/// titre, mais LARGEUR de layout figée à celle d'une `TaskCheckbox` et alignée à gauche : le glyphe
+/// débordera de quelques points dans l'espace qui suit (SwiftUI ne rogne pas), ce qui est exactement
+/// l'effet voulu — la colonne reste juste des deux côtés, bord gauche sur celui des cases à cocher et
+/// titre de page sur celui des titres de tâche, quel que soit le symbole (une étoile est plus large
+/// qu'une coche). Sans ce cadrage, chaque page décale son titre d'une valeur différente.
+struct PageHeaderIcon: View {
+  let systemImage: String
+  let tint: Color
+
+  var body: some View {
+    Image(systemName: systemImage)
+      .font(.title2)
+      .foregroundStyle(tint)
+      .frame(width: 16, alignment: .leading)
+  }
+}
+
 /// Le lavande de sélection de Things : #D1DFFC. Teinte de l'accent système, translucide, résolue par
 /// apparence : périwinkle clair sur fond blanc, bleu voilé sur fond sombre — et suit la couleur
 /// d'accent choisie par l'utilisateur. Plus opaque en sombre : sur le fond navy, une même alpha
@@ -36,9 +60,20 @@ struct TaskListView: View {
   @Binding var selection: SidebarSelection?
   @Binding var searchPresented: Bool
   @Binding var pendingTitleFocus: PersistentIdentifier?
+  @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
 
   var body: some View {
     switch selection {
+    case .smartList(.all):
+      // `inboxLists` est peuplée dès le lancement (cf. `ThingsCloneApp.ensureInbox`) ; le repli
+      // n'est qu'un filet de sécurité si la vue se rendait avant ce seed.
+      if let inbox = inboxLists.first {
+        ListPageView(
+          list: inbox, selection: $selection, searchPresented: $searchPresented,
+          pendingTitleFocus: $pendingTitleFocus)
+      } else {
+        comingSoon(SmartList.all.label, searchPresented: $searchPresented)
+      }
     case .list(let list):
       // PAS de `.id(list.persistentModelID)` ici : il forçait SwiftUI à détruire et reconstruire
       // toute la page à chaque changement de liste (TextEditor/NSTextView, tous les TextField, le
@@ -56,6 +91,8 @@ struct TaskListView: View {
       ArchivePageView(searchPresented: $searchPresented)
     case .smartList(.today):
       TodayPageView(searchPresented: $searchPresented)
+    case .smartList(.upcoming):
+      UpcomingPageView(searchPresented: $searchPresented)
     case .smartList(let smart):
       comingSoon(smart.label, searchPresented: $searchPresented)
     case nil:
@@ -154,7 +191,11 @@ private struct ListPageView: View {
     return GeometryReader { geo in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
-          header
+          pageHeader
+            // Calé sur la colonne des cases à cocher, pas sur le bord de section : les lignes
+            // portent `rowInset` à l'intérieur de leur fond de sélection, l'en-tête doit le
+            // reprendre sinon icône et titre pendent à gauche de toutes les tâches.
+            .padding(.leading, rowInset)
             .padding(.bottom, 14)
 
           // Une en-tête ouvre un BLOC : elle et les tâches qui la suivent, jusqu'à la prochaine
@@ -1126,10 +1167,10 @@ private struct ListPageView: View {
         createTask(in: block, refocus: false)
       }
     }
-    // Mêmes paddings qu'une TaskRow au repos (vertical 6, horizontal 10) : la rangée de
+    // Mêmes paddings qu'une TaskRow au repos (vertical 6, `rowInset` horizontal) : la rangée de
     // création garde exactement le rythme des tâches, sans détachement visuel.
     .padding(.vertical, 6)
-    .padding(.horizontal, 10)
+    .padding(.horizontal, rowInset)
     .contentShape(Rectangle())
     .onTapGesture { focusedDraft = block.id }
   }
@@ -1195,6 +1236,28 @@ private struct ListPageView: View {
 
   // MARK: En-tête de liste
 
+  /// La liste Inbox (« Tâches ») a un bandeau fixe, comme les autres pages intelligentes
+  /// (`TodayPageView`) — pas de titre éditable, pas de menu ni de notes, comme le « À classer »
+  /// de Things : elle n'a pas ces réglages.
+  @ViewBuilder private var pageHeader: some View {
+    if list.isInbox {
+      inboxHeader
+    } else {
+      header
+    }
+  }
+
+  private var inboxHeader: some View {
+    // Même construction que les bandeaux d'« Aujourd'hui » et « Archives » : les trois pages à
+    // titre fixe doivent se lire comme une seule (cf. `PageHeaderIcon` pour le cadrage).
+    HStack(spacing: 10) {
+      PageHeaderIcon(systemImage: SmartList.all.systemImage, tint: SmartList.all.color)
+      Text(SmartList.all.label)
+        .font(.title.bold())
+      Spacer(minLength: 0)
+    }
+  }
+
   private var header: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 12) {
@@ -1216,10 +1279,10 @@ private struct ListPageView: View {
       }
       notesBox
     }
-    // Aucun retrait horizontal : l'anneau, le titre et le notesBox sont FLUSH à gauche sur la même
-    // ligne d'alignement que le fond de sélection des tâches. Les cases à cocher, elles, gardent leur
-    // retrait de 10 à l'intérieur de ce fond (respiration de la surbrillance) — l'anneau n'a pas à le
-    // suivre : c'est un élément d'en-tête, calé sur le bord de section, pas sur les cases.
+    // Aucun retrait ici : c'est `pageHeader` qui applique `rowInset`, pour l'en-tête d'Inbox comme
+    // pour celui-ci. L'anneau, le titre et le notesBox se calent donc sur la colonne des cases à
+    // cocher, pas sur le bord du fond de sélection — un titre de page qui pend à gauche des tâches
+    // qu'il coiffe se lit comme un défaut d'alignement, jamais comme une marge voulue.
     // contentShape pour que le survol couvre toute la bande, pas seulement le texte.
     .contentShape(Rectangle())
     .onHover { headerHovering = $0 }
@@ -2009,7 +2072,7 @@ private struct TaskRow: View {
     // l'éditeur), il leur faut une respiration jusqu'au bord bas.
     .padding(.top, isEditing ? 16 : 6)
     .padding(.bottom, isEditing ? 14 : 6)
-    .padding(.horizontal, isEditing ? 16 : 10)
+    .padding(.horizontal, isEditing ? 16 : rowInset)
     .background { rowBackground }
     .contentShape(Rectangle())
     // Survol : révèle le ••• à droite. Clic droit : même menu que le •••, via contentShape ;
@@ -2711,7 +2774,7 @@ private struct HeaderRow: View {
       .opacity((hovering || active) && !isDragging ? 1 : 0)
     }
     .padding(.vertical, 6)
-    .padding(.horizontal, 10)
+    .padding(.horizontal, rowInset)
     .background {
       // La pilule est TOUJOURS visible (plus un indicateur de sélection) : c'est l'apparence
       // permanente de l'en-tête. Pendant le drag, l'en-tête est le calque du DESSUS de la

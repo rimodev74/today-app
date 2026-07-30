@@ -59,10 +59,8 @@ struct ArchivePageView: View {
   }
 
   private var header: some View {
-    HStack(spacing: 12) {
-      Image(systemName: SmartList.archive.systemImage)
-        .font(.title2)
-        .foregroundStyle(SmartList.archive.color)
+    HStack(spacing: 10) {
+      PageHeaderIcon(systemImage: SmartList.archive.systemImage, tint: SmartList.archive.color)
       Text(SmartList.archive.label)
         .font(.title.bold())
       Spacer(minLength: 0)
