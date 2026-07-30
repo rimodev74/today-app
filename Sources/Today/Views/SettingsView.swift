@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 struct SettingsView: View {
@@ -56,6 +57,10 @@ private struct GeneralSettingsTab: View {
         }
       }
 
+      Section("Saisie rapide") {
+        LabeledContent("Raccourci global") { HotKeyRecorder() }
+      }
+
       Section("Mises à jour") {
         LabeledContent("Version installée", value: version)
 
@@ -64,11 +69,80 @@ private struct GeneralSettingsTab: View {
             SparkleUpdater.shared.automaticallyChecksForUpdates = value
           }
 
-        Button("Rechercher une mise à jour") {
-          SparkleUpdater.shared.checkForUpdates()
+        // `LabeledContent` et pas un `HStack` : c'est lui qui aligne le bouton sur la colonne des
+        // autres rangées du formulaire groupé, seul, il flottait à gauche.
+        LabeledContent("Recherche manuelle") {
+          Button("Rechercher une mise à jour") {
+            SparkleUpdater.shared.checkForUpdates()
+          }
         }
       }
     }
+  }
+}
+
+/// Enregistreur de raccourci : le bouton passe en écoute et capture la PROCHAINE combinaison
+/// frappée.
+///
+/// Moniteur `NSEvent` local et pas `.onKeyPress` : le second ne voit que ce que SwiftUI veut bien
+/// lui laisser (une combinaison à modificateurs part d'abord au menu — ⌘Q quitterait l'app en pleine
+/// saisie), alors qu'un moniteur local voit l'événement AVANT le menu et peut le consommer
+/// (`return nil`).
+private struct HotKeyRecorder: View {
+  @State private var label = GlobalHotKey.current.label
+  @State private var monitor: Any?
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Button(buttonTitle) {
+        if monitor == nil { start() } else { stop() }
+      }
+      .frame(minWidth: 150)
+
+      Button("Réinitialiser") {
+        GlobalHotKey.store(
+          keyCode: GlobalHotKey.defaultKeyCode,
+          modifiers: NSEvent.ModifierFlags(rawValue: UInt(GlobalHotKey.defaultModifiers)),
+          label: GlobalHotKey.defaultLabel)
+        label = GlobalHotKey.defaultLabel
+      }
+      .buttonStyle(.link)
+    }
+    // Un moniteur laissé installé continuerait d'avaler les frappes de toute l'app.
+    .onDisappear(perform: stop)
+  }
+
+  private var buttonTitle: String {
+    if monitor != nil { return "Tapez la combinaison…" }
+    return label.isEmpty ? "Aucun" : label
+  }
+
+  private func start() {
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+      let keyCode = Int(event.keyCode)
+      if keyCode == kVK_Escape && modifiers.isEmpty {
+        stop()
+        return nil
+      }
+      // Un raccourci GLOBAL sans modificateur volerait la touche à toutes les apps : on en exige
+      // au moins un.
+      guard !modifiers.isEmpty else {
+        NSSound.beep()
+        return nil
+      }
+      let text = GlobalHotKey.label(
+        keyCode: keyCode, modifiers: modifiers, characters: event.charactersIgnoringModifiers)
+      GlobalHotKey.store(keyCode: keyCode, modifiers: modifiers, label: text)
+      label = text
+      stop()
+      return nil
+    }
+  }
+
+  private func stop() {
+    if let monitor { NSEvent.removeMonitor(monitor) }
+    monitor = nil
   }
 }
 

@@ -102,6 +102,19 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollContentBackground(.hidden)
+      // Fondu en haut du défilement : sans lui, une ligne qui passait sous le champ de recherche
+      // était tranchée net au pixel. Un masque dégradé plutôt qu'un calque flou par-dessus — la
+      // sidebar est translucide (vibrancy), n'importe quel voile opaque y ferait une bande grise
+      // en mode sombre comme en clair.
+      // ponytail: masque à opacité, pas de flou variable — plafond : le texte s'efface au lieu de
+      // se brouiller. Passer à un CIFilter de flou progressif si ça se voit.
+      .mask {
+        VStack(spacing: 0) {
+          LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+            .frame(height: 16)
+          Color.black
+        }
+      }
     }
     .safeAreaInset(edge: .bottom) { bottomBar }
     // Suppression uniquement via le clic droit → « Supprimer » (cf. `contextMenu` de `projectRow`/
@@ -548,20 +561,25 @@ struct SidebarView: View {
 
   private var bottomBar: some View {
     HStack {
+      // `hoverBordered()` DANS le label, jamais sur le bouton : posée dehors, sa marge s'ajoutait
+      // autour d'un bouton dont la zone cliquable restait le seul glyphe — la bordure de survol
+      // s'allumait bien plus large que ce qui recevait le clic, d'où l'impression de devoir viser
+      // (et de cliquer deux fois). `.plain` fait du label la cible : la marge en fait partie.
       Button(action: addProject) {
-        Label("Nouveau projet", systemImage: "plus")
+        Label("Nouveau projet", systemImage: "plus").hoverBordered()
       }
       .buttonStyle(.plain)
-      .hoverBordered()
       .padding(.leading, 4)
 
       Spacer()
 
       SettingsLink {
+        // Cible carrée d'au moins 24pt : un glyphe de 14pt seul est trop petit pour être visé.
         Image(systemName: "slider.horizontal.3")
+          .frame(minWidth: 24, minHeight: 16)
+          .hoverBordered()
       }
       .buttonStyle(.plain)
-      .hoverBordered()
     }
     .font(.callout)
     .foregroundStyle(.secondary)

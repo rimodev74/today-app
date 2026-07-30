@@ -23,7 +23,7 @@ struct ContentView: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.modelContext) private var modelContext
 
-  @State private var selection: SidebarSelection? = .smartList(.all)
+  @State private var selection: SidebarSelection? = .smartList(.today)
   @State private var searchPresented = false
   /// Liste dont le TITRE (gros en-tête de la page) doit passer en édition : posée par la sidebar à
   /// la création d'une liste, consommée par sa page. On édite le nom DANS la page (pas la sidebar)
@@ -47,6 +47,14 @@ struct ContentView: View {
   /// butait sur son minimum pendant que le curseur continuait.
   @State private var dragWidth: Double?
   @State private var grabberHovered = false
+  /// Survol de la sidebar elle-même. État SÉPARÉ de `grabberHovered` (et pas le même drapeau posé
+  /// des deux côtés) : les deux zones se touchent, et rien ne garantit que SwiftUI livre la sortie
+  /// de l'une avant l'entrée dans l'autre — un seul drapeau clignoterait au passage de la frontière.
+  @State private var sidebarHovered = false
+
+  /// Le mors se montre dès que la souris est quelque part sur la sidebar OU sur la bande qui la
+  /// longe : on ne le cherche pas, il est déjà là quand on arrive au bord.
+  private var grabberVisible: Bool { grabberHovered || sidebarHovered }
 
   /// Ce que le layout affiche vraiment : le drag en cours s'il y en a un, sinon l'état validé.
   private var effectiveWidth: Double {
@@ -78,6 +86,8 @@ struct ContentView: View {
           .fill(colorScheme == .dark ? AnyShapeStyle(.bar) : AnyShapeStyle(sidebarBackground))
           .ignoresSafeArea()
       }
+      // Survoler la sidebar suffit à faire apparaître son mors, sans aller le chercher au bord.
+      .onHover { sidebarHovered = $0 }
 
       if effectiveWidth > 0 {
         Divider().ignoresSafeArea()
@@ -183,21 +193,24 @@ struct ContentView: View {
   private static let minSidebarWidth = 200.0
   private static let maxSidebarWidth = 420.0
   private static let collapseSidebarWidth = 150.0
+  /// Largeur de la bande qui révèle le mors au survol, mesurée depuis le bord de la sidebar.
+  private static let grabberHoverWidth = 40.0
 
-  /// Le mors : une pilule verticale posée sur le bord de la sidebar, à mi-hauteur.
+  /// Le mors : une pilule verticale posée sur le bord de la sidebar, à mi-hauteur. Invisible au
+  /// repos — il n'apparaît qu'au survol de la bande qui longe ce bord, sidebar ouverte comme
+  /// repliée, plutôt que de traîner en permanence sur une fenêtre au repos.
   private var grabber: some View {
     Capsule()
-      .fill(Color.secondary.opacity(grabberHovered ? 0.55 : 0.3))
+      .fill(Color.secondary.opacity(0.55))
       .frame(width: 8, height: 40)
-      // Cible de clic élargie autour d'un visuel volontairement fin.
-      .padding(.horizontal, 7)
+      .opacity(grabberVisible ? 1 : 0)
+      .animation(.easeOut(duration: 0.15), value: grabberVisible)
+      // Cible de clic élargie autour d'un visuel volontairement fin. Asymétrique : la bande démarre
+      // 1 pt DANS la sidebar (cf. l'offset, plus bas), ce pt est repris ici pour que la pilule reste
+      // posée au même endroit qu'avant, juste à droite du séparateur.
+      .padding(.leading, 11)
+      .padding(.trailing, 7)
       .contentShape(Rectangle())
-      .onHover {
-        grabberHovered = $0
-        // `.set()` plutôt que push/pop : la pile de curseurs se déséquilibre dès qu'un survol
-        // se termine pendant un drag, et le curseur reste bloqué en flèche.
-        $0 ? grabberCursor.set() : NSCursor.arrow.set()
-      }
       // Un seul geste pour les deux actions : `DragGesture(minimumDistance: 0)` avale de toute
       // façon le clic, donc c'est lui qui l'interprète — déplacement nul au relâchement = clic.
       // `.global` OBLIGATOIRE : en coordonnées locales, la translation serait mesurée contre une
@@ -233,9 +246,25 @@ struct ContentView: View {
           }
       )
       .help(sidebarVisible ? "Masquer la barre latérale (⌘B)" : "Afficher la barre latérale (⌘B)")
-      // Posée juste À DROITE du séparateur (donc sur la page, hors sidebar) plutôt qu'à cheval
-      // dessus ; sidebar repliée, elle se colle au bord gauche de la fenêtre.
-      .offset(x: effectiveWidth + 3)
+      // Bande de survol : 40 pt de large depuis le bord de la sidebar, sur TOUTE la hauteur — c'est
+      // elle qui révèle le mors, où qu'on approche du bord. Elle tient dans la marge de la page
+      // (`gutter` = 75) : aucune ligne ne commence là, elle ne peut voler aucun clic. Le geste, lui,
+      // reste sur le mors seul — une bande cliquable sur toute la hauteur replierait la sidebar au
+      // moindre clic tombé loin de la poignée.
+      .frame(width: Self.grabberHoverWidth, alignment: .leading)
+      .frame(maxHeight: .infinity)
+      .contentShape(Rectangle())
+      .onHover {
+        grabberHovered = $0
+        // `.set()` plutôt que push/pop : la pile de curseurs se déséquilibre dès qu'un survol se
+        // termine pendant un drag, et le curseur reste bloqué en flèche.
+        $0 ? grabberCursor.set() : NSCursor.arrow.set()
+      }
+      // La bande démarre 1 pt DANS la sidebar, pas après : au pixel près, deux zones seulement
+      // adjacentes laissent un liseré que ni l'une ni l'autre ne revendique, et la pilule y
+      // clignotait. Ce chevauchement les soude — les deux survols sont vrais en même temps, et
+      // `grabberVisible` est un OU. Sidebar repliée, la bande se colle au bord gauche de la fenêtre.
+      .offset(x: effectiveWidth - 1)
   }
 
   /// Recopie la complétion des rappels liés sur leurs tâches (Rappels → app). L'inverse (app →

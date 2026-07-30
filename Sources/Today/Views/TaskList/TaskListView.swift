@@ -529,9 +529,6 @@ private struct ListPageView: View {
 
   // MARK: Archivage des tâches cochées
 
-  /// Délai du mode « automatiquement après 1,5 s » (cf. `CompletedTaskRetention.timer`).
-  private static let archiveDelay: TimeInterval = 1.5
-
   private var retention: CompletedTaskRetention {
     CompletedTaskRetention(rawValue: retentionRaw) ?? .untilViewChange
   }
@@ -543,7 +540,7 @@ private struct ListPageView: View {
     switch retention {
     case .never: return false
     case .untilViewChange: return completedAt < pageOpenedAt
-    case .timer: return tick.timeIntervalSince(completedAt) >= Self.archiveDelay
+    case .timer: return tick.timeIntervalSince(completedAt) >= CompletedTaskRetention.timerDelay
     }
   }
 
@@ -559,7 +556,7 @@ private struct ListPageView: View {
   private func scheduleArchiveRefresh() {
     guard retention == .timer else { return }
     Task {
-      try? await Task.sleep(for: .seconds(Self.archiveDelay))
+      try? await Task.sleep(for: .seconds(CompletedTaskRetention.timerDelay))
       withAnimation(taskInsert) { tick = Date() }
     }
   }
@@ -735,6 +732,7 @@ private struct ListPageView: View {
         moveTargets: allLists.filter { $0.persistentModelID != list.persistentModelID },
         onEndEditing: { endEditingHeader(task) },
         onMove: { moveHeader(task, to: $0) },
+        onCopy: { copyHeaderToClipboard(task) },
         onDelete: { delete(task) }
       )
     } else {
@@ -1582,6 +1580,18 @@ private struct ListPageView: View {
     modelContext.insertAndSave(clone)
   }
 
+  /// Copie l'en-tête et ses tâches rattachées en texte brut dans le presse-papiers (titre de
+  /// l'en-tête, puis chaque tâche en puce) — collable dans une note, un mail, etc. Même bloc que
+  /// `dragGroup` (en-tête d'abord, puis ses tâches dans l'ordre).
+  private func copyHeaderToClipboard(_ header: TaskItem) {
+    let block = dragGroup(for: header)
+    guard let first = block.first else { return }
+    let lines = [first.title] + block.dropFirst().map { "- \($0.title)" }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(lines.joined(separator: "\n"), forType: .string)
+  }
+
   private func insertHeader() {
     let header = TaskItem(title: "", isHeader: true, list: list)
     header.headerColor = randomUnusedHeaderColor()
@@ -1892,7 +1902,10 @@ private struct ProjectPageView: View {
           selection = .list(list)
         } label: {
           HStack(spacing: 10) {
-            ProgressRing(progress: list.progress, size: 16, showsFill: true)
+            // Pas de `showsFill` ici : cette variante garde un contour bleu PLEIN en permanence,
+            // qu'un petit anneau de 16pt rend comme une pastille bleue — une liste sans rien de
+            // coché s'affichait donc comme terminée. Le rendu sidebar (trait gris + arc) dit vrai.
+            ProgressRing(progress: list.progress, size: 16)
             Text(list.title.isEmpty ? "Sans titre" : list.title).font(.headline)
             Spacer(minLength: 0)
             Text("\(list.countableTasks.filter { !$0.isCompleted }.count)")
@@ -2739,10 +2752,14 @@ private struct HeaderRow: View {
   let moveTargets: [TodoList]
   var onEndEditing: () -> Void
   var onMove: (TodoList) -> Void
+  var onCopy: () -> Void
   var onDelete: () -> Void
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
+  /// Bascule brièvement l'icône de copie en checkmark après un clic, pour confirmer visuellement
+  /// que le texte est bien dans le presse-papiers (sinon rien à l'écran ne le montre).
+  @State private var copied = false
 
   /// Cascade du drag : décalage vertical d'un calque et retrait horizontal (plus étroit, centré) par
   /// niveau. Couleurs OPAQUES, du même bleu, de plus en plus claires — assez SATURÉES pour se lire
@@ -2851,31 +2868,28 @@ private struct HeaderRow: View {
         .allowsHitTesting(isEditing)
         .onSubmit(onEndEditing)
       Spacer(minLength: 0)
+      // Copie texte du bloc entier (en-tête + tâches rattachées) dans le presse-papiers, sans
+      // passer par le menu ; mêmes conditions d'apparition que le •••, juste à sa gauche. Checkmark
+      // temporaire au clic : la copie est silencieuse côté système, sans ce retour rien ne confirme
+      // à l'utilisateur qu'elle a eu lieu.
+      Button {
+        onCopy()
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+      } label: {
+        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.secondary)
+          // Largeur figée : "doc.on.doc" et "checkmark" n'ont pas la même largeur intrinsèque, sans
+          // ce cadre la pilule respire d'un pixel ou deux au moment du bascule.
+          .frame(width: 16, height: 16)
+      }
+      .buttonStyle(.plain)
+      .opacity((hovering || active || copied) && !isDragging ? 1 : 0)
+      .animation(.easeOut(duration: 0.15), value: copied)
+      .help("Copier l'en-tête et ses tâches")
       Menu {
-        Menu("Couleur") {
-          Button("Par défaut") { task.headerColor = nil }
-          ForEach(HeaderColor.allCases) { option in
-            Button {
-              task.headerColor = option
-            } label: {
-              Label(option.label, systemImage: "circle.fill")
-                .foregroundStyle(option.color)
-            }
-          }
-        }
-        Menu {
-          if moveTargets.isEmpty {
-            Text("Aucune autre liste")
-          } else {
-            ForEach(moveTargets) { target in
-              Button(target.title) { onMove(target) }
-            }
-          }
-        } label: {
-          Text("Déplacer vers…")
-        }
-        Divider()
-        Button("Supprimer", role: .destructive, action: onDelete)
+        menuItems
       } label: {
         Image(systemName: "ellipsis")
           .font(.system(size: 14, weight: .semibold))
@@ -2905,6 +2919,37 @@ private struct HeaderRow: View {
         )
         .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
     }
+    // Clic droit = le même jeu d'actions que le •••, qui n'apparaît qu'au survol : sans ça,
+    // supprimer une en-tête demandait de viser un bouton invisible au repos.
+    .contextMenu { menuItems }
+  }
+
+  /// Les actions d'une en-tête, écrites une fois pour ses deux points d'entrée (••• et clic droit).
+  @ViewBuilder private var menuItems: some View {
+    Menu("Couleur") {
+      Button("Par défaut") { task.headerColor = nil }
+      ForEach(HeaderColor.allCases) { option in
+        Button {
+          task.headerColor = option
+        } label: {
+          Label(option.label, systemImage: "circle.fill")
+            .foregroundStyle(option.color)
+        }
+      }
+    }
+    Menu {
+      if moveTargets.isEmpty {
+        Text("Aucune autre liste")
+      } else {
+        ForEach(moveTargets) { target in
+          Button(target.title) { onMove(target) }
+        }
+      }
+    } label: {
+      Text("Déplacer vers…")
+    }
+    Divider()
+    Button("Supprimer", role: .destructive, action: onDelete)
   }
 }
 

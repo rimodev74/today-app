@@ -14,6 +14,10 @@ struct TodayApp: App {
     NSApplication.shared.setActivationPolicy(.regular)
     NSApplication.shared.activate(ignoringOtherApps: true)
     _ = SparkleUpdater.shared
+    // Saisie rapide : le raccourci global vit indépendamment des fenêtres (il doit répondre app en
+    // arrière-plan), il est donc posé ici et pas dans une vue.
+    GlobalHotKey.shared.action = { QuickEntryWindow.shared.toggle(container: Self.container) }
+    GlobalHotKey.shared.reload()
   }
 
   /// La toute première fois qu'un champ de texte devient premier répondeur dans le process,
@@ -57,7 +61,9 @@ struct TodayApp: App {
   /// Le plan B ne SUPPRIME plus rien : un store illisible est mis de côté sous un nom horodaté
   /// (cf. `StoreQuarantine`) et l'app redémarre sur une base neuve. L'utilisateur voit une app
   /// vide — ce qui se remarque — au lieu de perdre son travail sans trace récupérable.
-  private static let container: ModelContainer = {
+  /// Non privé : le panneau de saisie rapide vit dans sa propre fenêtre AppKit, hors de l'arbre de
+  /// vues, et doit s'adosser au MÊME container que la fenêtre principale.
+  static let container: ModelContainer = {
     let schema = Schema(versionedSchema: SchemaV1.self)
     let configuration = ModelConfiguration(schema: schema)
     func open() throws -> ModelContainer {

@@ -24,10 +24,11 @@ final class Project {
 
   var allTasks: [TaskItem] { lists.flatMap(\.tasks) }
 
-  /// Progression du projet = celle de toutes ses tâches confondues, en-têtes exclues.
+  /// Progression du projet = celle de toutes ses tâches confondues, en-têtes exclues. Même règle
+  /// d'archivage que `TodoList.progress` : un projet entièrement archivé revient à l'anneau vide.
   var progress: Double {
     let countable = allTasks.filter { !$0.isHeader }
-    guard !countable.isEmpty else { return 0 }
+    guard countable.contains(where: { !$0.isArchived }) else { return 0 }
     return Double(countable.filter(\.isCompleted).count) / Double(countable.count)
   }
 }
