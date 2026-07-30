@@ -1,8 +1,14 @@
 #!/bin/bash
-# Empaquette un exécutable SwiftPM en vrai bundle .app (Info.plist + signature ad-hoc),
-# pour que macOS applique la chrome de fenêtre native (coins arrondis Tahoe, etc.).
+# Empaquette un exécutable SwiftPM en vrai bundle .app (Info.plist + signature), pour que macOS
+# applique la chrome de fenêtre native (coins arrondis Tahoe, etc.).
 # Usage : ./Scripts/make-app.sh [debug|release] [NomDuProduit]
 set -euo pipefail
+
+# Identité de signature STABLE (certificat local auto-signé, cf. Trousseau d'accès) plutôt
+# qu'ad-hoc (`--sign -`) : une signature ad-hoc change à chaque build, donc macOS considère
+# l'app comme "nouvelle" et redemande l'accès Rappels/Calendrier à CHAQUE lancement, même déjà
+# autorisé. Signer toujours avec la même identité garde l'autorisation d'un build à l'autre.
+SIGN_IDENTITY="Today Local Dev"
 
 cd "$(dirname "$0")/.."
 
@@ -13,8 +19,8 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.6"
-BUILD="5"
+SHORT_VERSION="0.7"
+BUILD="6"
 
 echo "→ Build ${TARGET} (${CONFIG})…"
 swift build -c "${CONFIG}" --product "${TARGET}"
@@ -54,7 +60,7 @@ PLIST
 echo "→ Fix rpath…"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "${APP}/Contents/MacOS/${TARGET}"
 
-echo "→ Signature ad-hoc…"
-codesign --force --sign - "${APP}"
+echo "→ Signature (${SIGN_IDENTITY})…"
+codesign --force --sign "${SIGN_IDENTITY}" "${APP}"
 
 echo "✓ ${APP} prêt. Lance-le avec :  open ${APP}"

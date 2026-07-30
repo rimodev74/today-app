@@ -158,7 +158,7 @@ MD
 fi
 
 echo "→ Publication du DMG dans ${DIST_REPO} (avant l'appcast, sinon 404)…"
-# L'app est signée ad-hoc, pas notarisée : Gatekeeper bloque la PREMIÈRE
+# L'app est signée avec un certificat local (pas notarisée) : Gatekeeper bloque la PREMIÈRE
 # installation. Les mises à jour suivantes passent, Sparkle levant lui-même la
 # quarantaine. Ces instructions disparaîtront le jour d'un certificat Developer ID.
 gh release create "${TAG}" "${DMG}" -R "${DIST_REPO}" \

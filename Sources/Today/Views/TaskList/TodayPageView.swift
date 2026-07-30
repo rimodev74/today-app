@@ -33,9 +33,6 @@ struct TodayPageView: View {
   /// Brouillon de la tâche libre (sans liste ni projet) créable depuis cette page.
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
-  // Rappels/événements Apple du jour — lecture seule, cf. `refreshAppleItems`.
-  @State private var events: [EKEvent] = []
-  @State private var reminders: [EKReminder] = []
 
   private var tasks: [TaskItem] {
     SmartList.today.sort(SmartList.today.filter(allTasks))
@@ -46,6 +43,12 @@ struct TodayPageView: View {
   private var linkedReminderIdentifiers: Set<String> {
     Set(allTasks.compactMap(\.reminderIdentifier))
   }
+
+  /// Rappels/événements Apple du jour — mis en cache dans `remindersService` (cf. son
+  /// commentaire), pas ici : une `@State` locale repartirait de zéro à chaque réouverture de
+  /// l'onglet, ce qui rechargeait visiblement la page à chaque fois.
+  private var events: [EKEvent] { remindersService.todayEvents }
+  private var reminders: [EKReminder] { remindersService.todayReminders }
 
   private var unlinkedReminders: [EKReminder] {
     reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
@@ -96,10 +99,7 @@ struct TodayPageView: View {
   /// Silencieux si l'accès Rappels/Calendrier est refusé : les sections restent vides, le reste
   /// de la page fonctionne normalement (pas d'écran d'erreur pour une section informative).
   private func refreshAppleItems() async {
-    reminders = await remindersService.reminders(dueOn: now)
-    if await remindersService.requestEventAccess() {
-      events = remindersService.events(on: now)
-    }
+    await remindersService.refreshToday(now: now)
   }
 
   private var header: some View {
@@ -164,7 +164,7 @@ struct TodayPageView: View {
   /// tout de suite plutôt que d'attendre le prochain rafraîchissement.
   private func completeReminder(_ reminder: EKReminder) {
     let id = reminder.calendarItemIdentifier
-    withAnimation(taskInsert) { reminders.removeAll { $0.calendarItemIdentifier == id } }
+    withAnimation(taskInsert) { remindersService.removeTodayReminder(id) }
     Task { try? await remindersService.setCompleted(true, identifier: id) }
   }
 

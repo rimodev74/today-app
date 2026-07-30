@@ -173,6 +173,40 @@ final class RemindersService {
     return await reminders(dueFrom: start, to: end)
   }
 
+  // MARK: Cache Aujourd'hui / À venir — survit aux démontages de page. `TodayPageView` et
+  // `UpcomingPageView` sont recréées à chaque fois que l'onglet redevient la sélection (branches
+  // d'un `switch`, cf. `TaskListView`) : sans ce cache, leur `@State` repartait de zéro et la page
+  // s'affichait vide le temps du refetch EventKit, à CHAQUE ouverture. Ce service, lui, vit au
+  // niveau de l'app (cf. `ThingsCloneApp`) et n'est jamais démonté.
+  private(set) var todayEvents: [EKEvent] = []
+  private(set) var todayReminders: [EKReminder] = []
+  private(set) var upcomingEvents: [EKEvent] = []
+  private(set) var upcomingReminders: [EKReminder] = []
+
+  func refreshToday(now: Date) async {
+    todayReminders = await reminders(dueOn: now)
+    if await requestEventAccess() {
+      todayEvents = events(on: now)
+    }
+  }
+
+  func refreshUpcoming(from start: Date, to end: Date) async {
+    upcomingReminders = await reminders(dueFrom: start, to: end)
+    if await requestEventAccess() {
+      upcomingEvents = events(from: start, to: end)
+    }
+  }
+
+  /// Retrait optimiste immédiat (cf. `TodayPageView`/`UpcomingPageView.completeReminder`) : on ne
+  /// montre jamais un rappel déjà coché, pas d'attendre le prochain refresh pour le faire sortir.
+  func removeTodayReminder(_ identifier: String) {
+    todayReminders.removeAll { $0.calendarItemIdentifier == identifier }
+  }
+
+  func removeUpcomingReminder(_ identifier: String) {
+    upcomingReminders.removeAll { $0.calendarItemIdentifier == identifier }
+  }
+
   /// Pousse la complétion d'une tâche vers son rappel (app → Rappels), en miroir du retour
   /// `completionStates`. No-op si la tâche n'est pas liée ou si l'accès n'est pas accordé.
   /// Silencieux : cocher une tâche ne doit jamais lever d'alerte. Sans ce push, le retour

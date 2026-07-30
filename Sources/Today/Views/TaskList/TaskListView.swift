@@ -192,10 +192,10 @@ private struct ListPageView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
           pageHeader
-            // Calé sur la colonne des cases à cocher, pas sur le bord de section : les lignes
-            // portent `rowInset` à l'intérieur de leur fond de sélection, l'en-tête doit le
-            // reprendre sinon icône et titre pendent à gauche de toutes les tâches.
-            .padding(.leading, rowInset)
+            // Calé sur le bord de section (`gutter`), comme les bandeaux d'en-tête et les fonds de
+            // sélection des lignes — et comme les en-têtes d'« Aujourd'hui » et « Archives ». Le
+            // `rowInset` des lignes est un retrait INTÉRIEUR à leur fond : le reprendre ici
+            // décalait tout l'en-tête de 10 pt à droite de chaque bord visible en dessous.
             .padding(.bottom, 14)
 
           // Une en-tête ouvre un BLOC : elle et les tâches qui la suivent, jusqu'à la prochaine
@@ -1256,6 +1256,11 @@ private struct ListPageView: View {
         .font(.title.bold())
       Spacer(minLength: 0)
     }
+    // Seul en-tête de ListPageView à reprendre `rowInset` : son icône fait la largeur d'une case à
+    // cocher, elle se lit donc comme la tête de cette colonne (comme « Aujourd'hui » et « Archives »,
+    // dont les lignes n'ont pas de retrait intérieur). L'en-tête d'une liste nommée, lui, porte un
+    // anneau plus large et l'encadré de notes : c'est le bord de section qui lui sert d'aplomb.
+    .padding(.leading, rowInset)
   }
 
   private var header: some View {
@@ -1279,10 +1284,8 @@ private struct ListPageView: View {
       }
       notesBox
     }
-    // Aucun retrait ici : c'est `pageHeader` qui applique `rowInset`, pour l'en-tête d'Inbox comme
-    // pour celui-ci. L'anneau, le titre et le notesBox se calent donc sur la colonne des cases à
-    // cocher, pas sur le bord du fond de sélection — un titre de page qui pend à gauche des tâches
-    // qu'il coiffe se lit comme un défaut d'alignement, jamais comme une marge voulue.
+    // Aucun retrait ici : l'anneau, le titre et le notesBox partent du bord de section, à l'aplomb
+    // des bandeaux d'en-tête et des fonds de ligne (cf. `pageHeader` dans le LazyVStack).
     // contentShape pour que le survol couvre toute la bande, pas seulement le texte.
     .contentShape(Rectangle())
     .onHover { headerHovering = $0 }

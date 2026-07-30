@@ -14,8 +14,6 @@ struct UpcomingPageView: View {
 
   @Environment(RemindersService.self) private var remindersService
   @Query private var allTasks: [TaskItem]
-  @State private var events: [EKEvent] = []
-  @State private var reminders: [EKReminder] = []
 
   /// Horizon de chargement EventKit — au-delà, on arrête d'interroger Calendrier/Rappels.
   /// ponytail: plafond simple ; à agrandir/paginer si quelqu'un plie réellement 6 mois à l'avance.
@@ -26,6 +24,12 @@ struct UpcomingPageView: View {
   private var linkedReminderIdentifiers: Set<String> {
     Set(allTasks.compactMap(\.reminderIdentifier))
   }
+
+  /// Rappels/événements Apple — mis en cache dans `remindersService` (même raison que
+  /// `TodayPageView`) : cette page est recréée à chaque réouverture de l'onglet, une `@State`
+  /// locale rechargeait donc visiblement tout à chaque fois.
+  private var events: [EKEvent] { remindersService.upcomingEvents }
+  private var reminders: [EKReminder] { remindersService.upcomingReminders }
 
   private var unlinkedReminders: [EKReminder] {
     reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
@@ -84,10 +88,7 @@ struct UpcomingPageView: View {
   private func refreshAppleItems() async {
     let start = tomorrow
     let end = Calendar.current.date(byAdding: .day, value: Self.horizonDays, to: start) ?? start
-    reminders = await remindersService.reminders(dueFrom: start, to: end)
-    if await remindersService.requestEventAccess() {
-      events = remindersService.events(from: start, to: end)
-    }
+    await remindersService.refreshUpcoming(from: start, to: end)
   }
 
   private func toggle(_ task: TaskItem) {
@@ -102,7 +103,7 @@ struct UpcomingPageView: View {
   /// rappel Apple, retrait optimiste immédiat — trop petit pour valoir une extraction partagée.
   private func completeReminder(_ reminder: EKReminder) {
     let id = reminder.calendarItemIdentifier
-    withAnimation(taskInsert) { reminders.removeAll { $0.calendarItemIdentifier == id } }
+    withAnimation(taskInsert) { remindersService.removeUpcomingReminder(id) }
     Task { try? await remindersService.setCompleted(true, identifier: id) }
   }
 
