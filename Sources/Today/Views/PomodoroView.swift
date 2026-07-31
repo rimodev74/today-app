@@ -8,11 +8,11 @@ struct PomodoroView: View {
     @Bindable var timer = timer
     VStack(spacing: 24) {
       Text(timer.phase.label)
-        .font(.title2)
+        .font(.app(.title2))
         .foregroundStyle(.secondary)
 
       Text(timer.formattedRemaining)
-        .font(.system(size: 64, weight: .bold, design: .rounded))
+        .font(.app(64, weight: .bold, design: .rounded))
         .monospacedDigit()
 
       HStack(spacing: 16) {
@@ -53,7 +53,7 @@ struct PomodoroMenuBarView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(timer.phase.label)
-        .font(.headline)
+        .font(.app(.headline))
       Button(timer.isRunning ? "Pause" : "Start") {
         timer.isRunning ? timer.pause() : timer.start()
       }

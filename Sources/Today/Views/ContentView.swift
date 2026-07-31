@@ -328,7 +328,7 @@ private struct SidebarMenu: View {
       HStack(spacing: 7) {
         Text(currentTitle)
         Image(systemName: "chevron.up.chevron.down")
-          .font(.system(size: 10, weight: .semibold))
+          .font(.app(10, weight: .semibold))
       }
       .foregroundStyle(.secondary)
       .padding(.vertical, 3)
@@ -417,7 +417,7 @@ private struct SidebarMenu: View {
 
   private func projectRow(_ project: Project) -> some View {
     row(.project(project), title: title(project.title), bold: true) {
-      Image(systemName: "hexagon.fill").font(.system(size: 15)).foregroundStyle(.green)
+      Image(systemName: "hexagon.fill").font(.app(15)).foregroundStyle(.green)
     }
   }
 
@@ -509,7 +509,7 @@ private struct QuickFindPanel: View {
       Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
       TextField("Recherche rapide", text: $query)
         .textFieldStyle(.plain)
-        .font(.system(size: 15))
+        .font(.app(15))
         .focused($focused)
     }
     .padding(.vertical, 8)
@@ -563,7 +563,7 @@ private struct QuickFindPanel: View {
 
       Divider()
       Text("Changez rapidement de liste,\ntrouvez des tâches, recherchez des mots-clés…")
-        .font(.subheadline)
+        .font(.app(.subheadline))
         .foregroundStyle(.tertiary)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
@@ -647,7 +647,7 @@ private struct QuickFindPanel: View {
         isCurrent: current == selection,
         action: { onSelect(selection) }
       ) {
-        Image(systemName: "hexagon.fill").font(.system(size: 15)).foregroundStyle(.green)
+        Image(systemName: "hexagon.fill").font(.app(15)).foregroundStyle(.green)
       }
     default:
       EmptyView()
@@ -656,7 +656,7 @@ private struct QuickFindPanel: View {
 
   private func sectionHeader(_ text: String) -> some View {
     Text(text)
-      .font(.headline)
+      .font(.app(.headline))
       .foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 14)
@@ -691,7 +691,7 @@ private struct QuickFindRow<Icon: View>: View {
         if isCurrent {
           Image(systemName: "checkmark")
             .foregroundStyle(Color.accentColor)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.app(13, weight: .semibold))
         }
       }
       .padding(.vertical, 6)

@@ -9,6 +9,9 @@ final class Project {
   var notes: Data
   var sortIndex: Int = 0
   var createdAt: Date = Date()
+  /// Repli du dossier dans la sidebar. Dans le modèle et pas en `@State` : l'état doit survivre au
+  /// relancement, et c'est le seul stockage déjà persistant indexé par projet.
+  var isCollapsed: Bool = false
   @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList]
 
   init(title: String, notes: Data = Data()) {

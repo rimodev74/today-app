@@ -24,7 +24,7 @@ struct PageHeaderIcon: View {
 
   var body: some View {
     Image(systemName: systemImage)
-      .font(.title2)
+      .font(.app(.title2))
       .foregroundStyle(tint)
       .frame(width: 16, alignment: .leading)
   }
@@ -621,10 +621,10 @@ private struct ListPageView: View {
       let plural = count > 1 ? "s" : ""
       HStack(spacing: 6) {
         Image(systemName: "moon.zzz")
-          .font(.system(size: 11))
+          .font(.app(11))
         Text("\(count) tâche\(plural) en sommeil")
       }
-      .font(.callout)
+      .font(.app(.callout))
       .foregroundStyle(.tertiary)
       .padding(.top, 18)
     }
@@ -645,10 +645,10 @@ private struct ListPageView: View {
         } label: {
           HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-              .font(.system(size: 10, weight: .semibold))
+              .font(.app(10, weight: .semibold))
               .rotationEffect(.degrees(archivesExpanded ? 90 : 0))
             Text("\(archived.count) tâche\(plural) archivée\(plural)")
-              .font(.subheadline.weight(.semibold))
+              .font(.app(.subheadline).weight(.semibold))
             Spacer(minLength: 0)
           }
           .foregroundStyle(.secondary)
@@ -1277,7 +1277,7 @@ private struct ListPageView: View {
         .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
         .overlay {
           Image(systemName: "plus")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.app(9, weight: .semibold))
             .foregroundStyle(.tertiary)
         }
         .frame(width: 16, height: 16)
@@ -1404,7 +1404,7 @@ private struct ListPageView: View {
     HStack(spacing: 10) {
       PageHeaderIcon(systemImage: SmartList.all.systemImage, tint: SmartList.all.color)
       Text(SmartList.all.label)
-        .font(.title.bold())
+        .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
     // Seul en-tête de ListPageView à reprendre `rowInset` : son icône fait la largeur d'une case à
@@ -1420,7 +1420,7 @@ private struct ListPageView: View {
         ProgressRing(progress: list.progress, size: 26, lineWidth: 3, showsFill: true)
         TextField("Nom de la liste", text: $list.title)
           .textFieldStyle(.plain)
-          .font(.title.bold())
+          .font(.app(.title).bold())
           .fixedSize(horizontal: false, vertical: true)
           .focused($focusedDraft, equals: Self.titleFocusKey)
           // Même enchaînement que `pendingTaskFocus` (venant de la sidebar) : titre validé sur une
@@ -1460,7 +1460,7 @@ private struct ListPageView: View {
       Button("Supprimer", role: .destructive) { deleteList() }
     } label: {
       Image(systemName: "ellipsis")
-        .font(.system(size: 16, weight: .semibold))
+        .font(.app(16, weight: .semibold))
         .foregroundStyle(.secondary)
     }
     .menuStyle(.borderlessButton)
@@ -1498,7 +1498,7 @@ private struct ListPageView: View {
   private var notesBox: some View {
     NotesBox(
       notes: $list.notes,
-      font: .systemFont(ofSize: NSFont.systemFontSize),
+      font: .app(),
       textColor: .labelColor,
       focused: $notesFocused
     ) {
@@ -1685,7 +1685,7 @@ struct BottomToolbar: View {
           description: "Le raccourci clavier crée la tâche et ouvre directement son édition.",
           action: onNewTask
         ) {
-          Image(systemName: "plus").font(.system(size: 16)).foregroundStyle(.secondary)
+          Image(systemName: "plus").font(.app(16)).foregroundStyle(.secondary)
         }
         groupDivider
       }
@@ -1698,7 +1698,7 @@ struct BottomToolbar: View {
         groupDivider
       }
       toolbarButton("Recherche", action: onSearch) {
-        Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
+        Image(systemName: "magnifyingglass").font(.app(16)).foregroundStyle(.secondary)
       }
     }
     // Capsule flottante centrée : elle garde sa largeur intrinsèque, le frame full-width la centre.
@@ -1750,7 +1750,7 @@ struct BottomToolbar: View {
   /// seul entre light et dark mode, pas de couleur figée à adapter à la main.
   private var headerGlyph: some View {
     Text("T")
-      .font(.system(size: 12, weight: .bold, design: .rounded))
+      .font(.app(12, weight: .bold, design: .rounded))
       .foregroundStyle(.primary)
       .frame(width: 19, height: 19)
       .overlay {
@@ -1876,15 +1876,15 @@ private struct RichTooltip: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Text(title).font(.system(size: 13, weight: .semibold))
+        Text(title).font(.app(13, weight: .semibold))
         Spacer(minLength: 8)
         Text(shortcut)
-          .font(.system(size: 12))
+          .font(.app(12))
           .foregroundStyle(.secondary)
       }
       if !description.isEmpty {
         Text(description)
-          .font(.system(size: 12))
+          .font(.app(12))
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -1926,13 +1926,13 @@ private struct ProjectPageView: View {
           ProgressRing(progress: project.progress, size: 26, lineWidth: 3)
           TextField("Nom du projet", text: $project.title)
             .textFieldStyle(.plain)
-            .font(.title.bold())
+            .font(.app(.title).bold())
         }
         // Même encadré que la page de liste (cf. `NotesBox`) : les deux avaient deux visuels
         // distincts (ici un simple ZStack sans fond), plus de raison de diverger.
         NotesBox(
           notes: $project.notes,
-          font: .systemFont(ofSize: NSFont.systemFontSize),
+          font: .app(),
           textColor: .labelColor,
           focused: $notesFocused
         ) {
@@ -1953,7 +1953,7 @@ private struct ProjectPageView: View {
             // qu'un petit anneau de 16pt rend comme une pastille bleue — une liste sans rien de
             // coché s'affichait donc comme terminée. Le rendu sidebar (trait gris + arc) dit vrai.
             ProgressRing(progress: list.progress, size: 16)
-            Text(list.title.isEmpty ? "Sans titre" : list.title).font(.headline)
+            Text(list.title.isEmpty ? "Sans titre" : list.title).font(.app(.headline))
             Spacer(minLength: 0)
             Text("\(list.countableTasks.filter { !$0.isCompleted }.count)")
               .foregroundStyle(.secondary)
@@ -1975,7 +1975,7 @@ private struct ProjectPageView: View {
 
         if list.tasks.isEmpty {
           Text("Aucune tâche")
-            .font(.callout)
+            .font(.app(.callout))
             .foregroundStyle(.tertiary)
             .padding(.leading, 26)
             .listRowSeparator(.hidden)
@@ -2007,7 +2007,7 @@ private struct ProjectPageView: View {
   private func taskRow(_ task: TaskItem) -> some View {
     if task.isHeader {
       Text(task.title.isEmpty ? "En-tête" : task.title)
-        .font(.subheadline.bold())
+        .font(.app(.subheadline).bold())
         .foregroundStyle(
           task.headerColor.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary)
         )
@@ -2054,7 +2054,7 @@ private struct NotesBox: View {
       // ZStack (padding commun ci-dessous), donc le texte tapé et « Notes » partent du même x.
       if notes.isEmpty {
         Text("Notes")
-          .font(.body)
+          .font(.app(.body))
           .foregroundStyle(.tertiary)
           .allowsHitTesting(false)
       }
@@ -2174,7 +2174,7 @@ struct TaskRow: View {
         // « Aujourd'hui » est le seul endroit qui réclame l'absence de durée.
         if !isEditing, let estimate = Estimate.label(task.estimateMinutes) {
           Text(estimate)
-            .font(.callout)
+            .font(.app(.callout))
             .monospacedDigit()
             .foregroundStyle(.secondary)
             .fixedSize()
@@ -2186,14 +2186,14 @@ struct TaskRow: View {
         // même que dans une page de liste — l'ouverture de la carte d'édition reste continue.
         if !isEditing, let parentLabel {
           Text(parentLabel)
-            .font(.callout)
+            .font(.app(.callout))
             .foregroundStyle(.secondary)
             .fixedSize()
         }
         if !isEditing, let onSchedule {
           Button(action: onSchedule) {
             Image(systemName: "plus.circle")
-              .font(.system(size: 13))
+              .font(.app(13))
               .foregroundStyle(.secondary)
           }
           .buttonStyle(.plain)
@@ -2365,7 +2365,7 @@ struct TaskRow: View {
   private var titleView: some View {
     TextField("Nouvelle tâche", text: $task.title)
       .textFieldStyle(.plain)
-      .font(.body)
+      .font(.app(.body))
       .foregroundStyle(titleColor)
       .focused($titleFocused)
       .allowsHitTesting(isEditing)
@@ -2373,7 +2373,7 @@ struct TaskRow: View {
       .overlay(alignment: .leading) {
         if task.isCompleted && !isEditing {
           // Trait de barré, dimensionné par un Text fantôme de même contenu/police.
-          Text(task.title).font(.body).hidden()
+          Text(task.title).font(.app(.body)).hidden()
             .overlay(Rectangle().frame(height: 1).foregroundStyle(.secondary))
         }
       }
@@ -2422,7 +2422,7 @@ struct TaskRow: View {
       }
       RichTextEditor(
         data: $task.notes,
-        font: .systemFont(ofSize: NSFont.systemFontSize),
+        font: .app(),
         textColor: .labelColor,
         // Entrée valide la tâche (comme le titre) plutôt que d'ouvrir une ligne dans la note :
         // le retour à la ligne reste possible, mais seulement via Maj+Entrée.
@@ -2435,7 +2435,7 @@ struct TaskRow: View {
       )
       .fixedSize(horizontal: false, vertical: true)
     }
-    .font(.body)
+    .font(.app(.body))
     .foregroundStyle(.secondary)
     .padding(.leading, 26)
   }
@@ -2556,8 +2556,8 @@ struct TaskRow: View {
     if let deadline = task.deadline {
       let overdue = daysUntil(deadline) <= 0
       HStack(spacing: 4) {
-        Image(systemName: "flag.fill").font(.system(size: 11))
-        Text(deadlineLabel(deadline)).font(.callout)
+        Image(systemName: "flag.fill").font(.app(11))
+        Text(deadlineLabel(deadline)).font(.app(.callout))
       }
       .foregroundStyle(overdue ? Color.red : Color.secondary)
     }
@@ -2622,13 +2622,13 @@ struct TaskRow: View {
       SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
         .frame(width: 13, height: 13)
       Text("\(done)/\(total) sous-tâches")
-        .font(.body.weight(.semibold))
+        .font(.app(.body).weight(.semibold))
         .foregroundStyle(.primary)
         .monospacedDigit()
       if isEditing {
         Button(action: addNewSubtask) {
           Image(systemName: "plus")
-            .font(.system(size: 13))
+            .font(.app(13))
             .foregroundStyle(.secondary)
             .contentShape(Rectangle())
         }
@@ -2641,7 +2641,7 @@ struct TaskRow: View {
           withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
         } label: {
           Image(systemName: "chevron.right")
-            .font(.system(size: 11, weight: .semibold))
+            .font(.app(11, weight: .semibold))
             .foregroundStyle(.tertiary)
             .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
             .contentShape(Rectangle())
@@ -2699,7 +2699,7 @@ struct TaskRow: View {
       onBeginEditing()
     } label: {
       Image(systemName: "note.text")
-        .font(.system(size: 12, weight: .regular))
+        .font(.app(12, weight: .regular))
         .foregroundStyle(.tertiary)
     }
     .buttonStyle(.plain)
@@ -2713,7 +2713,7 @@ struct TaskRow: View {
   /// retours à la ligne sont repliés en amont (cf. `NotesCodec.plainText`).
   private var notePreview: some View {
     Text(NotesCodec.plainText(task.notes))
-      .font(.body)
+      .font(.app(.body))
       .foregroundStyle(.primary)
       .lineLimit(1)
       .truncationMode(.tail)
@@ -2732,7 +2732,7 @@ struct TaskRow: View {
         taskMenu
       } label: {
         Image(systemName: "ellipsis")
-          .font(.system(size: 14, weight: .semibold))
+          .font(.app(14, weight: .semibold))
           .foregroundStyle(.secondary)
           .frame(width: 22, height: 22)
           .contentShape(Rectangle())
@@ -2857,7 +2857,7 @@ struct TaskRow: View {
   /// valeur existe.
   private func actionIcon(_ name: String, active: Bool = false, tint: Color? = nil) -> some View {
     Image(systemName: name)
-      .font(.system(size: 15))
+      .font(.app(15))
       .foregroundStyle(
         active
           ? (tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(Color.accentColor))
@@ -2973,7 +2973,7 @@ private struct HeaderRow: View {
     .overlay(alignment: .topLeading) {
       if isDragging && attachedTaskCount > 0 {
         Text("\(attachedTaskCount)")
-          .font(.system(size: 11, weight: .bold))
+          .font(.app(11, weight: .bold))
           .foregroundStyle(.white)
           .frame(minWidth: 20, minHeight: 20)
           .background(Circle().fill(Color.red))
@@ -2996,7 +2996,7 @@ private struct HeaderRow: View {
       // geste de la page (sélection, drag) — et l'édition le rend actif + focus (curseur).
       TextField("Nouvel en-tête", text: $task.title)
         .textFieldStyle(.plain)
-        .font(.headline)
+        .font(.app(.headline))
         .foregroundStyle((task.headerColor?.color ?? Color.accentColor).opacity(0.85))
         .focused($titleFocused)
         .allowsHitTesting(isEditing)
@@ -3012,7 +3012,7 @@ private struct HeaderRow: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
       } label: {
         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-          .font(.system(size: 13, weight: .semibold))
+          .font(.app(13, weight: .semibold))
           .foregroundStyle(.secondary)
           // Largeur figée : "doc.on.doc" et "checkmark" n'ont pas la même largeur intrinsèque, sans
           // ce cadre la pilule respire d'un pixel ou deux au moment du bascule.
@@ -3026,7 +3026,7 @@ private struct HeaderRow: View {
         menuItems
       } label: {
         Image(systemName: "ellipsis")
-          .font(.system(size: 14, weight: .semibold))
+          .font(.app(14, weight: .semibold))
           .foregroundStyle(Color.accentColor.opacity(0.85))
       }
       .menuStyle(.borderlessButton)
@@ -3452,7 +3452,7 @@ private struct RowFrameKey: PreferenceKey {
 private func comingSoon(_ title: String, searchPresented: Binding<Bool>) -> some View {
   VStack(alignment: .leading, spacing: 8) {
     // Le titre de l'onglet reste hors du fondu, comme partout ailleurs.
-    Text(title).font(.title.bold())
+    Text(title).font(.app(.title).bold())
     Text("À rebrancher.").foregroundStyle(.tertiary).pageReveal()
   }
   .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -3472,7 +3472,7 @@ struct TokenPill: View {
 
   var body: some View {
     Text(text)
-      .font(.callout)
+      .font(.app(.callout))
       .foregroundStyle(.secondary)
       .padding(.horizontal, 6)
       .padding(.vertical, 2)

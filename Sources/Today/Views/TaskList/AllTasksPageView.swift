@@ -138,7 +138,7 @@ struct AllTasksPageView: View {
     HStack(spacing: 10) {
       PageHeaderIcon(systemImage: SmartList.all.systemImage, tint: SmartList.all.color)
       Text(SmartList.all.label)
-        .font(.title.bold())
+        .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
     // Même retrait que les lignes, qui portent `rowInset` À L'INTÉRIEUR de leur fond (même règle
@@ -170,7 +170,7 @@ struct AllTasksPageView: View {
     } label: {
       HStack(spacing: 6) {
         Image(systemName: section.systemImage)
-          .font(.system(size: 11))
+          .font(.app(11))
           // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
           // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
           .foregroundStyle(section.tint ?? Color.secondary)
@@ -178,7 +178,7 @@ struct AllTasksPageView: View {
         Text("\(section.tasks.count)")
           .foregroundStyle(.tertiary)
       }
-      .font(.subheadline.weight(.semibold))
+      .font(.app(.subheadline).weight(.semibold))
       .foregroundStyle(.secondary)
     }
     .padding(.top, 14)
@@ -304,7 +304,7 @@ struct AllTasksPageView: View {
         .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
         .overlay {
           Image(systemName: "plus")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.app(9, weight: .semibold))
             .foregroundStyle(.tertiary)
         }
         .frame(width: 16, height: 16)

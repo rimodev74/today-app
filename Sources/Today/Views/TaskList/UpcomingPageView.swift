@@ -83,7 +83,7 @@ struct UpcomingPageView: View {
     HStack(spacing: rowInset) {
       PageHeaderIcon(systemImage: SmartList.upcoming.systemImage, tint: SmartList.upcoming.color)
       Text(SmartList.upcoming.label)
-        .font(.title.bold())
+        .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
     .padding(.bottom, 14)
@@ -304,9 +304,9 @@ private struct DayHeader: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(dayNumber)
-          .font(.title.bold())
+          .font(.app(.title).bold())
         Text(weekdayLabel)
-          .font(.subheadline)
+          .font(.app(.subheadline))
           .foregroundStyle(.secondary)
       }
       Divider()
@@ -334,8 +334,8 @@ private struct MonthBandHeader: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 6) {
-        Text(name).font(.title2.bold())
-        Text(rangeLabel).font(.title2.bold()).foregroundStyle(.secondary)
+        Text(name).font(.app(.title2).bold())
+        Text(rangeLabel).font(.app(.title2).bold()).foregroundStyle(.secondary)
       }
       Divider()
     }
@@ -358,7 +358,7 @@ private struct UpcomingTaskRow: View {
         Text(task.title.isEmpty ? "Sans titre" : task.title)
         if let parent {
           Text(parent)
-            .font(.callout)
+            .font(.app(.callout))
             .foregroundStyle(.secondary)
         }
       }
@@ -368,7 +368,7 @@ private struct UpcomingTaskRow: View {
           .foregroundStyle(.secondary)
       }
     }
-    .font(.callout)
+    .font(.app(.callout))
     .padding(.vertical, 4)
     .contentShape(Rectangle())
   }

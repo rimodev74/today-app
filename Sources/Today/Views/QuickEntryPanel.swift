@@ -118,6 +118,15 @@ private final class FloatingPanel: NSPanel {
   /// AppKit route Échap ici via la chaîne de responder, y compris depuis le field editor d'un
   /// `TextField` — plus fiable qu'un `.keyboardShortcut(.cancelAction)` sur un bouton caché.
   override func cancelOperation(_ sender: Any?) { onCancel?() }
+
+  /// Cliquer ailleurs referme, comme Spotlight. Perdre la clé est le bon signal plutôt qu'un moniteur
+  /// de clics globaux : le panneau la garde pendant le tracking d'un `NSMenu` (le chip de
+  /// destination), donc ouvrir le menu ne le ferme pas. `isVisible` écarte le rappel que `orderOut`
+  /// provoque à la fermeture, qui relancerait la sortie sur une fenêtre déjà partie.
+  override func resignKey() {
+    super.resignKey()
+    if isVisible { onCancel?() }
+  }
 }
 
 /// Le contenu du panneau : une capsule d'une ligne — d'où part la tâche, ce qu'elle dit, quand — qui
@@ -249,7 +258,13 @@ private struct QuickEntryView: View {
   ) -> some View {
     if #available(macOS 26, *) {
       content()
-        .glassEffect(.regular.interactive(), in: shape)
+        // Le verre nu laisse trop passer le bureau : le texte perd son contraste. Le `tint` est la
+        // seule densification prévue par l'API — un calque posé par-dessus tuerait les reflets
+        // internes. `windowBackgroundColor` suit déjà le thème, pas de couleur figée ici.
+        .glassEffect(
+          .regular.tint(Color(nsColor: .windowBackgroundColor).opacity(0.45)).interactive(),
+          in: shape
+        )
         .glassEffectID(id, in: morph)
     } else {
       content()
@@ -265,7 +280,7 @@ private struct QuickEntryView: View {
       destinationChip
       TextField("Nouvelle tâche", text: $title)
         .textFieldStyle(.plain)
-        .font(.system(size: 19))
+        .font(.app(19))
         .focused($focus, equals: .title)
         // Seul chemin d'enregistrement au clavier depuis que la barre de validation a disparu :
         // plus de bouton par défaut avec qui se dédoubler.
@@ -278,7 +293,7 @@ private struct QuickEntryView: View {
       if canSave {
         // Sans cette mention, l'empilement n'existe que pour qui le connaît déjà.
         Text("⌘↩")
-          .font(.system(size: 11, weight: .medium))
+          .font(.app(11, weight: .medium))
           .foregroundStyle(.tertiary)
           .transition(.opacity)
       }
@@ -295,7 +310,7 @@ private struct QuickEntryView: View {
     VStack(alignment: .leading, spacing: 9) {
       TextField("Notes", text: $notes, axis: .vertical)
         .textFieldStyle(.plain)
-        .font(.system(size: 14))
+        .font(.app(14))
         .lineLimit(2...6)
         .focused($focus, equals: .notes)
         // Un `TextField` vertical rend Entrée au field editor, qui en fait un saut de ligne ; le
@@ -330,7 +345,7 @@ private struct QuickEntryView: View {
         .allowsHitTesting(false)
       TextField("Sous-tâche", text: $subtasks[index])
         .textFieldStyle(.plain)
-        .font(.system(size: 14))
+        .font(.app(14))
         .focused($focus, equals: .subtask(index))
         .onKeyPress(phases: .down, action: enqueueShortcut)
         // Même geste que dans la page d'une tâche (cf. `enterOnSubtask`) : Entrée enchaîne sur une
@@ -361,22 +376,22 @@ private struct QuickEntryView: View {
     HStack(spacing: 10) {
       TaskCheckbox(isCompleted: false) {}
         .allowsHitTesting(false)
-      Text(pending.title).font(.system(size: 14)).lineLimit(1)
+      Text(pending.title).font(.app(14)).lineLimit(1)
       Spacer(minLength: 10)
       if let when = pending.when {
         Text(when.formatted(.dateTime.day().month(.abbreviated)))
-          .font(.system(size: 11))
+          .font(.app(11))
           .foregroundStyle(Color.accentColor)
       }
       // La destination est rappelée sur chaque ligne : rien n'oblige les tâches d'une même fournée
       // à partir au même endroit, le chip peut changer entre deux ⌘↩.
       if let name = list(for: pending.targetID)?.title {
-        Text(name).font(.system(size: 11)).foregroundStyle(.tertiary)
+        Text(name).font(.app(11)).foregroundStyle(.tertiary)
       }
       Button {
         withAnimation(.bouncy(duration: 0.35)) { queued.removeAll { $0.id == pending.id } }
       } label: {
-        Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+        Image(systemName: "xmark").font(.app(10, weight: .semibold))
       }
       .buttonStyle(.plain)
       .foregroundStyle(.tertiary)
@@ -420,7 +435,7 @@ private struct QuickEntryView: View {
         destinationIcon
         Text(destination?.title ?? SmartList.all.label)
       }
-      .font(.system(size: 13))
+      .font(.app(13))
       .padding(.vertical, 4)
       .padding(.horizontal, 11)
       .contentShape(Capsule())
@@ -479,7 +494,7 @@ private struct QuickEntryView: View {
       HStack(spacing: 5) {
         Image(systemName: "calendar")
         if let when {
-          Text(when.formatted(.dateTime.day().month(.abbreviated))).font(.system(size: 13))
+          Text(when.formatted(.dateTime.day().month(.abbreviated))).font(.app(13))
         }
       }
       .foregroundStyle(when == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
@@ -519,7 +534,7 @@ private struct QuickEntryView: View {
 
   private var sendButton: some View {
     Button(action: save) {
-      Image(systemName: "arrow.up").font(.system(size: 15, weight: .semibold))
+      Image(systemName: "arrow.up").font(.app(15, weight: .semibold))
     }
     .buttonStyle(.plain)
     .foregroundStyle(canSave ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
@@ -642,7 +657,7 @@ private struct QuickEntryView: View {
       NSAttributedString(
         string: text,
         attributes: [
-          .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+          .font: NSFont.app(),
           .foregroundColor: NSColor.labelColor,
         ]))
   }

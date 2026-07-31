@@ -164,7 +164,7 @@ struct TodayPageView: View {
     HStack(spacing: 10) {
       PageHeaderIcon(systemImage: SmartList.today.systemImage, tint: SmartList.today.color)
       Text(SmartList.today.label)
-        .font(.title.bold())
+        .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
     // Même retrait que les lignes : depuis que la page rend des `TaskRow`, celles-ci portent
@@ -194,7 +194,7 @@ struct TodayPageView: View {
             .foregroundStyle(.tertiary)
         }
       }
-      .font(.callout)
+      .font(.app(.callout))
     }
   }
 
@@ -329,7 +329,7 @@ struct TodayPageView: View {
           VStack(alignment: .leading, spacing: 0) {
             ForEach(undatedGroups, id: \.name) { group in
               Text(group.name)
-                .font(.callout.weight(.semibold))
+                .font(.app(.callout).weight(.semibold))
                 .foregroundStyle(.secondary)
                 // Aplomb sur la colonne des cases à cocher, que les `TaskRow` décalent de
                 // `rowInset` : un en-tête de groupe se lit comme la tête de sa colonne.
@@ -346,12 +346,12 @@ struct TodayPageView: View {
         } label: {
           HStack(spacing: 6) {
             Image(systemName: "tray.full")
-              .font(.system(size: 11))
+              .font(.app(11))
             Text("Tâches sans date")
             Text("\(undatedTasks.count)")
               .foregroundStyle(.tertiary)
           }
-          .font(.subheadline.weight(.semibold))
+          .font(.app(.subheadline).weight(.semibold))
           .foregroundStyle(.secondary)
         }
       }
@@ -377,7 +377,7 @@ struct TodayPageView: View {
         .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
         .overlay {
           Image(systemName: "plus")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.app(9, weight: .semibold))
             .foregroundStyle(.tertiary)
         }
         .frame(width: 16, height: 16)
@@ -445,10 +445,10 @@ private struct AppleItemsSection<Content: View>: View {
       Divider().padding(.vertical, 10)
       HStack(spacing: 6) {
         Image(systemName: systemImage)
-          .font(.system(size: 11))
+          .font(.app(11))
         Text(title)
       }
-      .font(.subheadline.weight(.semibold))
+      .font(.app(.subheadline).weight(.semibold))
       .foregroundStyle(.secondary)
       .padding(.bottom, 6)
       content
@@ -473,7 +473,7 @@ struct ReminderRow: View {
         Text((reminder.title?.isEmpty == false ? reminder.title : nil) ?? "Sans titre")
         if let listTitle {
           Text(listTitle)
-            .font(.callout)
+            .font(.app(.callout))
             .foregroundStyle(.secondary)
         }
       }
@@ -513,7 +513,7 @@ struct EventRow: View {
       Text(event.title ?? "Sans titre")
       Spacer(minLength: 0)
     }
-    .font(.callout)
+    .font(.app(.callout))
     .padding(.horizontal, 10)
     .padding(.vertical, 6)
     .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -537,7 +537,7 @@ struct SourceTag: View {
 
   var body: some View {
     Text(label)
-      .font(.callout)
+      .font(.app(.callout))
       .foregroundStyle(.secondary)
       .padding(.horizontal, 6)
       .padding(.vertical, 2)

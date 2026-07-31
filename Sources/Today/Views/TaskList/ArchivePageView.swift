@@ -66,7 +66,7 @@ struct ArchivePageView: View {
     HStack(spacing: 10) {
       PageHeaderIcon(systemImage: SmartList.archive.systemImage, tint: SmartList.archive.color)
       Text(SmartList.archive.label)
-        .font(.title.bold())
+        .font(.app(.title).bold())
       Spacer(minLength: 0)
       if !archived.isEmpty {
         Button("Vider les archives") { confirmingEmpty = true }
@@ -133,7 +133,7 @@ struct ArchiveMonthSection: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(month.label)
-        .font(.headline)
+        .font(.app(.headline))
         .padding(.top, 14)
       Divider()
         .padding(.top, 6)
@@ -163,7 +163,7 @@ struct ArchiveRow: View {
       // Calée au plus juste sur une date pleine : toute largeur en trop se lit comme un trou entre
       // la case et la date, pas comme de la marge.
       Text(task.completedAt?.formatted(.dateTime.day().month(.abbreviated)) ?? "")
-        .font(.callout)
+        .font(.app(.callout))
         .foregroundStyle(Color.accentColor)
         .frame(width: 46, alignment: .trailing)
 
@@ -171,7 +171,7 @@ struct ArchiveRow: View {
         Text(task.title.isEmpty ? "Sans titre" : task.title)
         if let parent {
           Text(parent)
-            .font(.callout)
+            .font(.app(.callout))
             .foregroundStyle(.secondary)
         }
       }

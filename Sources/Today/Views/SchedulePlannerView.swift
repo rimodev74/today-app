@@ -22,7 +22,7 @@ struct SchedulePlannerView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Créer un rappel")
-        .font(.title2).bold()
+        .font(.app(.title2)).bold()
 
       if accessDenied {
         deniedView

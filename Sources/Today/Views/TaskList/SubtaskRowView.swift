@@ -43,7 +43,7 @@ struct SubtaskRowView: View {
       // Opacité (pas insertion/retrait) pour ne pas décaler la rangée au survol.
       Button(action: onDelete) {
         Image(systemName: "trash")
-          .font(.system(size: 11))
+          .font(.app(11))
           .foregroundStyle(.tertiary)
           .contentShape(Rectangle())
       }
@@ -52,7 +52,7 @@ struct SubtaskRowView: View {
     }
     // `.callout` (~1 pt sous `.body` du titre de tâche) : une sous-tâche est visuellement plus petite
     // que sa tâche parente.
-    .font(.callout)
+    .font(.app(.callout))
     .onHover { hovering = $0 }
     .contextMenu {
       Button("Supprimer", role: .destructive, action: onDelete)
@@ -71,7 +71,7 @@ struct SubtaskRowView: View {
       .overlay {
         if subtask.isDone {
           Image(systemName: "checkmark")
-            .font(.system(size: 8, weight: .semibold))
+            .font(.app(8, weight: .semibold))
             .foregroundStyle(Color.accentColor)
         }
       }

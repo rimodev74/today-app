@@ -26,7 +26,6 @@ struct SidebarView: View {
   // champ, et son `.onChange(of: renameFocused)` — seul point de sauvegarde côté champ — ne
   // s'exécute alors jamais. Un clic sur une autre ligne jetait donc la saisie.
   @State private var applyDraft: (() -> Void)?
-  @State private var collapsedProjects: Set<PersistentIdentifier> = []
   @FocusState private var renameFocused: Bool
   // Surveillance des clics pendant un renommage (cf. `clickOutsideMonitor` dans le body).
   @State private var clickMonitor: Any?
@@ -256,7 +255,7 @@ struct SidebarView: View {
       }
       ForEach(sortedProjects) { project in
         projectRow(project, plan: plan)
-        if !collapsedProjects.contains(project.persistentModelID) {
+        if !project.isCollapsed {
           ForEach(project.orderedLists) { list in
             listRow(list, plan: plan)
           }
@@ -295,8 +294,9 @@ struct SidebarView: View {
     } label: {
       HStack(spacing: 6) {
         // Icône « dossier » sur le flanc gauche : à l'œil, un projet (dossier) se distingue
-        // d'une liste (anneau de progression) au premier regard.
-        Image(systemName: "folder")
+        // d'une liste (anneau de progression) au premier regard. Version pleine quand déplié :
+        // pas de glyphe SF Symbols « dossier ouvert » distinct, `folder.fill` sert d'équivalent.
+        Image(systemName: project.isCollapsed ? "folder" : "folder.fill")
           .font(.system(size: 13))
           .foregroundStyle(.secondary)
           .frame(width: 20)
@@ -315,7 +315,7 @@ struct SidebarView: View {
         Image(systemName: "chevron.right")
           .font(.system(size: 9, weight: .bold))
           .foregroundStyle(.secondary)
-          .rotationEffect(.degrees(collapsedProjects.contains(id) ? 0 : 90))
+          .rotationEffect(.degrees(project.isCollapsed ? 0 : 90))
           // Cible de clic élargie : la flèche fait 9pt mais sa zone tactile couvre 24×20 (le flanc
           // droit de la rangée), bien plus facile à viser que le glyphe seul. Hauteur 20 (et padding
           // vertical réduit) pour une rangée de projet plus compacte. `alignment: .trailing` cale le
@@ -325,7 +325,7 @@ struct SidebarView: View {
           .contentShape(Rectangle())
           .highPriorityGesture(
             TapGesture().onEnded {
-              withAnimation(.snappy(duration: 0.2)) { toggleCollapse(id) }
+              withAnimation(.snappy(duration: 0.2)) { toggleCollapse(project) }
             }
           )
       }
@@ -608,12 +608,9 @@ struct SidebarView: View {
 
   // MARK: Actions
 
-  private func toggleCollapse(_ id: PersistentIdentifier) {
-    if collapsedProjects.contains(id) {
-      collapsedProjects.remove(id)
-    } else {
-      collapsedProjects.insert(id)
-    }
+  private func toggleCollapse(_ project: Project) {
+    project.isCollapsed.toggle()
+    try? modelContext.save()  // écriture explicite, comme partout ailleurs dans l'app
   }
 
   private func startRename(_ id: PersistentIdentifier) {
@@ -641,7 +638,7 @@ struct SidebarView: View {
     let list = TodoList(title: "Nouvelle liste", project: project)
     list.sortIndex = (project.lists.map(\.sortIndex).max() ?? -1) + 1
     modelContext.insertAndSave(list)
-    collapsedProjects.remove(project.persistentModelID)
+    project.isCollapsed = false
     selection = .list(list)
     // Le nom s'édite dans le TITRE de la page (pas la sidebar) : c'est ce qui permet à la validation
     // (Entrée) d'enchaîner sur la 1re tâche sans course de focus inter-vues.
@@ -785,7 +782,7 @@ struct SidebarView: View {
     var rows: [RowKey] = []
     for p in sortedProjects {
       rows.append(.project(p.persistentModelID))
-      if !collapsedProjects.contains(p.persistentModelID) {
+      if !p.isCollapsed {
         for l in p.orderedLists { rows.append(.list(l.persistentModelID)) }
         rows.append(.addList(p.persistentModelID))
       }
@@ -798,7 +795,7 @@ struct SidebarView: View {
   private func groupKeys(id: PersistentIdentifier, isProject: Bool) -> [RowKey] {
     guard isProject, let p = project(id) else { return [.list(id)] }
     var keys: [RowKey] = [.project(id)]
-    if !collapsedProjects.contains(id) {
+    if !p.isCollapsed {
       keys += p.orderedLists.map { .list($0.persistentModelID) }
       keys.append(.addList(id))
     }
@@ -1005,7 +1002,7 @@ struct SidebarView: View {
     var lists = target.orderedLists.filter { $0.persistentModelID != id }
     lists.insert(moved, at: min(index, lists.count))
     for (i, l) in lists.enumerated() { l.sortIndex = i }
-    collapsedProjects.remove(target.persistentModelID)  // déplie le projet cible pour révéler le drop
+    target.isCollapsed = false  // déplie le projet cible pour révéler le drop
   }
 }
 

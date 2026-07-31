@@ -9,7 +9,7 @@ import SwiftUI
 /// au lieu d'un `String` brut.
 struct RichTextEditor: NSViewRepresentable {
   @Binding var data: Data
-  var font: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
+  var font: NSFont = .app()
   var textColor: NSColor = .labelColor
   /// Appelé sur Entrée ; `true` = géré (le retour à la ligne par défaut est supprimé),
   /// `false`/`nil` = comportement natif (insère un retour à la ligne).
