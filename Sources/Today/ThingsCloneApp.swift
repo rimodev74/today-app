@@ -90,9 +90,11 @@ struct TodayApp: App {
   private static func ensureInbox(in container: ModelContainer) {
     let context = ModelContext(container)
     let inbox: TodoList
-    if let existing = try? context.fetch(FetchDescriptor<TodoList>(
-      predicate: #Predicate { $0.isInbox }
-    )).first {
+    if let existing = try? context.fetch(
+      FetchDescriptor<TodoList>(
+        predicate: #Predicate { $0.isInbox }
+      )
+    ).first {
       inbox = existing
     } else {
       inbox = TodoList(title: "Tâches")
@@ -100,10 +102,12 @@ struct TodayApp: App {
       context.insert(inbox)
     }
 
-    let orphans = (try? context.fetch(FetchDescriptor<TaskItem>(
-      predicate: #Predicate { $0.list == nil },
-      sortBy: [SortDescriptor(\.createdAt)]
-    ))) ?? []
+    let orphans =
+      (try? context.fetch(
+        FetchDescriptor<TaskItem>(
+          predicate: #Predicate { $0.list == nil },
+          sortBy: [SortDescriptor(\.createdAt)]
+        ))) ?? []
     var next = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
     for task in orphans {
       task.list = inbox

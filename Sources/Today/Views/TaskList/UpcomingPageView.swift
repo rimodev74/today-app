@@ -149,7 +149,8 @@ struct UpcomingPageView: View {
       return groups[date] ?? DayGroup(date: date)
     }
     guard let nearEnd = near.last?.date else { return Agenda(nearDays: near, monthBands: []) }
-    let horizonEnd = calendar.date(byAdding: .day, value: Self.horizonDays, to: todayStart) ?? nearEnd
+    let horizonEnd =
+      calendar.date(byAdding: .day, value: Self.horizonDays, to: todayStart) ?? nearEnd
 
     // Au-delà de la fenêtre proche, seuls les jours qui contiennent réellement quelque chose
     // deviennent une ligne — pas de `DayHeader` vide comme dans la fenêtre proche.
@@ -181,7 +182,8 @@ struct UpcomingPageView: View {
   /// « Août » dans l'année courante, « Août 2027 » sinon — même règle que `ArchiveMonth.label`.
   private func monthName(_ monthStart: Date) -> String {
     let calendar = Calendar.current
-    let sameYear = calendar.component(.year, from: monthStart) == calendar.component(.year, from: Date())
+    let sameYear =
+      calendar.component(.year, from: monthStart) == calendar.component(.year, from: Date())
     let style: Date.FormatStyle = sameYear ? .dateTime.month(.wide) : .dateTime.month(.wide).year()
     return monthStart.formatted(style).capitalized
   }
@@ -260,7 +262,7 @@ private enum AgendaItem: Identifiable {
     case (nil, nil): return false
     case (nil, _): return true
     case (_, nil): return false
-    case let (x?, y?): return x < y
+    case (let x?, let y?): return x < y
     }
   }
 }

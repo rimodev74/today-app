@@ -19,8 +19,8 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.10"
-BUILD="9"
+SHORT_VERSION="0.11"
+BUILD="10"
 
 echo "→ Build ${TARGET} (${CONFIG})…"
 swift build -c "${CONFIG}" --product "${TARGET}"
