@@ -109,13 +109,67 @@ private let thingsSelectionFill = Color(
 /// (`withAnimation` côté parent), jamais en `.animation(value:)` par ligne : ainsi une ligne
 /// au repos ne porte aucun modificateur d'animation à traquer, et le scroll reste fluide.
 /// `taskFlow` = la Material standard de l'index.html de référence.
-private let taskFlow = Animation.timingCurve(0.4, 0, 0.2, 1, duration: 0.2)
-private let taskSelectFade = Animation.easeOut(duration: 0.05)
+// Internes et non `private` : « Aujourd'hui » pilote les mêmes transitions sur les mêmes
+// `TaskRow` — deux courbes distinctes se verraient au passage d'une page à l'autre.
+let taskFlow = Animation.timingCurve(0.4, 0, 0.2, 1, duration: 0.2)
+let taskSelectFade = Animation.easeOut(duration: 0.05)
 /// Apparition (création) ET disparition (suppression) d'une ligne : ressort peu amorti pour un
 /// léger rebond, dans les deux sens. Le réordonnancement, lui, passe par des offsets et pas des
 /// insertions/suppressions — la transition des rangées n'y répond donc jamais.
 /// Interne pour la même raison que `gutter` : `ArchivePageView` anime ses sorties de ligne avec.
 let taskInsert = Animation.spring(response: 0.32, dampingFraction: 0.62)
+
+/// Sélection au mouseDOWN + édition au clic sur une ligne DÉJÀ sélectionnée, en UN SEUL geste —
+/// pour les pages sans réordonnancement (« Tâches », « Aujourd'hui »).
+///
+/// SURTOUT PAS deux gestes séparés (`.onTapGesture(count: 2)` pour l'édition + `.onTapGesture`
+/// pour la sélection) : dès qu'une vue porte un tap double, AppKit RETIENT le tap simple le temps
+/// de la fenêtre de double-clic avant de le délivrer. La surbrillance n'arrivait donc qu'une
+/// demi-seconde après le clic — c'était toute la lenteur d'« Aujourd'hui », que les pages de liste
+/// n'ont jamais eue parce qu'elles fusionnent déjà tout dans leur geste de drag (même structure
+/// ici, moins le réordonnancement — cf. `ListPageView.dragGesture`).
+struct RowPressGesture: ViewModifier {
+  let isSelected: Bool
+  let isEditing: Bool
+  var onSelect: () -> Void
+  var onEdit: () -> Void
+
+  /// Appui en cours (le premier `onChanged` est le mouseDown) et état de sélection d'AVANT cet
+  /// appui : c'est lui qui décide si le relâchement ouvre l'édition (renommage façon Finder).
+  @State private var pressing = false
+  @State private var wasSelected = false
+
+  func body(content: Content) -> some View {
+    content.gesture(
+      DragGesture(minimumDistance: 0)
+        .onChanged { _ in
+          guard !pressing else { return }
+          pressing = true
+          wasSelected = isSelected
+          if !isEditing && !isSelected { onSelect() }
+        }
+        .onEnded { value in
+          pressing = false
+          let moved = abs(value.translation.width) > 4 || abs(value.translation.height) > 4
+          guard !moved, !isEditing, wasSelected else { return }
+          onEdit()
+        },
+      // En édition, les clics et les sélections de texte appartiennent au champ.
+      including: isEditing ? .subviews : .all
+    )
+  }
+}
+
+extension View {
+  func rowPressGesture(
+    isSelected: Bool, isEditing: Bool, onSelect: @escaping () -> Void,
+    onEdit: @escaping () -> Void
+  ) -> some View {
+    modifier(
+      RowPressGesture(
+        isSelected: isSelected, isEditing: isEditing, onSelect: onSelect, onEdit: onEdit))
+  }
+}
 
 /// Aiguillage du panneau de détail. Seule la page d'une to-do list est construite pour
 /// l'instant ; les vues intelligentes sont à rebrancher. La recherche vit dans la sidebar
@@ -124,7 +178,6 @@ struct TaskListView: View {
   @Binding var selection: SidebarSelection?
   @Binding var searchPresented: Bool
   @Binding var pendingTitleFocus: PersistentIdentifier?
-  @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
 
   /// Onglets déjà ouverts dans cette session — au sens de la sidebar : liste, projet, Pomodoro,
   /// Tâches, Aujourd'hui, À venir, Archives. Tout ce qui passe par `selection`, donc, et rien
@@ -158,15 +211,9 @@ struct TaskListView: View {
   private var page: some View {
     switch selection {
     case .smartList(.all):
-      // `inboxLists` est peuplée dès le lancement (cf. `ThingsCloneApp.ensureInbox`) ; le repli
-      // n'est qu'un filet de sécurité si la vue se rendait avant ce seed.
-      if let inbox = inboxLists.first {
-        ListPageView(
-          list: inbox, selection: $selection, searchPresented: $searchPresented,
-          pendingTitleFocus: $pendingTitleFocus)
-      } else {
-        comingSoon(SmartList.all.label, searchPresented: $searchPresented)
-      }
+      // N'était que la page de l'Inbox : indiscernable d'une liste, et les tâches des projets n'y
+      // apparaissaient jamais. C'est désormais l'inventaire complet (cf. `AllTasksPageView`).
+      AllTasksPageView(searchPresented: $searchPresented)
     case .list(let list):
       // PAS de `.id(list.persistentModelID)` ici : il forçait SwiftUI à détruire et reconstruire
       // toute la page à chaque changement de liste (TextEditor/NSTextView, tous les TextField, le
@@ -1361,9 +1408,9 @@ private struct ListPageView: View {
       Spacer(minLength: 0)
     }
     // Seul en-tête de ListPageView à reprendre `rowInset` : son icône fait la largeur d'une case à
-    // cocher, elle se lit donc comme la tête de cette colonne (comme « Aujourd'hui » et « Archives »,
-    // dont les lignes n'ont pas de retrait intérieur). L'en-tête d'une liste nommée, lui, porte un
-    // anneau plus large et l'encadré de notes : c'est le bord de section qui lui sert d'aplomb.
+    // cocher, elle se lit donc comme la tête de cette colonne. Même règle dans « Aujourd'hui »,
+    // qui rend les mêmes `TaskRow`. L'en-tête d'une liste nommée, lui, porte un anneau plus large
+    // et l'encadré de notes : c'est le bord de section qui lui sert d'aplomb.
     .padding(.leading, rowInset)
   }
 
@@ -2039,12 +2086,25 @@ private struct NotesBox: View {
 ///
 /// Le double-clic est un simple `.onTapGesture(count: 2)` — possible parce qu'on n'est plus sur
 /// une `List`/NSTableView (qui avalait ses clics). C'est tout le bénéfice de la refonte.
-private struct TaskRow: View {
+/// Internal et pas `private` : « Aujourd'hui » la réutilise telle quelle (cf. `TodayPageView`).
+/// C'était la seule façon d'y avoir édition, suppression, dates et durée sans réécrire la ligne —
+/// une deuxième implémentation aurait dérivé de celle-ci au premier changement.
+struct TaskRow: View {
   @Bindable var task: TaskItem
   let isSelected: Bool
   let isEditing: Bool
   /// Listes vers lesquelles déplacer la tâche (toutes sauf la sienne).
   var moveTargets: [TodoList]
+  /// Faux dans « Aujourd'hui » : la page ne montre QUE le jour même, la date répétée sur chaque
+  /// ligne n'apprend rien. Elle reste indispensable dans une liste, qui mélange les échéances.
+  var showsDate: Bool = true
+  /// Rattachement affiché à droite du titre. `nil` dans une page de liste (on sait déjà où l'on
+  /// est) ; renseigné dans « Aujourd'hui », qui mélange les provenances.
+  var parentLabel: String? = nil
+  /// Raccourci « faire aujourd'hui » (⊕ au survol). Posé uniquement par la réserve sans date
+  /// d'« Aujourd'hui » : y dater une tâche est le geste de la section, il ne doit pas coûter un
+  /// passage par « Quand… » et son sélecteur.
+  var onSchedule: (() -> Void)? = nil
   var onBeginEditing: () -> Void
   var onEndEditing: () -> Void
   var onMove: (TodoList) -> Void
@@ -2108,7 +2168,7 @@ private struct TaskRow: View {
           Task { await remindersService.pushCompletion(for: task) }
           onCompletionChanged()
         }
-        if !isEditing { dateTag }
+        if !isEditing, showsDate { dateTag }
         // Durée estimée, à gauche du titre comme la date : ce sont les deux faces d'une même
         // décision (quand, et pour combien de temps). Rien tant que rien n'est estimé — la page
         // « Aujourd'hui » est le seul endroit qui réclame l'absence de durée.
@@ -2122,6 +2182,24 @@ private struct TaskRow: View {
         titleView
         if !isEditing && task.notes.isEmpty { noteHint }
         Spacer(minLength: 0)
+        // À droite plutôt qu'en sous-titre : la ligne garde sa hauteur d'une seule ligne, donc la
+        // même que dans une page de liste — l'ouverture de la carte d'édition reste continue.
+        if !isEditing, let parentLabel {
+          Text(parentLabel)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+        }
+        if !isEditing, let onSchedule {
+          Button(action: onSchedule) {
+            Image(systemName: "plus.circle")
+              .font(.system(size: 13))
+              .foregroundStyle(.secondary)
+          }
+          .buttonStyle(.plain)
+          .help("Faire aujourd'hui")
+          .opacity(hovering ? 1 : 0)
+        }
         if !isEditing { trailing }
       }
 
@@ -2181,10 +2259,13 @@ private struct TaskRow: View {
       // l'ordre titre → notes → sous-tâches. Séparées de ce qui précède (aperçu de note au repos,
       // éditeur de notes en édition) par un trait.
       if !task.orderedSubtasks.isEmpty {
-        Divider().padding(.vertical, 6)
         subtasksSection
       }
     }
+    // Ajout/suppression d'une sous-tâche : `withAnimation` autour de la mutation ne suffit PAS —
+    // SwiftData notifie le changement de relation hors de la transaction, la carte sautait donc à sa
+    // nouvelle hauteur. On anime ici sur le compte, qui, lui, est observé au rendu.
+    .animation(taskFlow, value: task.subtasks.count)
     // Borne le contenu aux limites de la ligne pendant que la carte s'ouvre/se referme.
     .clipped()
     // Décrue : une tâche que personne ne réveille s'efface. Posé sur le CONTENU seulement (avant
@@ -2198,7 +2279,9 @@ private struct TaskRow: View {
     // Bas en édition : les sous-tâches sont désormais le dernier élément de la carte (après
     // l'éditeur), il leur faut une respiration jusqu'au bord bas.
     .padding(.top, isEditing ? 16 : 6)
-    .padding(.bottom, isEditing ? 14 : 6)
+    // Au repos, une tâche à sous-tâches finit sur une rangée de sous-tâche et non sur son titre :
+    // il lui faut un peu plus de fond que les 6 pt d'une ligne simple.
+    .padding(.bottom, isEditing ? 14 : (task.subtasks.isEmpty ? 6 : 10))
     .padding(.horizontal, isEditing ? 16 : rowInset)
     .background { rowBackground }
     .contentShape(Rectangle())
@@ -2231,6 +2314,11 @@ private struct TaskRow: View {
     // supprime (annule une création vide). Couvre aussi la fermeture de la tâche — le focus retombe
     // alors à `nil`, ce qui déclenche la vérification sur la dernière sous-tâche éditée.
     .onChange(of: focusedSubtask) { old, _ in deleteIfEmpty(old) }
+    // Tâche cochée : le dépliant se referme tout seul — le détail de ce qui reste à faire n'a plus
+    // d'intérêt une fois la tâche finie. Le rouvrir reste possible d'un clic sur le chevron.
+    .onChange(of: task.isCompleted) { _, done in
+      if done { withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded = false } }
+    }
     .onChange(of: isEditing) { _, editing in
       if editing {
         // Nouvelle session : (ré)affiche le corps et invalide un démontage en attente (réouverture
@@ -2307,10 +2395,13 @@ private struct TaskRow: View {
         // ponytail: tags décoratif pour l'instant (présent dans le visuel Things demandé).
         // À brancher quand le modèle le portera.
         actionIcon("tag")
+        // Reste en place (la rangée d'icônes ne bouge pas) mais devient inerte dès la première
+        // sous-tâche : c'est le « + » de l'en-tête du dépliant qui prend alors le relais.
         Button(action: addNewSubtask) {
-          actionIcon("list.bullet", active: !task.subtasks.isEmpty)
+          actionIcon("list.bullet")
         }
         .buttonStyle(.plain)
+        .disabled(!task.subtasks.isEmpty)
         priorityControl
       }
     }
@@ -2491,6 +2582,9 @@ private struct TaskRow: View {
 
   private var subtasksSection: some View {
     VStack(alignment: .leading, spacing: 4) {
+      // Dans le VStack (donc décalé comme lui) : le trait part de l'anneau de progression, pas de
+      // la case de la tâche parente — il ouvre le bloc sous-tâches au lieu de couper la carte.
+      Divider().padding(.bottom, 2)
       subtasksHeader
       // En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
       // est piloté par `subtasksExpanded`.
@@ -2504,13 +2598,19 @@ private struct TaskRow: View {
               onEnter: { enterOnSubtask(subtask) },
               onDelete: { removeSubtask(subtask) }
             )
+            // La rangée se fond en glissant depuis le haut pendant que la carte s'ouvre ; sans
+            // transition elle apparaît nette d'un coup au milieu d'une hauteur encore en mouvement.
+            .transition(.opacity.combined(with: .move(edge: .top)))
           }
         }
       }
     }
-    // Aligné sous le titre (case 16 + espace 10 = 26), comme l'aperçu de note.
+    // Le bloc entier (trait + en-tête) naît avec la 1re sous-tâche : même fondu.
+    .transition(.opacity)
+    // Aligné sur le DÉBUT DU TEXTE du titre (case 16 + espace 10 = 26), comme l'aperçu de note :
+    // trait, anneau et cases des sous-tâches partent tous de cette colonne.
     .padding(.leading, 26)
-    .padding(.top, 4)
+    .padding(.top, 14)
   }
 
   /// En-tête du dépliant, sur une ligne : anneau de progression + « fait/total », un « + » (en
@@ -2552,9 +2652,13 @@ private struct TaskRow: View {
   }
 
   /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus.
+  /// `withAnimation` : sans lui la carte saute à sa nouvelle hauteur (la mutation SwiftData tombe
+  /// hors transaction animée) — cf. `removeSubtask`/`deleteIfEmpty`, même raison.
   private func addNewSubtask() {
-    subtasksExpanded = true
-    focusedSubtask = task.addSubtask().uuid
+    withAnimation(taskFlow) {
+      subtasksExpanded = true
+      focusedSubtask = task.addSubtask().uuid
+    }
   }
 
   /// Entrée sur une sous-tâche : vide → termine (défocalise) ; non vide → nouvelle sous-tâche + focus.
@@ -2570,7 +2674,7 @@ private struct TaskRow: View {
 
   /// Suppression d'une sous-tâche (corbeille au survol ou clic droit).
   private func removeSubtask(_ subtask: Subtask) {
-    modelContext.delete(subtask)
+    withAnimation(taskFlow) { modelContext.delete(subtask) }
   }
 
   /// Supprime la sous-tâche d'uuid donné si son titre est vide (appelé au départ du focus). Suppression
@@ -2581,7 +2685,7 @@ private struct TaskRow: View {
       let subtask = task.subtasks.first(where: { $0.uuid == uuid }),
       subtask.title.trimmingCharacters(in: .whitespaces).isEmpty
     else { return }
-    modelContext.delete(subtask)
+    withAnimation(taskFlow) { modelContext.delete(subtask) }
   }
 
   // MARK: Actions au survol / clic droit
@@ -2641,6 +2745,21 @@ private struct TaskRow: View {
     .animation(.easeOut(duration: 0.15), value: hovering)
   }
 
+  /// Cibles de classement groupées par projet, les listes libres en dernier — un projet est ce
+  /// qu'on cherche d'abord quand on range une tâche qui traîne. `filter` plutôt qu'un `sorted` :
+  /// le tri de Swift n'est pas stable, il aurait mélangé l'ordre des projets entre eux.
+  private var targetsByProject: [(project: String?, lists: [TodoList])] {
+    var order: [String?] = []
+    var buckets: [String?: [TodoList]] = [:]
+    for target in moveTargets {
+      let key = target.project?.title
+      if buckets[key] == nil { order.append(key) }
+      buckets[key, default: []].append(target)
+    }
+    let sorted = order.filter { $0 != nil } + order.filter { $0 == nil }
+    return sorted.map { (project: $0, lists: buckets[$0] ?? []) }
+  }
+
   /// Menu partagé par le ••• et le clic droit.
   @ViewBuilder
   private var taskMenu: some View {
@@ -2653,12 +2772,27 @@ private struct TaskRow: View {
       if moveTargets.isEmpty {
         Text("Aucune autre liste")
       } else {
-        ForEach(moveTargets) { target in
-          Button(target.title) { onMove(target) }
+        ForEach(targetsByProject, id: \.project) { group in
+          // Un projet ne porte pas de tâche directement (cf. `Project`) : l'« assigner à un
+          // projet » revient à choisir l'une de ses listes, d'où le sous-menu.
+          if let project = group.project {
+            Menu(project) {
+              ForEach(group.lists) { target in
+                Button(target.title) { onMove(target) }
+              }
+            }
+          } else {
+            ForEach(group.lists) { target in
+              Button(target.title) { onMove(target) }
+            }
+          }
         }
       }
     } label: {
-      Label("Déplacer vers…", systemImage: "arrow.right")
+      // Une tâche sans projet n'est pas « déplacée », elle est CLASSÉE — c'est le geste qui
+      // manquait à la page « Tâches », où tout le non-classé arrive.
+      Label(
+        task.project == nil ? "Assigner la tâche" : "Déplacer vers…", systemImage: "arrow.right")
     }
     Button {
       activePicker = .deadline

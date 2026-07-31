@@ -51,7 +51,12 @@ extension SmartList {
     )!
     switch self {
     case .all, .archive: return true
-    case .today: return task.when.map { $0 < startOfTomorrow } ?? false
+    // Le JOUR même, ni avant ni après. Une tâche datée d'hier et non faite quitte donc
+    // « Aujourd'hui » au passage de minuit : elle retourne dans sa liste ou son projet (l'Inbox
+    // pour une tâche libre), d'où on la reprogramme d'un « Quand… » si on la veut encore.
+    // Volontairement SANS repêchage des retards : « Aujourd'hui » ne montre que ce qu'on a
+    // décidé de faire aujourd'hui, pas l'accumulation des jours précédents.
+    case .today: return task.when.map(calendar.isDateInToday) ?? false
     case .upcoming: return task.when.map { $0 >= startOfTomorrow } ?? false
     }
   }
@@ -66,6 +71,14 @@ extension SmartList {
     }
   }
 
+  /// Ce qu'affichent la page « Aujourd'hui » et sa section homonyme dans « Tâches » : le périmètre
+  /// du jour, tâches COCHÉES COMPRISES — elles restent barrées à leur place jusqu'à minuit, où
+  /// leur `when` cesse d'être aujourd'hui et les fait sortir d'elles-mêmes. `filter` reste la
+  /// version « ce qui reste à faire » (badge de la sidebar).
+  func scoped(_ all: [TaskItem]) -> [TaskItem] {
+    all.filter(scopeMatches)
+  }
+
   /// Ordre d'affichage. Ces vues n'ont pas d'ordre manuel : la priorité y sert de
   /// tri (haute d'abord), puis la date, puis la création.
   func sort(_ tasks: [TaskItem]) -> [TaskItem] {
@@ -73,6 +86,10 @@ extension SmartList {
       return tasks.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
     }
     return tasks.sorted { a, b in
+      // Réglage « Descendre en bas de la liste » : ces vues n'ayant pas d'ordre manuel, il n'y a
+      // pas de `sortIndex` à réécrire (cf. `TodoList.moveToEndOfSection`) — la règle s'applique
+      // ici, en première clé de tri, pour que les cochées passent sous ce qui reste à faire.
+      if TodoList.autoSortCompletedEnabled, a.isCompleted != b.isCompleted { return b.isCompleted }
       if a.priorityRaw != b.priorityRaw { return a.priorityRaw > b.priorityRaw }
       let da = a.when ?? .distantFuture
       let db = b.when ?? .distantFuture

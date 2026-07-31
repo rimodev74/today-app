@@ -1,0 +1,345 @@
+import SwiftData
+import SwiftUI
+
+/// Page « Tâches » : l'inventaire complet. Tout ce qui reste à faire, où que ça vive.
+///
+/// Elle ne répond PAS à la même question qu'« Aujourd'hui » : celle-là montre ce qu'on a décidé de
+/// faire aujourd'hui, celle-ci montre tout, pour aller y piocher. Avant, « Tâches » n'affichait que
+/// l'Inbox — indiscernable d'une page de liste, et les tâches des projets restaient invisibles tant
+/// qu'on n'ouvrait pas chaque projet un par un.
+///
+/// D'abord le non-classé, à nu — sans en-tête ni dépliant : c'est le flux d'arrivée, la première
+/// chose qu'on lit et le seul endroit où l'on crée. Puis « Aujourd'hui » (déplié), puis un dépliant
+/// par projet et par liste hors projet (repliés). Une tâche n'apparaît QU'UNE fois : celles du jour
+/// sont retirées de tout le reste, sinon la même ligne se serait sélectionnée à deux endroits.
+///
+/// ponytail: pas de réordonnancement ni d'en-têtes de section (cf. `ListPageView` pour ça) —
+/// l'ordre vient de `SmartList.sort`. Le reste (édition, suppression, dates, durée, rappels,
+/// sous-tâches) vient de la `TaskRow` partagée, comme sur « Aujourd'hui ».
+struct AllTasksPageView: View {
+  @Binding var searchPresented: Bool
+
+  @Environment(\.modelContext) private var modelContext
+  @Query private var allTasks: [TaskItem]
+  /// Cibles du « Déplacer vers… » : toutes les listes, comme sur « Aujourd'hui » — les tâches
+  /// affichées viennent déjà d'un peu partout.
+  @Query private var allLists: [TodoList]
+  @Query private var allProjects: [Project]
+  @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
+
+  /// Brouillon de la section « Non classé » — la seule qui crée : une tâche notée ici n'a ni
+  /// projet ni date, c'est la définition même de l'Inbox.
+  @State private var draft = ""
+  @FocusState private var draftFocused: Bool
+  @State private var selectedID: PersistentIdentifier?
+  @State private var editingID: PersistentIdentifier?
+  /// Sections dont le repli DIFFÈRE de leur défaut (cf. `expansion(of:)`) — stocker l'écart plutôt
+  /// que l'état permet à chaque section de garder son propre défaut sans initialisation.
+  /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
+  /// à faire si retrouver ses dépliants au relancement manque vraiment.
+  @State private var toggled: Set<String> = []
+
+  private var openTasks: [TaskItem] {
+    allTasks.filter { !$0.isCompleted && !$0.isHeader }
+  }
+
+  /// Ce que le jour montre déjà — retiré de tout ce qui s'affiche en dessous, pour qu'une tâche
+  /// n'apparaisse jamais à deux endroits (elle s'y serait sélectionnée deux fois).
+  private var todayIDs: Set<PersistentIdentifier> {
+    Set(SmartList.today.scoped(allTasks).map(\.persistentModelID))
+  }
+
+  /// La boîte de réception, en tête de page : ce qui est noté mais pas encore classé.
+  private var inboxTasks: [TaskItem] {
+    let shown = todayIDs
+    return SmartList.today.sort(
+      openTasks.filter { $0.list?.isInbox == true && !shown.contains($0.persistentModelID) })
+  }
+
+  private var sections: [TaskSection] {
+    let shown = todayIDs
+    func remaining(_ tasks: [TaskItem]) -> [TaskItem] {
+      SmartList.today.sort(
+        tasks.filter {
+          !$0.isCompleted && !$0.isHeader && !shown.contains($0.persistentModelID)
+        })
+    }
+
+    var result = [
+      TaskSection(
+        id: "today", title: SmartList.today.label, systemImage: SmartList.today.systemImage,
+        tint: SmartList.today.color, defaultExpanded: true,
+        // Même règle que la page « Aujourd'hui » : cochées comprises jusqu'au lendemain.
+        tasks: SmartList.today.sort(SmartList.today.scoped(allTasks)))
+    ]
+
+    for project in allProjects.sorted(by: ordered) {
+      let tasks = remaining(project.allTasks)
+      guard !tasks.isEmpty else { continue }
+      result.append(
+        TaskSection(
+          id: "project-\(project.persistentModelID)", title: label(project.title),
+          systemImage: "folder", tint: nil, defaultExpanded: false, tasks: tasks))
+    }
+
+    // Les listes d'un projet sont déjà dedans (`Project.allTasks`) ; seules les listes libres
+    // manquent — sans elles, la page ne serait pas l'inventaire qu'elle prétend être.
+    for list in allLists.filter({ !$0.isInbox && $0.project == nil }).sorted(by: ordered) {
+      let tasks = remaining(list.tasks)
+      guard !tasks.isEmpty else { continue }
+      result.append(
+        TaskSection(
+          id: "list-\(list.persistentModelID)", title: label(list.title),
+          systemImage: "list.bullet", tint: nil, defaultExpanded: false, tasks: tasks))
+    }
+    return result
+  }
+
+  private func ordered(_ a: Project, _ b: Project) -> Bool {
+    (a.sortIndex, a.createdAt) < (b.sortIndex, b.createdAt)
+  }
+
+  private func ordered(_ a: TodoList, _ b: TodoList) -> Bool {
+    (a.sortIndex, a.createdAt) < (b.sortIndex, b.createdAt)
+  }
+
+  private func label(_ title: String) -> String { title.isEmpty ? "Sans titre" : title }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 0) {
+        // `header` (le titre de l'onglet) reste HORS du fondu, cf. `PageReveal`.
+        header
+
+        Group {
+          // Le non-classé ouvre la page SANS en-tête ni dépliant : c'est le flux d'arrivée, il se
+          // lit d'emblée. Tout le reste est rangé quelque part, donc repliable derrière un titre.
+          inboxRows
+          ForEach(sections) { sectionView($0) }
+        }
+        .pageReveal()
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, gutter)
+      .padding(.top, 30)
+      // Clic dans le vide = on referme, comme sur « Aujourd'hui » : les lignes captent déjà les
+      // leurs, rien ne se réordonne ici, un simple tap sur le fond suffit.
+      .contentShape(Rectangle())
+      .onTapGesture { dismissEditing() }
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      BottomToolbar(
+        onNewTask: { draftFocused = true }, onInsertHeader: nil,
+        onSearch: { searchPresented = true })
+    }
+  }
+
+  private var header: some View {
+    HStack(spacing: 10) {
+      PageHeaderIcon(systemImage: SmartList.all.systemImage, tint: SmartList.all.color)
+      Text(SmartList.all.label)
+        .font(.title.bold())
+      Spacer(minLength: 0)
+    }
+    // Même retrait que les lignes, qui portent `rowInset` À L'INTÉRIEUR de leur fond (même règle
+    // que `TodayPageView.header`).
+    .padding(.leading, rowInset)
+    .padding(.bottom, 14)
+  }
+
+  // MARK: Sections
+
+  private var inboxRows: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(inboxTasks) { taskRow(for: $0, isToday: false) }
+      newTaskRow
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// `DisclosureGroup` pour toutes les sections, même « Aujourd'hui » qui s'ouvre par défaut : un
+  /// seul rendu, et le jour se replie aussi si l'on ne veut voir que ses projets.
+  @ViewBuilder private func sectionView(_ section: TaskSection) -> some View {
+    DisclosureGroup(isExpanded: expansion(of: section)) {
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(section.tasks) { task in
+          taskRow(for: task, isToday: section.id == "today")
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: section.systemImage)
+          .font(.system(size: 11))
+          // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
+          // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
+          .foregroundStyle(section.tint ?? Color.secondary)
+        Text(section.title)
+        Text("\(section.tasks.count)")
+          .foregroundStyle(.tertiary)
+      }
+      .font(.subheadline.weight(.semibold))
+      .foregroundStyle(.secondary)
+    }
+    .padding(.top, 14)
+  }
+
+  /// `toggled` retient l'ÉCART au défaut, pas l'état : `contains` ⇔ « replié si le défaut est
+  /// ouvert, ouvert sinon ». Une `Set` d'ouvertes aurait demandé de l'amorcer au premier rendu.
+  private func expansion(of section: TaskSection) -> Binding<Bool> {
+    Binding(
+      get: { toggled.contains(section.id) != section.defaultExpanded },
+      set: { open in
+        if open == section.defaultExpanded {
+          toggled.remove(section.id)
+        } else {
+          toggled.insert(section.id)
+        }
+      })
+  }
+
+  // MARK: Lignes de tâche
+
+  /// La MÊME `TaskRow` que partout ailleurs. Dans « Aujourd'hui » : ni date (elle est implicite) ni
+  /// ⊕ (elles y sont déjà) mais le rattachement, puisque la section mélange les provenances.
+  /// Ailleurs : la date compte, le rattachement est celui de la section, et le ⊕ au survol fait
+  /// passer la tâche au jour même sans détour par « Quand… ».
+  private func taskRow(for task: TaskItem, isToday: Bool) -> some View {
+    TaskRow(
+      task: task,
+      isSelected: selectedID == task.persistentModelID,
+      isEditing: editingID == task.persistentModelID,
+      moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
+      showsDate: !isToday,
+      parentLabel: isToday ? parentLabel(of: task) : nil,
+      onSchedule: isToday ? nil : { schedule(task) },
+      onBeginEditing: { beginEditing(task) },
+      onEndEditing: { endEditing(task) },
+      onMove: { move(task, to: $0) },
+      onDuplicate: { duplicate(task) },
+      onDelete: { delete(task) },
+      onCompletionChanged: {}
+    )
+    .rowPressGesture(
+      isSelected: selectedID == task.persistentModelID,
+      isEditing: editingID == task.persistentModelID,
+      onSelect: { select(task) },
+      onEdit: { beginEditing(task) }
+    )
+  }
+
+  private func parentLabel(of task: TaskItem) -> String? {
+    let title = task.project?.title ?? task.list?.title
+    return (title?.isEmpty ?? true) ? nil : title
+  }
+
+  private func select(_ task: TaskItem) {
+    withAnimation(taskSelectFade) {
+      editingID = nil
+      selectedID = task.persistentModelID
+    }
+    // Même raison que dans `ListPageView.select` : sans ça le champ « Nouvelle tâche » reste le
+    // premier répondeur AppKit et intercepte ⌫ au lieu de la suppression de la sélection.
+    draftFocused = false
+  }
+
+  private func beginEditing(_ task: TaskItem) {
+    withAnimation(taskFlow) {
+      selectedID = task.persistentModelID
+      editingID = task.persistentModelID
+    }
+    draftFocused = false
+  }
+
+  private func endEditing(_ task: TaskItem) {
+    guard editingID == task.persistentModelID else { return }
+    withAnimation(taskFlow) {
+      editingID = nil
+      selectedID = nil
+    }
+  }
+
+  private func dismissEditing() {
+    guard editingID != nil || selectedID != nil else { return }
+    withAnimation(taskFlow) {
+      editingID = nil
+      selectedID = nil
+    }
+  }
+
+  private func move(_ task: TaskItem, to target: TodoList) {
+    if selectedID == task.persistentModelID { selectedID = nil }
+    if editingID == task.persistentModelID { editingID = nil }
+    task.list = target
+    task.sortIndex = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
+    try? modelContext.save()
+  }
+
+  private func duplicate(_ task: TaskItem) {
+    guard let list = task.list else { return }
+    let clone = task.copy(into: list)
+    clone.sortIndex = task.sortIndex + 1
+    modelContext.insertAndSave(clone)
+  }
+
+  private func delete(_ task: TaskItem) {
+    if selectedID == task.persistentModelID { selectedID = nil }
+    if editingID == task.persistentModelID { editingID = nil }
+    withAnimation(taskInsert) {
+      modelContext.delete(task)
+      try? modelContext.save()
+    }
+  }
+
+  /// Fait passer une tâche au jour même. Pas d'heure, comme partout ailleurs dans l'app.
+  private func schedule(_ task: TaskItem) {
+    withAnimation(taskInsert) { task.when = Calendar.current.startOfDay(for: Date()) }
+  }
+
+  /// Création dans la boîte de réception, SANS date — c'est ce qui la distingue du champ
+  /// d'« Aujourd'hui », qui date d'office : ici on note, on classera plus tard.
+  private var newTaskRow: some View {
+    HStack(spacing: 10) {
+      RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
+        .overlay {
+          Image(systemName: "plus")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.tertiary)
+        }
+        .frame(width: 16, height: 16)
+      TextField("Nouvelle tâche…", text: $draft)
+        .textFieldStyle(.plain)
+        .focused($draftFocused)
+        .onSubmit(createTask)
+    }
+    // Mêmes paddings qu'une `TaskRow` au repos : la rangée de création garde le rythme des tâches.
+    .padding(.vertical, 6)
+    .padding(.horizontal, rowInset)
+  }
+
+  private func createTask() {
+    let title = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    draft = ""
+    guard !title.isEmpty, let inbox = inboxLists.first else {
+      draftFocused = false
+      return
+    }
+    let task = TaskItem(title: title, list: inbox)
+    task.sortIndex = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
+    withAnimation(taskInsert) { modelContext.insertAndSave(task) }
+    draftFocused = true
+  }
+}
+
+/// Un dépliant de la page : le jour, la boîte de réception, un projet ou une liste libre. Un seul
+/// type pour les quatre — ils ne diffèrent que par leur titre, leur icône et leur repli par défaut.
+private struct TaskSection: Identifiable {
+  let id: String
+  let title: String
+  let systemImage: String
+  /// Teinte de l'icône, `nil` = gris comme le reste du bandeau.
+  let tint: Color?
+  let defaultExpanded: Bool
+  let tasks: [TaskItem]
+}

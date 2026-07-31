@@ -58,7 +58,9 @@ final class TodoList {
   /// réglé » (→ true) de « explicitement désactivé ».
   static let autoSortCompletedStorageKey = "autoSortCompletedToBottom"
 
-  private static var autoSortCompletedEnabled: Bool {
+  /// Lu aussi par `SmartList.sort` : les vues intelligentes n'ont pas d'ordre manuel à réécrire,
+  /// le réglage s'y applique donc au tri (cf. ce fichier) plutôt que par `moveToEndOfSection`.
+  static var autoSortCompletedEnabled: Bool {
     UserDefaults.standard.object(forKey: autoSortCompletedStorageKey) as? Bool ?? true
   }
 

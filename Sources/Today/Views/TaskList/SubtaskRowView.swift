@@ -94,5 +94,7 @@ struct SubtaskProgressRing: View {
         // Départ à midi plutôt qu'à 3 h (l'arc de `trim` commence à droite par défaut).
         .rotationEffect(.degrees(-90))
     }
+    // L'arc court jusqu'à sa nouvelle valeur au lieu de sauter quand on coche une sous-tâche.
+    .animation(.easeInOut(duration: 0.3), value: fraction)
   }
 }
