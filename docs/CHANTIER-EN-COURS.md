@@ -149,7 +149,7 @@ lignes cette page présente-t-elle, dans quel ordre, après tel filtre ?*
 
 ## Invariants à ne pas casser
 
-- **`swift test` : 122 tests, tous verts.**
+- **`swift test` : 125 tests, tous verts.**
 - **Cliquet de concurrence : exactement 37 diagnostics, tous « does not conform to Sendable » sur des
   chemins de clé.** Tout diagnostic d'une AUTRE nature est une régression d'isolation à corriger
   sur-le-champ, pas à ajouter au décompte.
