@@ -1,10 +1,12 @@
 import XCTest
+
 @testable import Today
 
 final class HeaderColorTests: XCTestCase {
   func testAllCases_haveDistinctRawValues() {
     let rawValues = HeaderColor.allCases.map(\.rawValue)
-    XCTAssertEqual(rawValues.count, Set(rawValues).count, "chaque teinte doit avoir une rawValue unique")
+    XCTAssertEqual(
+      rawValues.count, Set(rawValues).count, "chaque teinte doit avoir une rawValue unique")
   }
 
   func testInit_fromRawValue_roundTrips() {
@@ -14,6 +16,9 @@ final class HeaderColorTests: XCTestCase {
   }
 
   func testInit_fromUnknownRawValue_returnsNil() {
-    XCTAssertNil(HeaderColor(rawValue: "turquoise-fluo"), "une valeur stockée inconnue (ancienne teinte retirée) ne doit pas planter, juste retomber sur nil")
+    XCTAssertNil(
+      HeaderColor(rawValue: "turquoise-fluo"),
+      "une valeur stockée inconnue (ancienne teinte retirée) ne doit pas planter, juste retomber sur nil"
+    )
   }
 }

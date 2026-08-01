@@ -244,7 +244,11 @@ struct SidebarView: View {
   // MARK: Projets et to-do lists
 
   private var projectsGroup: some View {
-    let plan = dragPlan()
+    let layout = dragLayout()
+    // Les décalages sont calculés UNE fois par rendu et distribués aux lignes, plutôt que
+    // recherchés ligne par ligne : chaque rangée devait sinon balayer la séquence pour se trouver,
+    // soit un coût quadratique à chaque image de glissement.
+    let offsets = layout?.offsets() ?? [:]
     return VStack(alignment: .leading, spacing: 6) {
       if projects.isEmpty {
         Text("Aucun projet")
@@ -254,12 +258,12 @@ struct SidebarView: View {
           .padding(.vertical, 4)
       }
       ForEach(sortedProjects) { project in
-        projectRow(project, plan: plan)
+        projectRow(project, offsets: offsets)
         if !project.isCollapsed {
           ForEach(project.orderedLists) { list in
-            listRow(list, plan: plan)
+            listRow(list, offsets: offsets)
           }
-          addListRow(project, plan: plan)
+          addListRow(project, offsets: offsets)
         }
       }
     }
@@ -269,7 +273,7 @@ struct SidebarView: View {
     // MÊME rectangle que la surbrillance de sélection d'une ligne (`sidebarRow` : même couleur,
     // même rayon, même gabarit mesuré) — juste vide, sans anneau ni titre.
     .background(alignment: .topLeading) {
-      if let plan, let r = placeholderRect(plan: plan) {
+      if let layout, let r = placeholderRect(layout: layout) {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
           .fill(Self.rowFill)
           .frame(width: r.width, height: r.height)
@@ -285,7 +289,7 @@ struct SidebarView: View {
     }
   }
 
-  private func projectRow(_ project: Project, plan: DragPlan?) -> some View {
+  private func projectRow(_ project: Project, offsets: [RowKey: CGFloat]) -> some View {
     let id = project.persistentModelID
     let row = sidebarRow(
       id: id, isSelected: { selection == .project(project) }, verticalPadding: 5
@@ -336,10 +340,10 @@ struct SidebarView: View {
       Divider()
       Button("Supprimer le projet", role: .destructive) { requestDelete(project) }
     }
-    return reorderable(row, key: .project(id), id: id, isProject: true, plan: plan)
+    return reorderable(row, key: .project(id), id: id, isProject: true, offsets: offsets)
   }
 
-  private func listRow(_ list: TodoList, plan: DragPlan?) -> some View {
+  private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat]) -> some View {
     let id = list.persistentModelID
     let row = sidebarRow(id: id, isSelected: { selection == .list(list) }) {
       selection = .list(list)
@@ -369,11 +373,11 @@ struct SidebarView: View {
     // L'indentation de 18 est posée APRÈS le wrapper de mesure : ainsi le cadre mesuré = la zone
     // exacte de la surbrillance de sélection (`sidebarRow`), pas la ligne + son retrait. C'est ce
     // cadre qui dimensionne le placeholder → il coïncide pile avec une liste sélectionnée.
-    return reorderable(row, key: .list(id), id: id, isProject: false, plan: plan)
+    return reorderable(row, key: .list(id), id: id, isProject: false, offsets: offsets)
       .padding(.leading, 18)
   }
 
-  private func addListRow(_ project: Project, plan: DragPlan?) -> some View {
+  private func addListRow(_ project: Project, offsets: [RowKey: CGFloat]) -> some View {
     let button = Button {
       addList(to: project)
     } label: {
@@ -394,7 +398,7 @@ struct SidebarView: View {
     // projet tiré, et sa hauteur doit entrer dans les écarts. Pendant N'IMPORTE QUEL drag (liste
     // ou projet), toutes les rangées « + Nouvelle liste » s'effacent — elles encombreraient le
     // déplacement. `opacity` (et pas un retrait) : elles gardent leur place dans le calcul d'écart.
-    return measured(button, key: .addList(project.persistentModelID), plan: plan)
+    return measured(button, key: .addList(project.persistentModelID), offsets: offsets)
       .opacity(dragID != nil ? 0 : 1)
       .animation(.easeInOut(duration: 0.2), value: dragID != nil)
   }
@@ -649,7 +653,18 @@ struct SidebarView: View {
   // laissait une fenêtre où une suppression en cascade (un projet emporte ses listes, qui
   // emportent leurs tâches) n'était pas encore sur le disque.
   private func delete(_ project: Project) {
-    if selection == .project(project) { selection = .smartList(.all) }
+    // La cascade emporte AUSSI les listes du projet : une liste sélectionnée devait être
+    // désélectionnée au même titre que le projet lui-même. Sans ça, la page de détail continuait
+    // d'afficher une liste qui n'existe plus — un fantôme lisible (SwiftData sert l'ancien
+    // instantané au lieu de planter) sur lequel taper créait des tâches dans le vide.
+    let doomed = Set(project.lists.map(\.persistentModelID))
+    let hitsSelection: Bool =
+      switch selection {
+      case .project(let p): p.persistentModelID == project.persistentModelID
+      case .list(let l): doomed.contains(l.persistentModelID)
+      default: false
+      }
+    if hitsSelection { selection = .smartList(.all) }
     modelContext.delete(project)
     try? modelContext.save()
   }
@@ -707,7 +722,9 @@ struct SidebarView: View {
   // changé de parent), puis les décalages retombent à 0 : rien ne saute.
 
   /// Enveloppe mesure + décalage d'une ligne NON empoignable (la rangée « + »), sans geste.
-  private func measured(_ content: some View, key: RowKey, plan: DragPlan?) -> some View {
+  private func measured(_ content: some View, key: RowKey, offsets: [RowKey: CGFloat])
+    -> some View
+  {
     content
       .background {
         GeometryReader { g in
@@ -716,11 +733,11 @@ struct SidebarView: View {
         }
       }
       .opacity(folding(key) ? 0 : 1)
-      .offset(offset(for: key, plan: plan))
+      .offset(offset(for: key, offsets: offsets))
       .zIndex(draggedKeys.contains(key) ? 1 : 0)
       .animation(
         draggedKeys.contains(key) ? nil : .snappy(duration: 0.22),
-        value: offset(for: key, plan: plan)
+        value: offset(for: key, offsets: offsets)
       )
       .animation(.easeInOut(duration: 0.2), value: folding(key))
   }
@@ -735,14 +752,15 @@ struct SidebarView: View {
 
   /// Idem `measured`, plus le soulevé (ombre/échelle de la ligne empoignée) et le geste de drag.
   private func reorderable(
-    _ content: some View, key: RowKey, id: PersistentIdentifier, isProject: Bool, plan: DragPlan?
+    _ content: some View, key: RowKey, id: PersistentIdentifier, isProject: Bool,
+    offsets: [RowKey: CGFloat]
   ) -> some View {
     let grabbed = dragID == id
     // `simultaneousGesture` + `minimumDistance` : un simple clic (sélection) et le double-clic
     // (renommage) posés par `sidebarRow` restent prioritaires ; le drag ne s'arme qu'au-delà du
     // seuil de mouvement. Sur macOS, un glisser dans une ScrollView ne la fait pas défiler → aucun
     // conflit avec le scroll.
-    return measured(content, key: key, plan: plan)
+    return measured(content, key: key, offsets: offsets)
       .scaleEffect(grabbed ? 1.02 : 1)
       .shadow(
         color: .black.opacity(grabbed ? 0.18 : 0), radius: grabbed ? 8 : 0, y: grabbed ? 4 : 0
@@ -818,41 +836,33 @@ struct SidebarView: View {
     return CGRect(x: f0.minX, y: minY, width: f0.width, height: maxY - minY)
   }
 
-  /// Plan du drag courant. `nil` hors drag (ou positions pas encore mesurées).
+  /// La mise en page du drag courant. `nil` hors drag (ou positions pas encore mesurées).
   ///
-  /// Repli façon en-tête (cf. TaskListView) : un PROJET tiré se réduit à son en-tête, qui seul
-  /// voyage ; ses listes + rangée « + » se replient (invisibles). `unit` = hauteur du placeholder
-  /// et pas d'écartement des voisines (l'en-tête pour un projet, la ligne pour une liste). `delta`
-  /// = ce que le bloc perd en se repliant → les lignes SOUS lui remontent d'autant.
-  private struct DragPlan {
-    var others: [RowKey]
-    var insert: Int
-    var groupStart: Int  // B : nb de lignes avant le groupe (dans l'espace `others`)
-    var unit: CGFloat
-    var delta: CGFloat
-    var firstFrame: CGRect
-  }
-
-  private func dragPlan() -> DragPlan? {
+  /// L'arithmétique (repli, écartement, trou) vit dans `ReorderLayout`, partagée avec la page d'une
+  /// liste : ce qui reste ici est ce que la sidebar SEULE sait — quelles lignes forment le groupe
+  /// tiré, et où il a le droit de se poser (cf. `projectInsert` / `listInsert`).
+  private func dragLayout() -> ReorderLayout<RowKey>? {
     guard dragID != nil, !draggedKeys.isEmpty,
       let groupRect = rect(of: draggedKeys),
       let firstFrame = rowFrames[draggedKeys[0]]
     else { return nil }
-    let phys = physicalRows
+    let rows = physicalRows
     let dragged = Set(draggedKeys)
-    guard let g0 = phys.firstIndex(where: { dragged.contains($0) }) else { return nil }
-    let others = phys.filter { !dragged.contains($0) }
-    let unit = dragIsProject ? firstFrame.height : groupRect.height
-    let delta = dragIsProject ? (groupRect.height - firstFrame.height) : 0
-    // Centre de l'élément qui VOYAGE (en-tête pour un projet, la ligne pour une liste) sous le curseur.
+    guard let origin = rows.firstIndex(where: { dragged.contains($0) }) else { return nil }
+    let others = rows.filter { !dragged.contains($0) }
+    // Le groupe voyage réduit à sa PREMIÈRE ligne : un projet laisse ses listes et sa rangée « + »
+    // se replier derrière lui, une liste est déjà seule. Pas de branche à écrire — pour une liste,
+    // le groupe se confond avec sa ligne, et le repli vaut donc 0 de lui-même.
+    let collapse = groupRect.height - firstFrame.height
+    // Centre de ce qui VOYAGE, sous le curseur.
     let center = firstFrame.midY + dragOffset.height
     let insert =
       dragIsProject
-      ? projectInsert(center: center, others: others, delta: delta, B: g0)
+      ? projectInsert(center: center, others: others, collapse: collapse, origin: origin)
       : listInsert(center: center, others: others)
-    return DragPlan(
-      others: others, insert: min(insert, others.count), groupStart: g0,
-      unit: unit, delta: delta, firstFrame: firstFrame)
+    return ReorderLayout(
+      others: others, origin: origin, insert: insert,
+      unit: firstFrame.height, collapse: collapse)
   }
 
   /// Insertion d'une LISTE : TOUJOURS dans la section-listes d'un projet (jamais au-dessus du
@@ -889,61 +899,42 @@ struct SidebarView: View {
     return insert
   }
 
-  /// Insertion d'un PROJET, dans l'espace REPLIÉ. On compare le centre de l'EN-TÊTE tiré au centre de
-  /// chaque autre bloc-projet ; les blocs SOUS le bloc tiré (index `s >= B` dans `others`) sont
-  /// d'abord remontés de `delta` (le bloc s'est replié). L'insertion se cale au DÉBUT d'un bloc.
-  private func projectInsert(center: CGFloat, others: [RowKey], delta: CGFloat, B: Int) -> Int {
+  /// Insertion d'un PROJET : au DÉBUT d'un bloc-projet, jamais au milieu. La politique est celle de
+  /// l'en-tête d'une page de liste — d'où `ReorderTarget.byBlockStart`, partagé avec elle. Ce qui
+  /// reste ici est l'ÉNUMÉRATION des blocs, que seule la sidebar sait faire (un bloc va d'un projet
+  /// au projet suivant, rangée « + » comprise).
+  private func projectInsert(center: CGFloat, others: [RowKey], collapse: CGFloat, origin: Int)
+    -> Int
+  {
     var starts: [Int] = []
     for (i, k) in others.enumerated() { if case .project = k { starts.append(i) } }
-    for (n, s) in starts.enumerated() {
+    var blocks: [(insert: Int, center: CGFloat)] = []
+    for (n, start) in starts.enumerated() {
       let end = n + 1 < starts.count ? starts[n + 1] : others.count
-      guard let r = rect(of: Array(others[s..<end])) else { continue }
-      let blockCenter = r.midY - (s >= B ? delta : 0)
-      if center < blockCenter { return s }
+      guard let r = rect(of: Array(others[start..<end])) else { continue }
+      // Un bloc situé SOUS le groupe tiré a déjà remonté du repli : comparer son centre de repos
+      // viserait un cran trop bas dès qu'on descend.
+      blocks.append((insert: start, center: r.midY - (start >= origin ? collapse : 0)))
     }
-    return others.count
+    return ReorderTarget.byBlockStart(center: center, blocks: blocks, fallback: others.count)
   }
 
-  /// Décalage vertical d'une ligne restante. Deux termes cumulés (branche en-tête de TaskListView) :
-  /// les lignes SOUS le bloc tiré remontent d'abord de `delta` (repli) ; puis celles entre l'ancienne
-  /// et la nouvelle place glissent de ±`unit` pour ouvrir le trou.
-  private func rowShift(_ key: RowKey, plan: DragPlan) -> CGFloat {
-    guard let j = plan.others.firstIndex(of: key) else { return 0 }
-    let (insert, B, unit, delta) = (plan.insert, plan.groupStart, plan.unit, plan.delta)
-    let fold: CGFloat = j >= B ? -delta : 0
-    let gap: CGFloat =
-      (insert < B && (insert..<B).contains(j))
-      ? unit
-      : (insert > B && (B..<insert).contains(j)) ? -unit : 0
-    return fold + gap
+  /// Le groupe tiré suit le curseur ; les autres prennent le décalage calculé une fois pour toutes
+  /// par `ReorderLayout.offsets()` (cf. `projectsGroup`).
+  private func offset(for key: RowKey, offsets: [RowKey: CGFloat]) -> CGSize {
+    if draggedKeys.contains(key) { return dragOffset }
+    return CGSize(width: 0, height: offsets[key] ?? 0)
   }
 
-  private func offset(for key: RowKey, plan: DragPlan?) -> CGSize {
-    if draggedKeys.contains(key) { return dragOffset }  // le groupe tiré suit le curseur
-    guard let plan else { return .zero }
-    return CGSize(width: 0, height: rowShift(key, plan: plan))
-  }
-
-  /// Rectangle du trou d'insertion (le placeholder), dans l'espace de la sidebar. Présent DÈS
-  /// l'empoignade, à l'emplacement d'origine (comme dans TaskListView) : la ligne s'en détache en
-  /// suivant le curseur, le trou reste visible et se déplace au fil du drag.
-  private func placeholderRect(plan: DragPlan) -> CGRect? {
-    let insert = plan.insert
-    let (B, unit, delta) = (plan.groupStart, plan.unit, plan.delta)
-    let gapTop: CGFloat
-    if insert == 0 {
-      // Haut de la zone = min sur TOUTES les lignes, tirée incluse (sinon, pour le PREMIER projet à
-      // sa place d'origine, on pointerait le 2e projet au lieu de sa propre place tout en haut).
-      let othersMin = plan.others.compactMap { rowFrames[$0]?.minY }.min() ?? plan.firstFrame.minY
-      gapTop = min(othersMin, plan.firstFrame.minY)
-    } else {
-      guard let f = rowFrames[plan.others[insert - 1]] else { return nil }
-      let j = insert - 1
-      let fold: CGFloat = j >= B ? -delta : 0
-      let gap: CGFloat = (insert > B && (B..<insert).contains(j)) ? -unit : 0
-      gapTop = f.minY + fold + gap + f.height
-    }
-    return CGRect(x: plan.firstFrame.minX, y: gapTop, width: plan.firstFrame.width, height: unit)
+  /// Rectangle du trou d'insertion, dans l'espace de la sidebar. Présent DÈS l'empoignade, à
+  /// l'emplacement d'origine : la ligne s'en détache en suivant le curseur, le trou reste visible et
+  /// se déplace au fil du drag. Sa hauteur est celle de ce qui voyage, sa largeur celle de la ligne
+  /// empoignée — le placement vertical, lui, vient de `ReorderLayout`.
+  private func placeholderRect(layout: ReorderLayout<RowKey>) -> CGRect? {
+    guard let first = draggedKeys.first, let frame = rowFrames[first],
+      let top = layout.placeholderTop(frames: rowFrames, draggedTop: frame.minY)
+    else { return nil }
+    return CGRect(x: frame.minX, y: top, width: frame.width, height: layout.unit)
   }
 
   /// Écrit l'ordre atteint (et le nouveau parent d'une liste) puis désarme le drag, le tout dans UNE
@@ -951,15 +942,15 @@ struct SidebarView: View {
   /// le réordonnancement et la retombée des offsets se produisent dans le même pas : les lignes sont
   /// déjà à leur cible, la bascule ordre↔offset ne saute pas (même mécanique que TaskListView).
   private func commitDrag() {
-    let plan = dragPlan()
+    let layout = dragLayout()
     let movedID = dragID
     let isProject = dragIsProject
     withAnimation(.snappy(duration: 0.22)) {
-      if let plan, let movedID {
+      if let layout, let movedID {
         if isProject {
-          commitProjectMove(movedID, plan: plan)
+          commitProjectMove(movedID, layout: layout)
         } else {
-          commitListMove(movedID, plan: plan)
+          commitListMove(movedID, layout: layout)
         }
       }
       dragID = nil
@@ -969,26 +960,26 @@ struct SidebarView: View {
     try? modelContext.save()
   }
 
-  private func commitProjectMove(_ id: PersistentIdentifier, plan: DragPlan) {
+  private func commitProjectMove(_ id: PersistentIdentifier, layout: ReorderLayout<RowKey>) {
     guard let moved = project(id) else { return }
     var order = sortedProjects.filter { $0.persistentModelID != id }
     // `insert` pointe le début d'un bloc-projet : le nombre de projets AVANT lui dans `others` est
     // la position cible parmi les projets restants.
-    let before = plan.others[0..<plan.insert].reduce(into: 0) { n, k in
+    let before = layout.others[0..<layout.insert].reduce(into: 0) { n, k in
       if case .project = k { n += 1 }
     }
     order.insert(moved, at: min(before, order.count))
     for (i, p) in order.enumerated() { p.sortIndex = i }
   }
 
-  private func commitListMove(_ id: PersistentIdentifier, plan: DragPlan) {
+  private func commitListMove(_ id: PersistentIdentifier, layout: ReorderLayout<RowKey>) {
     guard let moved = list(id) else { return }
     // Parent cible = dernier projet rencontré au-dessus du point d'insertion ; index = nombre de
     // listes comptées depuis ce projet (remis à zéro à chaque nouveau projet). Sans projet au-dessus
     // (insertion tout en haut), on rattache au premier projet.
     var targetID: PersistentIdentifier?
     var index = 0
-    for k in plan.others[0..<plan.insert] {
+    for k in layout.others[0..<layout.insert] {
       switch k {
       case .project(let pid):
         targetID = pid

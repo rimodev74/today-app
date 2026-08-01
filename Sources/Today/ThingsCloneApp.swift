@@ -10,6 +10,7 @@ struct TodayApp: App {
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
 
   init() {
+    CrashLog.install()  // en premier : tout ce qui suit peut lever
     Self.prewarmRichTextEditing()
     NSApplication.shared.setActivationPolicy(.regular)
     NSApplication.shared.activate(ignoringOtherApps: true)
@@ -17,7 +18,26 @@ struct TodayApp: App {
     // Saisie rapide : le raccourci global vit indépendamment des fenêtres (il doit répondre app en
     // arrière-plan), il est donc posé ici et pas dans une vue.
     GlobalHotKey.shared.action = { QuickEntryWindow.shared.toggle(container: Self.container) }
+    // Le pendant clavier des abréviations : la MÊME action, atteinte sans passer par la capsule.
+    // Une commande d'app emmène ailleurs et n'écrit rien ; un jeton de saisie (`@today`, `#Courses`)
+    // n'a de sens que sur une tâche, il ouvre donc la capsule (ou vise celle déjà ouverte).
+    GlobalHotKey.shared.perform = { token in
+      if let command = AppCommand(token: token) {
+        command.run()
+      } else {
+        QuickEntryWindow.shared.apply(token: token, container: Self.container)
+      }
+    }
     GlobalHotKey.shared.reload()
+    // La même bascule, atteignable depuis l'EXTÉRIEUR du process (Raccourcis, Raycast, un
+    // `osascript` d'une ligne). Le raccourci global, lui, passe par le serveur d'événements : rien
+    // hors d'une app ayant le droit « Accessibilité » ne peut le simuler, donc rien ne pouvait
+    // ouvrir la capsule par script — y compris pour la regarder pendant qu'on la travaille.
+    DistributedNotificationCenter.default().addObserver(
+      forName: .init(QuickEntryWindow.toggleNotification), object: nil, queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { QuickEntryWindow.shared.toggle(container: Self.container) }
+    }
   }
 
   /// La toute première fois qu'un champ de texte devient premier répondeur dans le process,
@@ -55,21 +75,33 @@ struct TodayApp: App {
     _ = offscreenWindow(textView)
   }
 
-  /// Le store est ouvert à travers `TodayMigrationPlan` : les changements de schéma passent
-  /// désormais par une migration déclarée (cf. `SchemaV1`), plus par une base repartie de zéro.
+  /// Ouvre un store avec le schéma et le plan de migration de l'app — SANS plan B : c'est
+  /// l'appelant qui décide quoi faire d'un échec. Le `container` ci-dessous met le store de côté et
+  /// repart à neuf ; les tests, eux, veulent voir l'erreur, c'est tout leur objet.
+  ///
+  /// SEUL endroit qui sait ouvrir un store de cette app, et c'est ce qui donne sa valeur à
+  /// `SchemaCompatibilityTests` : le test emprunte ce chemin-ci, pas une reconstitution qui
+  /// pourrait diverger en silence le jour où le schéma ou le plan change.
+  static func openStore(_ configuration: ModelConfiguration) throws -> ModelContainer {
+    try ModelContainer(
+      for: Schema(versionedSchema: CurrentSchema.self),
+      migrationPlan: TodayMigrationPlan.self,
+      configurations: configuration)
+  }
+
+  /// Le store de l'app. Ouvert à travers `TodayMigrationPlan` : les changements de schéma passent
+  /// par une migration déclarée (cf. `CurrentSchema`), plus par une base repartie de zéro.
   ///
   /// Le plan B ne SUPPRIME plus rien : un store illisible est mis de côté sous un nom horodaté
   /// (cf. `StoreQuarantine`) et l'app redémarre sur une base neuve. L'utilisateur voit une app
   /// vide — ce qui se remarque — au lieu de perdre son travail sans trace récupérable.
+  ///
   /// Non privé : le panneau de saisie rapide vit dans sa propre fenêtre AppKit, hors de l'arbre de
   /// vues, et doit s'adosser au MÊME container que la fenêtre principale.
   static let container: ModelContainer = {
-    let schema = Schema(versionedSchema: SchemaV1.self)
+    let schema = Schema(versionedSchema: CurrentSchema.self)
     let configuration = ModelConfiguration(schema: schema)
-    func open() throws -> ModelContainer {
-      try ModelContainer(
-        for: schema, migrationPlan: TodayMigrationPlan.self, configurations: configuration)
-    }
+    func open() throws -> ModelContainer { try openStore(configuration) }
     let container: ModelContainer
     do {
       container = try open()
@@ -150,6 +182,9 @@ struct TodayApp: App {
       SettingsView()
         .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
+    // Les raccourcis texte proposent les listes comme destination : cette Scene a besoin du MÊME
+    // container que la fenêtre principale, elle ne l'héritait pas.
+    .modelContainer(Self.container)
 
     MenuBarExtra {
       PomodoroMenuBarView()

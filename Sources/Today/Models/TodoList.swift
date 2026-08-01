@@ -43,14 +43,14 @@ final class TodoList {
   /// Nombre de tâches restantes (non complétées) — le badge de la sidebar.
   var remainingCount: Int { countableTasks.filter { !$0.isCompleted }.count }
 
-  /// Progression du travail EN COURS. Quand tout a été coché puis archivé, la liste est retombée à
-  /// zéro travail : l'anneau se vide comme pour une liste neuve, au lieu de rester un disque plein à
-  /// vie devant une page vide. Tant qu'il reste une tâche dans le flux, les archivées comptent
-  /// encore — c'est ce qui fait monter l'anneau, et le plein reste visible le temps que la dernière
-  /// cochée quitte la liste.
+  /// Progression du travail EN COURS : les archivées sortent du calcul, numérateur ET dénominateur.
+  /// L'anneau mesure ce que la PAGE montre — 29 tâches archivées derrière deux tâches à faire
+  /// donnaient un disque quasi plein devant une liste où rien n'est fait. Corollaire gratuit :
+  /// une liste entièrement archivée retombe à l'anneau vide, comme une liste neuve.
   var progress: Double {
-    guard countableTasks.contains(where: { !$0.isArchived }) else { return 0 }
-    return Double(countableTasks.filter(\.isCompleted).count) / Double(countableTasks.count)
+    let live = countableTasks.filter { !$0.isArchived }
+    guard !live.isEmpty else { return 0 }
+    return Double(live.filter(\.isCompleted).count) / Double(live.count)
   }
 
   /// Réglage (Réglages) : descendre automatiquement une tâche cochée en bas de sa section.

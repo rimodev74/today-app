@@ -3,9 +3,9 @@ import XCTest
 
 @testable import Today
 
-/// L'anneau d'une liste dont TOUT est archivé restait un disque plein à vie, devant une page vide.
-/// Ces tests fixent la règle : les archivées comptent tant qu'il reste du travail dans le flux, et
-/// plus du tout quand il n'en reste aucun.
+/// L'anneau doit mesurer le flux VISIBLE : les tâches archivées ne comptent ni au numérateur ni au
+/// dénominateur. Sans ça, une liste au long cours (trente archivées, deux à faire) affichait un
+/// disque quasi plein devant une page où rien n'est fait.
 final class ListProgressTests: XCTestCase {
   private var context: ModelContext!
 
@@ -52,12 +52,14 @@ final class ListProgressTests: XCTestCase {
     XCTAssertEqual(list.progress, 1)
   }
 
-  func testProgress_archivéesEtTâcheRestante_progressionInchangée() {
+  /// Les archivées ne comptent plus DU TOUT : l'anneau mesure ce que la page montre. Une liste où
+  /// il reste deux tâches à faire derrière trente archivées est une liste où rien n'est fait.
+  func testProgress_archivéesIgnorées_seulLeFluxCompte() {
     let list = TodoList(title: "Courses")
     context.insert(list)
     addTask(to: list, completed: true)
     addTask(to: list, completed: false)
-    XCTAssertEqual(list.progress, 0.5)
+    XCTAssertEqual(list.progress, 0)
   }
 
   /// « Ne jamais les masquer » : rien ne quitte le flux, donc le disque plein reste — c'est

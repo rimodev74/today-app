@@ -61,6 +61,47 @@ struct QuickEntry {
     return (remaining, entry)
   }
 
+  /// Raccourci texte validé par Tab. Renvoie ce qui PRÉCÈDE le déclencheur et le raccourci trouvé,
+  /// parce que tous les raccourcis ne s'écrivent pas : un jeton de saisie rapide se recolle au
+  /// texte (`applying`), une commande d'app (`!today`, cf. `AppCommand`) s'exécute et n'y laisse
+  /// rien. Le parseur, lui, ne connaît que `@` et `#` — c'est à l'appelant de trancher.
+  ///
+  /// `nil` si le dernier mot n'est pas un déclencheur : Tab retourne alors à son usage normal
+  /// (ouvrir les notes, passer au champ suivant) plutôt que d'être avalé.
+  static func expanding(_ text: String, shortcuts: [TextShortcut])
+    -> (before: String, shortcut: TextShortcut)?
+  {
+    let start = text.lastIndex(where: \.isWhitespace).map(text.index(after:)) ?? text.startIndex
+    let word = fold(String(text[start...]))
+    guard !word.isEmpty else { return nil }
+    guard let shortcut = shortcuts.first(where: { fold($0.trigger) == word }) else { return nil }
+    return (String(text[..<start]), shortcut)
+  }
+
+  /// Le texte à réafficher pour un raccourci qui S'ÉCRIT. L'espace final n'est pas cosmétique :
+  /// c'est lui qui fait passer le jeton par `consuming`, donc la pastille apparaît par le chemin
+  /// habituel. Il vit ici, en un seul endroit, plutôt que chez chaque appelant.
+  static func applying(_ match: (before: String, shortcut: TextShortcut)) -> String {
+    match.before + match.shortcut.expansion + " "
+  }
+
+  /// Le raccourci posé en fin de texte, résolu — l'entrée unique pour les vues. Un jeton se recolle
+  /// au texte, une commande d'app en SORT pour que l'appelant l'exécute lui-même (le modèle ne
+  /// bouge pas de fenêtre).
+  ///
+  /// Passe par ici tout ce qui valide une saisie, pas seulement ⇥ : Entrée doit reconnaître un
+  /// raccourci elle aussi, sinon « op » seul part en tâche nommée « op » au lieu d'ouvrir la page
+  /// demandée. `nil` = pas de raccourci en fin de texte, l'appelant garde sa touche.
+  static func resolving(_ text: String, shortcuts: [TextShortcut]) -> (
+    text: String, command: AppCommand?
+  )? {
+    guard let match = expanding(text, shortcuts: shortcuts) else { return nil }
+    guard let command = AppCommand(token: match.shortcut.expansion) else {
+      return (applying(match), nil)
+    }
+    return (match.before, command)
+  }
+
   // MARK: Destinations
 
   /// Comparaison insensible à la casse, aux accents ET aux espaces : `#malist` trouve « Ma Liste »

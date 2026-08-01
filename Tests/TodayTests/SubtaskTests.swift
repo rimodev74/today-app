@@ -16,8 +16,10 @@ final class SubtaskTests: XCTestCase {
     let task = TaskItem(title: "T")
     ctx.insert(task)
 
-    let a = task.addSubtask(); a.title = "a"
-    let b = task.addSubtask(); b.title = "b"
+    let a = task.addSubtask()
+    a.title = "a"
+    let b = task.addSubtask()
+    b.title = "b"
 
     XCTAssertEqual(task.orderedSubtasks.map(\.title), ["a", "b"])
     XCTAssertEqual(b.sortIndex, a.sortIndex + 1)
@@ -28,8 +30,10 @@ final class SubtaskTests: XCTestCase {
     let task = TaskItem(title: "T")
     ctx.insert(task)
 
-    let a = task.addSubtask(); a.title = "a"
-    let b = task.addSubtask(); b.title = "b"
+    let a = task.addSubtask()
+    a.title = "a"
+    let b = task.addSubtask()
+    b.title = "b"
     b.sortIndex = -5  // b passe devant
 
     XCTAssertEqual(task.orderedSubtasks.map(\.title), ["b", "a"])

@@ -1,0 +1,88 @@
+import AppKit
+import SwiftUI
+
+/// Ce qu'un raccourci texte déclenche DANS l'app, par opposition à ce qu'il pose sur la tâche en
+/// train de s'écrire (une date, une destination). « Afficher Aujourd'hui » n'écrit rien : la frappe
+/// emmène quelque part, puis la capsule se retire.
+///
+/// Le sigil `!` sépare les deux familles dans `TextShortcut.expansion` : `@` et `#` partent au
+/// parseur de saisie rapide, `!` ne l'atteint jamais. Un raccourci reste donc une simple chaîne, et
+/// les trois familles tiennent dans un seul menu.
+enum AppCommand: String, CaseIterable, Identifiable {
+  case show
+  case all
+  case today
+  case upcoming
+  case archive
+
+  var id: String { rawValue }
+  var token: String { "!" + rawValue }
+
+  var label: String {
+    switch self {
+    case .show: return "Afficher l'application"
+    case .all: return "Afficher Tâches"
+    case .today: return "Afficher Aujourd'hui"
+    case .upcoming: return "Afficher À venir"
+    case .archive: return "Afficher Archives"
+    }
+  }
+
+  /// L'onglet à poser, ou `nil` pour « ramène l'app et ne touche à rien ».
+  var smartList: SmartList? {
+    switch self {
+    case .show: return nil
+    case .all: return .all
+    case .today: return .today
+    case .upcoming: return .upcoming
+    case .archive: return .archive
+    }
+  }
+
+  init?(token: String) {
+    guard token.hasPrefix("!") else { return nil }
+    self.init(rawValue: String(token.dropFirst()))
+  }
+
+  /// Le canal vers `ContentView`, seul détenteur de la sélection (un `@State` privé). Une
+  /// notification et pas un objet partagé : la capsule de saisie rapide vit dans sa propre fenêtre
+  /// AppKit, hors de l'arbre de vues, et n'a aucun autre moyen d'atteindre cet état.
+  static let selectionNotification = Notification.Name("app.today.selectSmartList")
+
+  /// Le relais pour la fenêtre qui n'existe pas encore. `activate` peut RECRÉER la fenêtre
+  /// principale (elle avait été fermée au bouton rouge) : la notification part alors avant que la
+  /// `ContentView` neuve ne se soit abonnée, et se perdrait. Elle la lit à son apparition.
+  @MainActor static var pendingSelection: SmartList?
+
+  @MainActor func run() {
+    activate()
+    guard let smartList else { return }
+    Self.pendingSelection = smartList
+    NotificationCenter.default.post(name: Self.selectionNotification, object: smartList)
+  }
+
+  /// Ramène Today au premier plan, exactement comme un clic sur son icône du Dock — y compris quand
+  /// la fenêtre a été fermée au bouton rouge.
+  @MainActor private func activate() {
+    NSApp.activate(ignoringOtherApps: true)
+    // Les fenêtres hors sujet s'écartent d'elles-mêmes : la capsule de saisie rapide et le
+    // `MenuBarExtra` sont sans bordure, donc jamais `canBecomeMain`.
+    guard let window = NSApp.windows.first(where: \.canBecomeMain) else {
+      // Fermée au bouton rouge, la fenêtre ne SURVIT PAS dans `NSApp.windows` : SwiftUI la détruit,
+      // il n'y a rien à ramener, il faut la recréer. Seul AppKit sait remonter une scène
+      // `WindowGroup`, et le clic Dock est son unique déclencheur public — d'où la demande
+      // d'ouverture sur notre propre bundle, qui le rejoue pour de vrai (LaunchServices envoie le
+      // reopen, AppKit exécute son comportement par défaut, SwiftUI rouvre).
+      // Appeler `applicationShouldHandleReopen` à la main ne suffit PAS : le délégué SwiftUI répond
+      // « oui, comportement par défaut » à un AppKit qui n'écoute pas — la fenêtre ne revenait jamais.
+      NSWorkspace.shared.openApplication(
+        at: Bundle.main.bundleURL, configuration: NSWorkspace.OpenConfiguration())
+      return
+    }
+    if window.isMiniaturized {
+      window.deminiaturize(nil)
+    } else {
+      window.makeKeyAndOrderFront(nil)
+    }
+  }
+}

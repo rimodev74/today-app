@@ -233,9 +233,10 @@ struct TaskListView: View {
       TodayPageView(searchPresented: $searchPresented)
     case .smartList(.upcoming):
       UpcomingPageView(searchPresented: $searchPresented)
-    case .smartList(let smart):
-      comingSoon(smart.label, searchPresented: $searchPresented)
     case nil:
+      // Aucune destination : le seul état sans page. `selection` démarre sur « Aujourd'hui » et
+      // rien ne la remet à nil aujourd'hui — la branche existe parce que le type l'autorise, pas
+      // parce qu'un chemin y mène.
       comingSoon("Sélectionne une liste", searchPresented: $searchPresented)
     }
   }
@@ -269,8 +270,11 @@ private struct ListPageView: View {
   @State private var drafts: [String: String] = [:]
   /// Jetons de saisie rapide déjà sortis du texte et affichés en pastilles, par bloc.
   @State private var draftTokens: [String: DraftTokens] = [:]
-  @State private var selectedID: PersistentIdentifier?
-  @State private var editingID: PersistentIdentifier?
+  @AppStorage(TextShortcut.storageKey) private var shortcutData = Data()
+  /// Sélection (clic) et édition (clic sur une ligne déjà sélectionnée) — c'est `TaskRow` qui les
+  /// consomme. Même type que « Aujourd'hui » et « Tâches » (cf. `TaskFocus`) : les transitions y sont
+  /// écrites une fois, les courbes restent ici.
+  @State private var focus = TaskFocus()
   // En-tête en attente de confirmation de suppression (non nil ⇒ alerte affichée). Elle ne passe
   // par l'alerte QUE si elle porte des tâches ; vide, la suppression est immédiate.
   @State private var headerDeletionCandidate: TaskItem?
@@ -298,7 +302,7 @@ private struct ListPageView: View {
   // Position de repos mesurée de CHAQUE ligne physique, tâche/en-tête RÉELLE (`.task`) ou champ
   // « Nouvelle tâche » VIRTUEL (`.field`, cf. `RowKey`) — un champ n'est jamais un cas à part, juste
   // une ligne non déplaçable de plus dans la même séquence et le même calcul de décalage
-  // (`dragTargets`). `draggedFieldHeight` = hauteur du champ du bloc tiré, figée à l'empoignade
+  // (`dragState`). `draggedFieldHeight` = hauteur du champ du bloc tiré, figée à l'empoignade
   // (entre dans le repli d'une en-tête tirée).
   @State private var rowFrames: [RowKey: CGRect] = [:]
   @State private var draggedFieldHeight: CGFloat = 0
@@ -326,8 +330,11 @@ private struct ListPageView: View {
     // Position de repos cible de chaque ligne pendant un drag (trou ouvert sous le curseur) — tâche,
     // en-tête OU champ « Nouvelle tâche » (cf. `RowKey`) : les trois partagent le même calcul, donc
     // la même table. Vide hors drag : chaque ligne reste alors à son offset 0.
-    let targets = dragTargets()
-    let placeholder = dragPlaceholderRect()
+    let state = dragState()
+    // Calculés UNE fois par rendu et distribués aux lignes : chaque rangée devait sinon se chercher
+    // elle-même dans la séquence, soit un balayage quadratique à chaque image de glissement.
+    let offsets = state?.rows.offsets() ?? [:]
+    let placeholder = state.flatMap(dragPlaceholderRect)
     return GeometryReader { geo in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -343,20 +350,20 @@ private struct ListPageView: View {
           // la tâche à la fin de CE bloc (avant l'en-tête suivante), pas tout en bas de la liste.
           ForEach(blocks) { block in
             if let header = block.header {
-              draggableRow(for: header, targets: targets)
+              draggableRow(for: header, offsets: offsets)
             }
             ForEach(block.tasks) { task in
-              draggableRow(for: task, targets: targets)
+              draggableRow(for: task, offsets: offsets)
             }
             // Pendant N'IMPORTE QUEL drag (en-tête OU tâche), TOUS les champs « Nouvelle tâche »
             // disparaissent : ils encombreraient le déplacement. Restent MONTÉS (juste rendus
-            // invisibles par opacité, pas retirés de l'arbre) : `rowFrames`/`dragTargets` sont GELÉS
+            // invisibles par opacité, pas retirés de l'arbre) : `rowFrames`/`dragState` sont GELÉS
             // à l'empoignade en supposant que chaque ligne (champs compris) garde sa place dans la
             // mise en page — les retirer aurait fait s'effondrer cet espace pendant TOUT le drag et
             // cassé le calcul du trou d'insertion (le placeholder).
             //
             // Le décalage vient de `fieldOffset` — EXACTEMENT `rowOffset`, pour un champ : au drop,
-            // la position CIBLE (anticipée dès le live-drag, cf. `dragTargets`) devient la position
+            // la position CIBLE (anticipée dès le live-drag, cf. `dragState`) devient la position
             // RÉELLE (le tri l'a rendue vraie) et le décalage retombe à 0 sans aucun saut, puisque
             // affichée et réelle coïncidaient déjà. Un champ n'est plus un cas à part : c'est cette
             // continuité, pas une astuce d'animation, qui rend sa révélation instantanée et fiable.
@@ -372,18 +379,18 @@ private struct ListPageView: View {
               .opacity(draggingID != nil ? 0 : 1)
               .offset(
                 x: blockLifted ? dragOffset.width : 0,
-                y: blockLifted ? dragOffset.height : fieldOffset(for: block, targets: targets)
+                y: blockLifted ? dragOffset.height : fieldOffset(for: block, offsets: offsets)
               )
               .zIndex(blockLifted ? 1 : 0)
               .animation(
                 blockLifted ? nil : .snappy(duration: 0.22),
-                value: fieldOffset(for: block, targets: targets)
+                value: fieldOffset(for: block, offsets: offsets)
               )
               .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
               .pageReveal()
           }
 
-          // Repliée pendant un drag : elle n'entre pas dans `rowFrames`/`dragTargets` (gelés à
+          // Repliée pendant un drag : elle n'entre pas dans `rowFrames`/`dragState` (gelés à
           // l'empoignade), une ouverture en cours de drag décalerait le calcul du trou.
           if draggingID == nil {
             dormantSummary.pageReveal()
@@ -429,7 +436,7 @@ private struct ListPageView: View {
     // au niveau fenêtre, sans dépendre du focus — contrairement à `.onExitCommand` sur la ligne,
     // qui exige qu'un champ interne soit premier répondeur.
     .background {
-      if editingID != nil {
+      if focus.editing != nil {
         Button("", action: dismissEditing)
           .keyboardShortcut(.cancelAction)
           .hidden()
@@ -454,7 +461,7 @@ private struct ListPageView: View {
     // qu'un VRAI champ de texte a le focus (cf. son check `NSText`), pour ne jamais lui voler ⌫.
     .background {
       DeleteKeyMonitor(
-        isActive: { editingID == nil && selectedID != nil },
+        isActive: { focus.hasIdleSelection },
         action: requestDeleteSelected
       )
     }
@@ -483,8 +490,7 @@ private struct ListPageView: View {
     // ou un brouillon (le bloc « top » partage sa clé entre listes) déborderaient sur la suivante.
     .onChange(of: list.persistentModelID) {
       drafts = [:]
-      selectedID = nil
-      editingID = nil
+      focus.dismiss()
       notesFocused = false
       focusedDraft = nil
       // « Quitter la liste » : ce changement EST la sortie de page (la vue n'est pas recréée).
@@ -505,14 +511,14 @@ private struct ListPageView: View {
 
   /// L'en-tête actuellement sélectionnée (et non en cours d'édition), ou nil.
   private var selectedHeader: TaskItem? {
-    guard let id = selectedID else { return nil }
+    guard let id = focus.selected else { return nil }
     return list.tasks.first { $0.persistentModelID == id && $0.isHeader }
   }
 
   /// Bloc contenant la sélection courante (tâche ou en-tête), ou nil hors sélection. Cible du
   /// « + » de la toolbar : insérer dans le bloc qu'on regarde, pas systématiquement le dernier.
   private var selectedBlockID: String? {
-    guard let id = selectedID else { return nil }
+    guard let id = focus.selected else { return nil }
     return blocks.first { block in
       block.header?.persistentModelID == id || block.tasks.contains { $0.persistentModelID == id }
     }?.id
@@ -537,7 +543,8 @@ private struct ListPageView: View {
   /// ⌫ sur la sélection courante : délègue à la confirmation d'en-tête si elle en est une, sinon
   /// supprime la tâche directement (pas de tâches rattachées à protéger, contrairement à l'en-tête).
   private func requestDeleteSelected() {
-    guard let id = selectedID, let task = list.tasks.first(where: { $0.persistentModelID == id })
+    guard let id = focus.selected,
+      let task = list.tasks.first(where: { $0.persistentModelID == id })
     else { return }
     if task.isHeader {
       requestDeleteSelectedHeader()
@@ -703,13 +710,13 @@ private struct ListPageView: View {
 
   /// Enveloppe drag/drop d'une ligne (en-tête ou tâche), mutualisée entre les deux : mesure de la
   /// position de repos, décalage/soulevé pendant le drag, et le geste unique de la page.
-  private func draggableRow(for task: TaskItem, targets: [RowKey: CGFloat])
+  private func draggableRow(for task: TaskItem, offsets: [RowKey: CGFloat])
     -> some View
   {
     // `lifted` = cette ligne fait partie du groupe tiré (bloc entier pour une en-tête) → elle se
     // soulève. `grabbed` = c'est LA ligne empoignée → elle porte l'ancre du léger agrandissement.
     // `folding` = une tâche du bloc dont on tire l'en-tête : elle s'estompe (se replie dans le
-    // bloc), seule l'en-tête reste visible pendant le transport (cf. `dragTargets`, le repli Δ).
+    // bloc), seule l'en-tête reste visible pendant le transport (cf. `ReorderLayout.collapse`).
     let lifted = draggedGroup.contains { $0.persistentModelID == task.persistentModelID }
     let grabbed = draggingID == task.persistentModelID
     let folding = lifted && !task.isHeader && draggedGroup.first?.isHeader == true
@@ -718,7 +725,7 @@ private struct ListPageView: View {
       // Carte éditée : marge basse pour ne pas coller la ligne suivante (ou « Nouvelle tâche »).
       // Pas pour une en-tête : elle n'a pas de carte de notes qui s'étend, la marge ne ferait
       // qu'ajouter un vide sous sa pilule.
-      .padding(.bottom, editingID == task.persistentModelID && !task.isHeader ? 12 : 0)
+      .padding(.bottom, focus.isEditing(task) && !task.isHeader ? 12 : 0)
       // Position de repos mesurée, pour calculer où ouvrir le trou pendant un drag.
       .background {
         GeometryReader { g in
@@ -731,7 +738,7 @@ private struct ListPageView: View {
       // La ligne empoignée se soulève et suit le curseur en 2D ; les autres s'écartent verticalement.
       // MÊME vue du début à la fin — pas d'instantané façon `.onDrag`, donc rien ne saute au drop.
       .opacity(folding ? 0 : 1)
-      .offset(rowOffset(for: task, targets: targets))
+      .offset(rowOffset(for: task, offsets: offsets))
       .scaleEffect(lifted ? 1.03 : 1, anchor: grabbed ? dragAnchor : .center)
       // Ombre de soulevé pour une TÂCHE tirée. Pas pour une tâche qui se replie (elle s'estompe), ni
       // pour une en-tête tirée : sa pile (en-tête + calques) porte ses propres ombres dans `HeaderRow`
@@ -745,7 +752,7 @@ private struct ListPageView: View {
       // Les lignes tirées collent au curseur (aucune animation) ; les voisines glissent.
       .animation(
         lifted ? nil : .snappy(duration: 0.22),
-        value: rowOffset(for: task, targets: targets)
+        value: rowOffset(for: task, offsets: offsets)
       )
       .animation(.easeOut(duration: 0.15), value: lifted)
       .animation(.easeInOut(duration: 0.2), value: folding)
@@ -755,7 +762,7 @@ private struct ListPageView: View {
       // En édition, `.subviews` désactive ce geste : les clics/glissers vont au champ texte.
       .gesture(
         dragGesture(for: task),
-        including: editingID == task.persistentModelID ? .subviews : .all
+        including: focus.isEditing(task) ? .subviews : .all
       )
       // Posé sur la LIGNE et non sur un `Group` englobant : un modificateur sur le `ForEach` d'un
       // `LazyVStack` risque de lui faire évaluer d'un coup toutes ses rangées — la lenteur qu'on
@@ -765,14 +772,14 @@ private struct ListPageView: View {
 
   /// En-tête de section ou tâche : deux rendus distincts, même enveloppe drag/drop (posée par
   /// l'appelant). L'en-tête a désormais, comme la tâche, un état repos (titre en lecture) et un état
-  /// édition (double-clic), pilotés par `editingID`.
+  /// édition (double-clic), pilotés par `focus`.
   @ViewBuilder
   private func row(for task: TaskItem) -> some View {
     if task.isHeader {
       HeaderRow(
         task: task,
-        isSelected: selectedID == task.persistentModelID,
-        isEditing: editingID == task.persistentModelID,
+        isSelected: focus.isSelected(task),
+        isEditing: focus.isEditing(task),
         isDragging: draggingID == task.persistentModelID,
         // Nombre RÉEL de tâches rattachées (badge rouge) ; les calques, eux, sont plafonnés à 3.
         attachedTaskCount: draggingID == task.persistentModelID ? draggedGroup.count - 1 : 0,
@@ -785,8 +792,8 @@ private struct ListPageView: View {
     } else {
       TaskRow(
         task: task,
-        isSelected: selectedID == task.persistentModelID,
-        isEditing: editingID == task.persistentModelID,
+        isSelected: focus.isSelected(task),
+        isEditing: focus.isEditing(task),
         moveTargets: allLists.filter { $0.persistentModelID != list.persistentModelID },
         onBeginEditing: { beginEditing(task) },
         onEndEditing: { endEditing(task) },
@@ -805,8 +812,7 @@ private struct ListPageView: View {
   /// surbrillance réagit donc au contact, comme une sélection native, tout en gardant son fondu.
   private func select(_ task: TaskItem) {
     withAnimation(taskSelectFade) {
-      editingID = nil
-      selectedID = task.persistentModelID
+      focus.select(task)
     }
     // Quitte tout focus texte en cours (« Nouvelle tâche », titre de page, notes) : sinon ce champ
     // reste le VRAI premier répondeur AppKit même une fois la tâche sélectionnée, et ⌫ lui est
@@ -820,8 +826,7 @@ private struct ListPageView: View {
   /// Double-clic : passe en édition.
   private func beginEditing(_ task: TaskItem) {
     withAnimation(taskFlow) {
-      selectedID = task.persistentModelID
-      editingID = task.persistentModelID
+      focus.edit(task)
     }
     // Cf. `select()` : au cas où la tâche était déjà sélectionnée AVANT ce clic (ce geste n'entre
     // alors jamais dans `select()`, cf. `dragGesture`), on quitte quand même tout focus texte
@@ -843,12 +848,9 @@ private struct ListPageView: View {
 
   /// Fin d'édition (Entrée / Échap / clic à l'extérieur) : repasse en état « normal ».
   private func endEditing(_ task: TaskItem) {
-    guard editingID == task.persistentModelID else { return }
+    guard focus.isEditing(task) else { return }
     applyQuickEntry(to: task)
-    withAnimation(taskFlow) {
-      editingID = nil
-      selectedID = nil
-    }
+    withAnimation(taskFlow) { focus.endEditing(task) }
   }
 
   /// Applique la saisie rapide (`@demain`, `#Courses`) au titre d'une tâche qu'on vient d'éditer.
@@ -867,8 +869,7 @@ private struct ListPageView: View {
     {
       // La tâche quitte la page affichée : purge sélection/édition qui pointeraient dessus
       // (même précaution que `moveHeader`).
-      if selectedID == task.persistentModelID { selectedID = nil }
-      if editingID == task.persistentModelID { editingID = nil }
+      focus.forget(task)
       move(task, to: destination)
     }
     try? modelContext.save()
@@ -884,12 +885,11 @@ private struct ListPageView: View {
 
   /// Ferme l'édition en cours, quelle que soit la tâche (Échap au niveau fenêtre, clic dehors).
   private func dismissEditing() {
-    if let editing = list.tasks.first(where: { $0.persistentModelID == editingID }) {
+    if let editing = list.tasks.first(where: { $0.persistentModelID == focus.editing }) {
       applyQuickEntry(to: editing)
     }
     withAnimation(taskFlow) {
-      editingID = nil
-      selectedID = nil
+      focus.dismiss()
     }
   }
 
@@ -904,7 +904,7 @@ private struct ListPageView: View {
     // résignation de premier répondeur AppKit ENTRE le mouseDown et le mouseUp du contrôle visé.
     // Le contrôle perdait le suivi de son appui : son action ne partait pas, et il fallait
     // cliquer une seconde fois (là où l'état, déjà vide, ne provoquait plus rien).
-    guard editingID != nil || selectedID != nil || focusedDraft != nil || notesFocused
+    guard !focus.isIdle || focusedDraft != nil || notesFocused
     else { return }
     let insideRow = blocks.contains { block in
       if let header = block.header,
@@ -945,7 +945,7 @@ private struct ListPageView: View {
 
   /// Ligne physique de la page : une tâche/en-tête RÉELLE, ou le champ « Nouvelle tâche » VIRTUEL de
   /// fin de bloc. Les deux partagent le MÊME mécanisme de mesure/décalage (`rowFrames`,
-  /// `dragTargets`) : un champ n'est jamais un cas spécial à calculer à la main, juste une ligne non
+  /// `dragState`) : un champ n'est jamais un cas spécial à calculer à la main, juste une ligne non
   /// déplaçable de plus dans la séquence — c'est cette uniformité qui lui garantit une continuité
   /// exacte au drop (même principe que la rangée « + Nouvelle liste » de la sidebar, cf.
   /// `SidebarView.RowKey.addList`, qui participe déjà à son propre moteur de réordonnancement).
@@ -956,7 +956,7 @@ private struct ListPageView: View {
 
   /// Séquence physique complète, dans l'ordre d'affichage : chaque bloc = son en-tête (s'il y en a
   /// une), ses tâches, puis son champ « Nouvelle tâche ». Base commune du calcul de décalage pour
-  /// les tâches ET les champs (cf. `dragTargets`).
+  /// les tâches ET les champs (cf. `dragState`).
   private var physicalRows: [RowKey] {
     var rows: [RowKey] = []
     for block in blocks {
@@ -995,197 +995,140 @@ private struct ListPageView: View {
     return block.height - hf.height + draggedFieldHeight
   }
 
-  /// Index d'insertion du groupe tiré parmi les autres lignes, d'après son centre projeté sous le
-  /// curseur. `nil` si aucun drag en cours (ou positions pas encore mesurées).
+  /// Tout ce que le glissement courant produit, en une seule passe. `nil` hors drag (ou tant que
+  /// les positions ne sont pas mesurées).
   ///
-  /// Deux régimes selon ce qu'on empoigne :
-  /// - **une tâche** : insertion ligne à ligne, par FRONTIÈRES (mi-chemin entre centres voisins) ;
-  ///   le placeholder bascule dès un demi-recouvrement.
-  /// - **une en-tête** : insertion BLOC à BLOC, dans l'espace REPLIÉ. Le bloc tiré ne vaut plus que
-  ///   son en-tête (les tâches se sont estompées) ; on compare le centre de l'en-tête aux centres
-  ///   des blocs restants, corrigés du repli (ceux SOUS le bloc tiré sont remontés de Δ). Sous tous
-  ///   les centres → fin de liste. Le placeholder ne se cale qu'aux frontières d'en-têtes.
+  /// DEUX espaces d'index, et c'est délibéré :
   ///
-  /// Rendu en TÂCHES (`[TaskItem]`), pas en `RowKey` : c'est l'espace où `sortIndex` s'écrit
-  /// (`endDrag`). `dragTargets`/`fieldOffset` traduisent ce plan vers l'espace `RowKey` (qui inclut
-  /// les champs) quand il leur faut positionner autre chose qu'une tâche.
-  private func dragInsertion() -> (dragged: [TaskItem], others: [TaskItem], index: Int)? {
+  /// - `rows` — les lignes PHYSIQUES (tâches, en-têtes ET champs « Nouvelle tâche ») : c'est là que
+  ///   se calculent les décalages. Un champ y participe comme n'importe quelle autre ligne, sans
+  ///   traitement séparé — c'est cette uniformité, et pas une astuce d'animation, qui lui donne une
+  ///   continuité exacte au drop ;
+  /// - `tasks` — les seules TÂCHES : c'est là que s'ancre le trou d'insertion et que s'écrit
+  ///   l'ordre. Le trou doit se caler sous une tâche, jamais sous un champ (invisible pendant le
+  ///   transport, il le poserait un cran trop bas), et `sortIndex` ne numérote que des tâches.
+  ///
+  /// Un drag d'EN-TÊTE n'a qu'un espace : ses voisines se calculent en tâches seulement, les champs
+  /// des autres blocs restant simplement invisibles. Les deux mises en page sont alors la même.
+  private struct DragState {
+    let dragged: [TaskItem]
+    let others: [TaskItem]
+    let rows: ReorderLayout<RowKey>
+    let tasks: ReorderLayout<RowKey>
+  }
+
+  private func dragState() -> DragState? {
     guard draggingID != nil, let first = draggedGroup.first,
-      let groupF = groupRect(draggedGroup)
+      let dragFrame = rowFrames[.task(first.persistentModelID)],
+      let groupFrame = groupRect(draggedGroup)
     else { return nil }
     let ordered = list.orderedTasks
     let draggedIDs = Set(draggedGroup.map(\.persistentModelID))
     let others = ordered.filter { !draggedIDs.contains($0.persistentModelID) }
+    guard
+      let origin = ordered.firstIndex(where: { $0.persistentModelID == first.persistentModelID })
+    else { return nil }
+    let otherKeys = others.map { RowKey.task($0.persistentModelID) }
+    // Ce qui VOYAGE : l'en-tête seule pour un bloc, la ligne pour une tâche. Dans les deux cas la
+    // première ligne du groupe — d'où une seule expression, sans branche.
+    let unit = dragFrame.height
 
     if first.isHeader {
-      guard let hf = rowFrames[.task(first.persistentModelID)],
-        let di = blocks.firstIndex(where: {
-          $0.header?.persistentModelID == first.persistentModelID
-        })
-      else { return nil }
-      let delta = blockDelta ?? 0
-      // Centre de l'EN-TÊTE (le bloc replié ne fait plus que sa hauteur) sous le curseur.
-      let center = hf.midY + dragOffset.height
-      var flat = others.count
-      for (bi, b) in blocks.enumerated() {
-        if bi == di { continue }  // le bloc tiré n'est pas dans `others`
-        guard let r = groupRect(b.items) else { continue }
-        // Un bloc entier est soit tout au-dessus, soit tout au-dessous du bloc tiré : son centre
-        // replié remonte de Δ s'il est en dessous.
-        let blockCenter = r.midY - (bi > di ? delta : 0)
-        guard center < blockCenter else { continue }
-        // Index dans `others`, PAS un cumul de `rowCount` : `blocks` a écarté les tâches archivées
-        // (cf. `isArchived`) alors qu'`others` les contient — additionner les lignes visibles
-        // donnait un index trop petit d'autant de tâches cochées, et l'en-tête se posait trop haut.
-        flat =
-          others.firstIndex { $0.persistentModelID == b.items.first?.persistentModelID }
-          ?? others.count
-        break
-      }
-      return (draggedGroup, others, min(flat, others.count))
+      let collapse = blockDelta ?? 0
+      let insert = headerInsert(
+        center: dragFrame.midY + dragOffset.height, others: others, collapse: collapse,
+        origin: origin)
+      let layout = ReorderLayout(
+        others: otherKeys, origin: origin, insert: insert, unit: unit, collapse: collapse)
+      return DragState(dragged: draggedGroup, others: others, rows: layout, tasks: layout)
     }
 
-    let center = groupF.midY + dragOffset.height
-    var index = ordered.count
-    for i in ordered.indices {
-      guard let f = rowFrames[.task(ordered[i].persistentModelID)] else { continue }
-      let nextMid =
-        i + 1 < ordered.count ? rowFrames[.task(ordered[i + 1].persistentModelID)]?.midY : nil
-      let boundary = nextMid.map { ($0 + f.midY) / 2 } ?? .greatestFiniteMagnitude
-      if center < boundary {
-        index = i
-        break
-      }
-    }
-    return (draggedGroup, others, min(index, others.count))
-  }
+    // Tâche : visée ligne à ligne, sur la séquence de repos COMPLÈTE — la tâche tirée y comprise,
+    // dont le créneau sert de pivot (cf. `ReorderTarget.byBoundary`).
+    let tasks = ReorderLayout(
+      others: otherKeys, origin: origin,
+      insert: ReorderTarget.byBoundary(
+        center: groupFrame.midY + dragOffset.height,
+        centers: ordered.map { rowFrames[.task($0.persistentModelID)]?.midY }),
+      unit: unit)
 
-  /// Position de repos cible de CHAQUE ligne physique — tâches, en-têtes, ET champs « Nouvelle
-  /// tâche » confondus (cf. `RowKey`/`physicalRows`) — trou réservé à l'emplacement d'insertion.
-  ///
-  /// Fondé sur les positions de repos MESURÉES (`rowFrames.minY`), pas sur un ré-empilement
-  /// contigu : retirer la ligne tirée puis la réinsérer décale les lignes situées ENTRE son
-  /// ancienne et sa nouvelle place d'exactement sa hauteur (les autres ne bougent pas) — QUEL QUE
-  /// SOIT LE TYPE de ces lignes intermédiaires (tâche, en-tête, champ) : seule compte leur POSITION
-  /// dans la séquence, jamais un cas particulier par bloc à calculer à la main. C'est cette
-  /// continuité, pas une astuce d'animation, qui garantit une révélation de champ instantanée et
-  /// fiable au drop, quelle que soit la situation.
-  /// ponytail: recalcul O(n) par rendu de drag — négligeable à l'échelle d'une to-do list.
-  ///
-  /// Drag d'une en-tête : calcul dans l'espace REPLIÉ, TÂCHES SEULEMENT — les champs des AUTRES
-  /// blocs restent simplement invisibles pendant un drag d'en-tête (jamais signalé comme un
-  /// problème, pas de raison d'étendre ce cas). `h` = hauteur de la SEULE en-tête.
-  private func dragTargets() -> [RowKey: CGFloat] {
-    guard let (dragged, others, insert) = dragInsertion(),
-      let first = dragged.first,
-      let dragFrame = rowFrames[.task(first.persistentModelID)],
-      let origInsert = list.orderedTasks.firstIndex(where: {
-        $0.persistentModelID == first.persistentModelID
-      })
-    else { return [:] }
-    let h = dragFrame.height
-
-    if first.isHeader {
-      let delta = blockDelta ?? 0
-      let B = origInsert
-      var map: [RowKey: CGFloat] = [:]
-      for (j, other) in others.enumerated() {
-        let key = RowKey.task(other.persistentModelID)
-        guard let home = rowFrames[key]?.minY else { continue }
-        let base = home - (j >= B ? delta : 0)
-        let shift: CGFloat =
-          (insert < B && (insert..<B).contains(j))
-          ? h
-          : (insert > B && (B..<insert).contains(j)) ? -h : 0
-        map[key] = base + shift
-      }
-      return map
-    }
-
-    // Tâche : même formule, dans l'espace `RowKey` COMPLET (tâches, en-têtes ET champs) — un champ
-    // y participe comme n'importe quelle autre ligne, sans traitement séparé.
+    // Le même dépôt, retraduit dans l'espace des lignes physiques : la tâche devant laquelle on se
+    // pose y a simplement un autre rang, les champs comptant eux aussi.
     let allRows = physicalRows
     let draggedKey = RowKey.task(first.persistentModelID)
-    guard let B = allRows.firstIndex(of: draggedKey) else { return [:] }
-    let rowKeyOthers = allRows.filter { $0 != draggedKey }
-    let insertRK: Int =
-      insert < others.count
-      ? (rowKeyOthers.firstIndex(of: .task(others[insert].persistentModelID)) ?? rowKeyOthers.count)
-      : rowKeyOthers.count
-    var map: [RowKey: CGFloat] = [:]
-    for (j, key) in rowKeyOthers.enumerated() {
-      guard let home = rowFrames[key]?.minY else { continue }
-      let shift: CGFloat =
-        (insertRK < B && (insertRK..<B).contains(j))
-        ? h
-        : (insertRK > B && (B..<insertRK).contains(j)) ? -h : 0
-      map[key] = home + shift
-    }
-    return map
+    guard let rowOrigin = allRows.firstIndex(of: draggedKey) else { return nil }
+    let rowOthers = allRows.filter { $0 != draggedKey }
+    let rowInsert =
+      tasks.insert < otherKeys.count
+      ? (rowOthers.firstIndex(of: otherKeys[tasks.insert]) ?? rowOthers.count)
+      : rowOthers.count
+    let rows = ReorderLayout(
+      others: rowOthers, origin: rowOrigin, insert: rowInsert, unit: unit)
+    return DragState(dragged: draggedGroup, others: others, rows: rows, tasks: tasks)
   }
 
-  /// Rectangle du trou d'insertion (le « placeholder ») dans l'espace de la liste : là où la ligne
-  /// tirée se posera. Bas de la ligne (déplacée) qui précède le trou, ou le sommet si insertion en
-  /// tête. Positions mesurées → juste malgré les trous entre blocs. Drag d'en-tête : taille d'une
-  /// en-tête et positions corrigées du repli Δ, comme `dragTargets`.
-  private func dragPlaceholderRect() -> CGRect? {
+  /// Insertion d'une EN-TÊTE : au DÉBUT d'un autre bloc, jamais au milieu — même politique que le
+  /// drag d'un projet dans la sidebar, d'où `ReorderTarget.byBlockStart` partagé avec elle. Ce qui
+  /// reste ici est l'énumération des blocs, propre à cette page.
+  private func headerInsert(
+    center: CGFloat, others: [TaskItem], collapse: CGFloat, origin: Int
+  ) -> Int {
     guard let first = draggedGroup.first,
-      let dragFrame = rowFrames[.task(first.persistentModelID)],
-      let (_, others, insert) = dragInsertion(),
-      let origInsert = list.orderedTasks.firstIndex(where: {
-        $0.persistentModelID == first.persistentModelID
+      let dragged = blocks.firstIndex(where: {
+        $0.header?.persistentModelID == first.persistentModelID
       })
-    else { return nil }
-    let h = dragFrame.height
-    let delta = first.isHeader ? (blockDelta ?? 0) : 0
-    let B = origInsert
-    let gapTop: CGFloat
-    if insert == 0 {
-      gapTop =
-        list.orderedTasks.compactMap { rowFrames[.task($0.persistentModelID)]?.minY }.min() ?? 0
-    } else {
-      // Dernière ligne MESURÉE au-dessus du trou, pas forcément `insert - 1` : `others` contient
-      // les tâches archivées, qui ne sont pas rendues et n'ont donc pas de cadre. Sans ce recul,
-      // déposer juste après une tâche cochée faisait disparaître le placeholder.
-      guard
-        let j = (0..<insert).reversed().first(where: {
-          rowFrames[.task(others[$0].persistentModelID)] != nil
-        }),
-        let f = rowFrames[.task(others[j].persistentModelID)]
-      else { return nil }
-      let base = f.minY - (j >= B ? delta : 0)
-      let shift: CGFloat = (insert > B && j >= B) ? -h : 0
-      gapTop = base + shift + f.height
+    else { return others.count }
+
+    var candidates: [(insert: Int, center: CGFloat)] = []
+    for (index, block) in blocks.enumerated() where index != dragged {
+      guard let rect = groupRect(block.items) else { continue }
+      // Rang dans `others`, et PAS un cumul de lignes visibles : `blocks` a écarté les tâches
+      // archivées alors qu'`others` les garde, et additionner les rangées affichées donnait un
+      // index trop petit d'autant de tâches cochées — l'en-tête se posait trop haut.
+      let insert =
+        others.firstIndex { $0.persistentModelID == block.items.first?.persistentModelID }
+        ?? others.count
+      // Un bloc entier est soit tout au-dessus, soit tout au-dessous du bloc tiré : celui du
+      // dessous a déjà remonté du repli.
+      candidates.append((insert: insert, center: rect.midY - (index > dragged ? collapse : 0)))
     }
-    // `h` reste la hauteur de RANGÉE partout au-dessus (c'est d'elle que les voisines s'écartent,
-    // cf. `dragTargets`). Le rectangle DESSINÉ, lui, se ramène à la pilule : une en-tête porte ses
-    // marges hors de son fond, un trou à la hauteur de la rangée serait visiblement plus grand que
-    // ce qu'on transporte. Une tâche a ses marges dedans → rien à retirer, `inset` vaut 0.
-    let top = first.isHeader ? HeaderRow.topInset : 0
-    let bottom = first.isHeader ? HeaderRow.bottomInset : 0
-    return CGRect(
-      x: dragFrame.minX, y: gapTop + top,
-      width: dragFrame.width, height: h - top - bottom)
+    return ReorderTarget.byBlockStart(center: center, blocks: candidates, fallback: others.count)
   }
 
-  /// Décalage d'une ligne : la ligne tirée suit le curseur en 2D (soulevée), les autres rejoignent
-  /// verticalement leur cible (différence entre position cible et position de repos mesurée).
-  private func rowOffset(for task: TaskItem, targets: [RowKey: CGFloat]) -> CGSize {
+  /// Rectangle du trou d'insertion, dans l'espace de la liste.
+  ///
+  /// `ReorderLayout` en donne le haut ; ce qui s'ajoute ici est purement visuel. La hauteur de
+  /// RANGÉE (`unit`) reste celle dont les voisines s'écartent, mais le rectangle DESSINÉ se ramène
+  /// à la pilule : une en-tête porte ses marges HORS de son fond, un trou à la hauteur de la rangée
+  /// serait visiblement plus grand que ce qu'on transporte. Une tâche a ses marges dedans, l'inset
+  /// vaut donc 0 et l'expression retombe sur le cas simple.
+  private func dragPlaceholderRect(_ state: DragState) -> CGRect? {
+    guard let first = state.dragged.first,
+      let dragFrame = rowFrames[.task(first.persistentModelID)],
+      let top = state.tasks.placeholderTop(frames: rowFrames, draggedTop: dragFrame.minY)
+    else { return nil }
+    let inset =
+      first.isHeader
+      ? (top: HeaderRow.topInset, bottom: HeaderRow.bottomInset)
+      : (top: CGFloat(0), bottom: CGFloat(0))
+    return CGRect(
+      x: dragFrame.minX, y: top + inset.top,
+      width: dragFrame.width, height: state.tasks.unit - inset.top - inset.bottom)
+  }
+
+  /// Décalage d'une ligne : le groupe tiré suit le curseur en 2D (soulevé), les autres rejoignent
+  /// verticalement la place qu'elles auront une fois l'ordre écrit.
+  private func rowOffset(for task: TaskItem, offsets: [RowKey: CGFloat]) -> CGSize {
     if draggedGroup.contains(where: { $0.persistentModelID == task.persistentModelID }) {
       return dragOffset
     }
-    let key = RowKey.task(task.persistentModelID)
-    guard let target = targets[key], let home = rowFrames[key]?.minY else { return .zero }
-    return CGSize(width: 0, height: target - home)
+    return CGSize(width: 0, height: offsets[.task(task.persistentModelID)] ?? 0)
   }
 
-  /// Décalage d'un champ « Nouvelle tâche » : symétrique de `rowOffset`, EXACTEMENT le même
-  /// mécanisme (cible − position de repos mesurée) — aucun calcul spécifique au champ, `targets`
-  /// (produit par `dragTargets`) contient déjà sa cible s'il doit bouger.
-  private func fieldOffset(for block: TaskBlock, targets: [RowKey: CGFloat]) -> CGFloat {
-    let key = RowKey.field(block.id)
-    guard let target = targets[key], let home = rowFrames[key]?.minY else { return 0 }
-    return target - home
+  /// Décalage d'un champ « Nouvelle tâche » : rigoureusement le même mécanisme que `rowOffset`,
+  /// aucun calcul qui lui soit propre — `offsets` contient déjà le sien s'il doit bouger.
+  private func fieldOffset(for block: TaskBlock, offsets: [RowKey: CGFloat]) -> CGFloat {
+    offsets[.field(block.id)] ?? 0
   }
 
   /// Ancre du soulevé (agrandissement) : la position relative du point empoigné dans la ligne
@@ -1210,19 +1153,18 @@ private struct ListPageView: View {
         // Premier onChanged de l'appui = mouseDown : sélection immédiate (le fondu démarre ici).
         if pressID != task.persistentModelID {
           pressID = task.persistentModelID
-          pressWasSelected = selectedID == task.persistentModelID
-          if editingID != task.persistentModelID && selectedID != task.persistentModelID {
+          pressWasSelected = focus.isSelected(task)
+          if !focus.isEditing(task) && !focus.isSelected(task) {
             select(task)
           }
         }
         // Empoignade au-delà du seuil : pas de drag d'une carte/en-tête ouverte en édition.
         if draggingID == nil {
-          guard editingID != task.persistentModelID else { return }
+          guard !focus.isEditing(task) else { return }
           guard abs(value.translation.height) > 6 || abs(value.translation.width) > 6 else {
             return
           }
-          selectedID = task.persistentModelID
-          editingID = nil
+          focus.select(task)
           draggingID = task.persistentModelID
           draggedGroup = dragGroup(for: task)
           // Hauteur de la rangée « Nouvelle tâche » du bloc tiré, pour un repli sans trou résiduel.
@@ -1241,7 +1183,7 @@ private struct ListPageView: View {
           return
         }
         let moved = abs(value.translation.width) > 4 || abs(value.translation.height) > 4
-        guard !moved, editingID != task.persistentModelID else { return }
+        guard !moved, !focus.isEditing(task) else { return }
         if pressWasSelected {
           beginEditing(task)
         }
@@ -1249,15 +1191,14 @@ private struct ListPageView: View {
   }
 
   /// Écrit l'ordre atteint dans les `sortIndex` et retombe les décalages à 0. Comme les lignes
-  /// (ET les champs « Nouvelle tâche », cf. `dragTargets`) sont déjà visuellement à leur cible, la
+  /// (ET les champs « Nouvelle tâche », cf. `dragState`) sont déjà visuellement à leur cible, la
   /// bascule ordre↔offset ne produit aucun saut — révélation immédiate, sans exception.
   private func endDrag() {
-    // `dragInsertion` lit `draggingID`/`draggedGroup` : on capture le plan AVANT de désarmer.
-    let plan = dragInsertion()
+    // `dragState` lit `draggingID`/`draggedGroup` : on capture le plan AVANT de désarmer.
+    let state = dragState()
     withAnimation(.snappy(duration: 0.22)) {
-      if let (dragged, others, insert) = plan {
-        var newOrder = others
-        newOrder.insert(contentsOf: dragged, at: insert)
+      if let state {
+        let newOrder = state.tasks.reordered(state.dragged, among: state.others)
         for (index, task) in newOrder.enumerated() { task.sortIndex = index }
       }
       draggingID = nil
@@ -1302,6 +1243,22 @@ private struct ListPageView: View {
       .textFieldStyle(.plain)
       .focused($focusedDraft, equals: block.id)
       .onSubmit { createTask(in: block) }
+      // Raccourci texte : « ajd » + Tab devient « @today », que l'`onChange` ci-dessous change
+      // aussitôt en pastille. Sans déclencheur reconnu, Tab reste le Tab du système (champ
+      // suivant) — on n'avale pas une touche de navigation pour rien.
+      .onKeyPress(.tab) {
+        guard let resolved = QuickEntry.resolving(drafts[block.id] ?? "", shortcuts: shortcuts)
+        else { return .ignored }
+        // Une commande d'app change de page : `createTask` la reconnaît par le même chemin
+        // qu'Entrée, et emmène d'abord la tâche commencée dans sa liste — sinon elle
+        // disparaîtrait avec la vue qu'on quitte.
+        if resolved.command == nil {
+          drafts[block.id] = resolved.text
+        } else {
+          createTask(in: block, refocus: false)
+        }
+        return .handled
+      }
       // Le retrait du jeton se fait ICI et pas dans le `set:` du Binding : réécrire la valeur
       // depuis le setter ne repousse rien vers le field editor AppKit en cours d'édition (la
       // pastille apparaissait, mais « @today » restait affiché). Un `onChange` referme le cycle
@@ -1331,8 +1288,14 @@ private struct ListPageView: View {
   /// reposer le focus ferait la course avec l'endroit où l'utilisateur vient justement de cliquer.
   private func createTask(in block: TaskBlock, refocus: Bool = true) {
     let tokens = draftTokens[block.id]
+    // Le raccourci texte resté en fin de champ est validé ici aussi, pas seulement par ⇥ : sans ça
+    // « ajd ↩ » créerait une tâche nommée « ajd ». La commande d'app, elle, part en `defer` — après
+    // que la tâche commencée soit posée dans SA liste, avant de quitter la page.
+    let resolved = QuickEntry.resolving(drafts[block.id] ?? "", shortcuts: shortcuts)
+    defer { resolved?.command?.run() }
     // Un jeton peut aussi être encore dans le texte (Entrée sans espace final) : le parseur repasse.
-    let entry = QuickEntry(parsing: drafts[block.id] ?? "", names: quickEntryNames)
+    let entry = QuickEntry(
+      parsing: resolved?.text ?? drafts[block.id] ?? "", names: quickEntryNames)
     draftTokens[block.id] = nil
     guard !entry.title.isEmpty else {
       drafts[block.id] = ""
@@ -1372,6 +1335,8 @@ private struct ListPageView: View {
     draftTokens[block.id] = tokens
     return remaining
   }
+
+  private var shortcuts: [TextShortcut] { TextShortcut.decode(shortcutData) }
 
   /// Destinations reconnues après `#`, listes d'abord : un projet ne porte pas de tâche, `#projet`
   /// vise donc sa première liste.
@@ -1526,7 +1491,7 @@ private struct ListPageView: View {
   /// bouton « + » de la barre d'outils (saisie rapide, sans ouvrir la carte d'édition complète).
   private func focusNewTaskField() {
     let target = selectedBlockID ?? blocks.last?.id
-    withAnimation(taskSelectFade) { selectedID = nil }
+    withAnimation(taskSelectFade) { focus.deselect() }
     focusedDraft = target
   }
 
@@ -1546,10 +1511,7 @@ private struct ListPageView: View {
     }
     let id = task.persistentModelID
     DispatchQueue.main.async {
-      withAnimation(taskFlow) {
-        selectedID = id
-        editingID = id
-      }
+      withAnimation(taskFlow) { focus.edit(id: id) }
     }
   }
 
@@ -1588,7 +1550,7 @@ private struct ListPageView: View {
   }
 
   private func delete(_ task: TaskItem) {
-    if selectedID == task.persistentModelID { selectedID = nil }
+    focus.forget(task)
     withAnimation(taskInsert) {
       modelContext.delete(task)
       try? modelContext.save()
@@ -1614,8 +1576,7 @@ private struct ListPageView: View {
       next += 1
     }
     // Le bloc quitte la liste affichée : purge sélection/édition qui pointeraient dedans.
-    if block.contains(where: { $0.persistentModelID == selectedID }) { selectedID = nil }
-    if block.contains(where: { $0.persistentModelID == editingID }) { editingID = nil }
+    for item in block { focus.forget(item) }
     try? modelContext.save()
   }
 
@@ -1651,10 +1612,7 @@ private struct ListPageView: View {
     // `onChange(of: isEditing)` peut y poser le focus).
     let id = header.persistentModelID
     DispatchQueue.main.async {
-      withAnimation(taskFlow) {
-        selectedID = id
-        editingID = id
-      }
+      withAnimation(taskFlow) { focus.edit(id: id) }
     }
   }
 
@@ -3412,7 +3370,7 @@ private struct PressBounceButtonStyle: ButtonStyle {
 }
 
 /// Position de repos de chaque ligne (par `persistentModelID`), collectée par préférence pendant le
-/// layout et lue pour calculer où ouvrir le trou pendant un réordonnancement (cf. `dragTargets`).
+/// layout et lue pour calculer où ouvrir le trou pendant un réordonnancement (cf. `dragState`).
 /// Un bloc = une en-tête (optionnelle) et les tâches qui la suivent jusqu'à la prochaine en-tête.
 /// Le bloc « top » (en-tête nil) réunit les tâches d'avant la première en-tête, ou toute la liste
 /// s'il n'y a aucune en-tête.
@@ -3438,7 +3396,7 @@ private struct EditorHeightKey: PreferenceKey {
 
 /// Position de repos de chaque ligne physique — tâche/en-tête RÉELLE ou champ « Nouvelle tâche »
 /// VIRTUEL, cf. `ListPageView.RowKey` — dans le même espace de coordonnées. Une seule clé pour les
-/// deux : un champ participe au MÊME calcul de décalage qu'une tâche (cf. `dragTargets`), jamais un
+/// deux : un champ participe au MÊME calcul de décalage qu'une tâche (cf. `dragState`), jamais un
 /// cas séparé à maintenir à la main.
 private struct RowFrameKey: PreferenceKey {
   static let defaultValue: [ListPageView.RowKey: CGRect] = [:]

@@ -143,6 +143,14 @@ struct ContentView: View {
         .hidden()
     }
     .onChange(of: selection) { _, new in recordRecent(new) }
+    // Un raccourci texte « !aujourdhui » tapé dans la capsule de saisie rapide : elle vit dans une
+    // autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
+    .onReceive(NotificationCenter.default.publisher(for: AppCommand.selectionNotification)) { _ in
+      applyPendingSelection()
+    }
+    // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande,
+    // donc elle arrive APRÈS la notification et doit venir chercher la sélection elle-même.
+    .onAppear(perform: applyPendingSelection)
     // Retour de complétion Rappels → app : EventKit prévient de tout changement du store ;
     // le retour au premier plan couvre le rappel coché pendant que l'app était en arrière-plan.
     .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
@@ -292,6 +300,14 @@ struct ContentView: View {
 
   /// Seules les listes et projets sont des destinations « récentes » ; les vues intelligentes
   /// restent toujours visibles dans la sidebar, inutile de les rappeler ici.
+  /// Consomme la page demandée par un raccourci texte, une seule fois : les deux chemins (la
+  /// notification, l'apparition d'une fenêtre recréée) mènent ici et le premier arrivé la vide.
+  private func applyPendingSelection() {
+    guard let pending = AppCommand.pendingSelection else { return }
+    AppCommand.pendingSelection = nil
+    selection = .smartList(pending)
+  }
+
   private func recordRecent(_ selection: SidebarSelection?) {
     guard let selection else { return }
     switch selection {

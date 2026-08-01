@@ -141,7 +141,14 @@ final class RemindersService {
   func events(from start: Date, to end: Date) -> [EKEvent] {
     guard eventAuthorizationStatus == .fullAccess else { return [] }
     let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-    return store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
+    // `EKEvent.startDate` est déclaré `null_unspecified` côté EventKit, donc importé en `Date!` :
+    // un événement détaché d'une récurrence ou venu d'un calendrier distant mal formé peut n'en
+    // porter aucune, et le déréférencement force au premier tri PLANTE l'app. On l'écarte ICI,
+    // à l'unique porte d'entrée des événements : tout ce qui sort d'ici a une date de début, et
+    // les vues (groupement par jour, heure affichée) n'ont aucune garde à répéter.
+    return store.events(matching: predicate)
+      .filter { $0.startDate != nil }
+      .sorted { $0.startDate < $1.startDate }
   }
 
   /// Événements qui touchent `day` — cf. `events(from:to:)`.

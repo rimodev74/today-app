@@ -19,8 +19,19 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.12"
-BUILD="11"
+SHORT_VERSION="0.13"
+BUILD="12"
+
+# Reconstruire par-dessus une instance EN COURS lui retire son Info.plist sous les pieds (le
+# `rm -rf` plus bas) : la moindre lecture CFBundle ensuite — AppKit en fait une à chaque réveil de
+# l'icône de barre de menus — lève une exception Objective-C et l'app meurt en « Abort trap: 6 »,
+# sans le moindre rapport avec le code qu'on vient d'écrire. C'est LE plantage fantôme de la phase
+# de dev. `run.sh` tue l'instance avant d'arriver ici ; les appels directs, eux, s'arrêtent net.
+if pgrep -x "${TARGET}" >/dev/null 2>&1; then
+  echo "✗ ${TARGET} tourne déjà (PID $(pgrep -x "${TARGET}" | tr '\n' ' '))." >&2
+  echo "  Ferme-le, ou passe par ./run.sh qui s'en charge — reconstruire sous ses pieds le fait planter." >&2
+  exit 1
+fi
 
 echo "→ Build ${TARGET} (${CONFIG})…"
 swift build -c "${CONFIG}" --product "${TARGET}"

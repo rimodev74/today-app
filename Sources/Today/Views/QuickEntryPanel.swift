@@ -14,9 +14,11 @@ import SwiftUI
 @MainActor
 final class QuickEntryWindow {
   static let shared = QuickEntryWindow()
+  /// Le nom de la notification distribuée qui ouvre ou ferme la capsule (cf. `TodayApp.init`).
+  static let toggleNotification = "app.today.quickEntry.toggle"
 
   private var panel: NSPanel?
-  private var dismissal: QuickEntryDismissal?
+  private var channel: QuickEntryChannel?
 
   private init() {}
 
@@ -24,11 +26,26 @@ final class QuickEntryWindow {
     if panel != nil { requestClose() } else { show(container: container) }
   }
 
-  func show(container: ModelContainer) {
+  /// Le raccourci clavier d'une action de saisie (`@today`, `#Courses`). Capsule OUVERTE, le jeton
+  /// se pose sur la tâche en cours d'écriture — exactement ce que ferait l'abréviation tapée ;
+  /// fermée, il ouvre la capsule avec le jeton déjà appliqué. Rouvrir dans tous les cas jetterait
+  /// le titre à moitié tapé, alors que le geste ne demandait qu'à le dater.
+  func apply(token: String, container: ModelContainer) {
+    if let channel, panel != nil {
+      channel.token = token
+    } else {
+      show(container: container, prefill: token)
+    }
+  }
+
+  func show(container: ModelContainer, prefill: String = "") {
     close()  // panneau NEUF à chaque ouverture : pas de titre à moitié tapé qui survivrait
-    let panel = makePanel(container: container)
+    let panel = makePanel(container: container, prefill: prefill)
     self.panel = panel
-    position(panel)
+    // Le panneau est jetable, sa POSITION ne l'est pas : `setFrameUsingName` relit celle où on l'a
+    // laissé (AppKit l'écrit dans les défauts à chaque déplacement, grâce à l'autosave posé dans
+    // `makePanel`). Faux au tout premier lancement, et seulement là, on retombe sur le tiers haut.
+    if !panel.setFrameUsingName(panel.frameAutosaveName) { position(panel) }
     panel.makeKeyAndOrderFront(nil)
   }
 
@@ -36,20 +53,20 @@ final class QuickEntryWindow {
   /// Tout ce qui ferme le panneau passe par ici — Échap, le raccourci global rejoué — sans quoi la
   /// fenêtre disparaîtrait au milieu de l'animation.
   func requestClose() {
-    guard let dismissal else {
+    guard let channel else {
       close()
       return
     }
-    dismissal.isRequested = true
+    channel.isRequested = true
   }
 
   func close() {
     panel?.orderOut(nil)
     panel = nil
-    dismissal = nil
+    channel = nil
   }
 
-  private func makePanel(container: ModelContainer) -> NSPanel {
+  private func makePanel(container: ModelContainer, prefill: String) -> NSPanel {
     // Fenêtre volontairement plus grande que la capsule, et TRANSPARENTE : le verre a besoin de
     // composer sur ce qu'il y a derrière (une fenêtre opaque le réduirait à un aplat), et le
     // ressort d'ouverture comme le dépli des notes doivent avoir de la marge où déborder. On ne
@@ -62,23 +79,30 @@ final class QuickEntryWindow {
       backing: .buffered, defer: false)
     // `.borderless` ne devient jamais clé tout seul (d'où `canBecomeKey` dans la sous-classe), mais
     // c'est le seul style sans chrome ni coins arrondis système imposés sous la capsule.
-    let dismissal = QuickEntryDismissal()
-    self.dismissal = dismissal
+    let channel = QuickEntryChannel()
+    self.channel = channel
     panel.onCancel = { [weak self] in self?.requestClose() }
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false  // l'ombre vient du verre, à la forme de la capsule
     panel.isMovableByWindowBackground = true
+    // ponytail: l'autosave sauve le CADRE entier, taille comprise — si `contentRect` change un jour,
+    // les défauts existants imposeront l'ancienne ; ajouter un `setContentSize` après restauration.
+    panel.setFrameAutosaveName("QuickEntryPanel")
     panel.isFloatingPanel = true
     panel.becomesKeyOnlyIfNeeded = false
     panel.hidesOnDeactivate = false
+    // La capsule ne fait pas partie de l'app « masquée ». Sans ça, ⌘H puis le raccourci global
+    // rouvraient la capsule ET la fenêtre principale : ordonner devant une fenêtre masquable
+    // oblige AppKit à démasquer TOUTE l'app. Exemptée, elle s'affiche seule, l'app reste cachée.
+    panel.canHide = false
     panel.level = .floating
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
     let theme = AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "")
     let hosting = NSHostingView(
       rootView: QuickEntryView(
-        dismissal: dismissal, onClose: { [weak self] in self?.close() }
+        channel: channel, prefill: prefill, onClose: { [weak self] in self?.close() }
       )
       .modelContainer(container)
       .preferredColorScheme((theme ?? .system).colorScheme)
@@ -102,11 +126,15 @@ final class QuickEntryWindow {
   }
 }
 
-/// Le canal par lequel AppKit demande à SwiftUI de se retirer. Un objet observé plutôt qu'un appel
-/// direct : `cancelOperation` est déclenché par la fenêtre, hors de tout cycle de rendu, et n'a
-/// aucun moyen d'atteindre l'état d'une vue autrement.
-@MainActor @Observable final class QuickEntryDismissal {
+/// Le canal par lequel AppKit parle à la vue SwiftUI du panneau. Un objet observé plutôt qu'un appel
+/// direct : `cancelOperation` comme un raccourci global sont déclenchés par la fenêtre, hors de tout
+/// cycle de rendu, et n'ont aucun moyen d'atteindre l'état d'une vue autrement.
+@MainActor @Observable final class QuickEntryChannel {
   var isRequested = false
+  /// Jeton (`@today`, `#Courses`) poussé par un raccourci clavier alors que la capsule est déjà
+  /// ouverte. Remis à `nil` par la vue une fois posé — sans quoi deux frappes de suite sur la même
+  /// combinaison ne feraient rien la seconde fois, la valeur n'ayant pas changé.
+  var token: String?
 }
 
 /// Une fenêtre sans bordure refuse le focus clavier et ignore Échap tant qu'on ne le lui apprend pas.
@@ -129,12 +157,22 @@ private final class FloatingPanel: NSPanel {
   }
 }
 
+/// Remonte la hauteur naturelle de la liste des destinations jusqu'au bloc qui l'ouvre.
+private struct DestinationHeightKey: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// Le contenu du panneau : une capsule d'une ligne — d'où part la tâche, ce qu'elle dit, quand — qui
 /// se déplie sur un second bloc pour les notes et les sous-tâches. Pas de barre de validation :
 /// Entrée enregistre, Échap ferme, et les deux boutons ne faisaient qu'afficher des raccourcis que
 /// tout le monde connaît.
 private struct QuickEntryView: View {
-  var dismissal: QuickEntryDismissal
+  var channel: QuickEntryChannel
+  /// Jeton posé d'entrée par le raccourci clavier qui a ouvert la capsule. Il passe par le même
+  /// `consumeTokens` que la frappe : la pastille de date ou le chip apparaissent par le chemin
+  /// habituel, la capsule ne montre jamais de « @today » à l'écran.
+  var prefill: String = ""
   var onClose: () -> Void
 
   /// Le ressort de la capsule, joué à l'endroit à l'ouverture et à l'envers à la fermeture — c'est
@@ -162,9 +200,17 @@ private struct QuickEntryView: View {
   /// et ferme. Vider trois idées d'affilée ne demande plus de rouvrir le panneau à chaque fois.
   @State private var queued: [PendingTask] = []
   @State private var expanded = false
+  @State private var picking = false
+  /// Hauteur naturelle de la liste des destinations, mesurée en continu. Nécessaire parce que le
+  /// bloc s'ouvre en animant sa hauteur : il faut une valeur cible, `nil` ne s'anime pas.
+  @State private var destinationHeight: CGFloat = 0
+  @State private var hovered: PersistentIdentifier?
   @State private var appeared = false
+  @AppStorage(TextShortcut.storageKey) private var shortcutData = Data()
   @FocusState private var focus: Field?
   @Namespace private var morph
+
+  private var shortcuts: [TextShortcut] { TextShortcut.decode(shortcutData) }
 
   private enum Field: Hashable {
     case title, notes
@@ -172,7 +218,7 @@ private struct QuickEntryView: View {
   }
 
   /// Identités de morphing du verre. Distinctes de `Field` : un bloc n'est pas une cible de focus.
-  private enum Block: Hashable { case bar, details, queue }
+  private enum Block: Hashable { case bar, destination, details, queue }
 
   /// Une tâche déposée mais pas encore écrite : les mêmes champs que la saisie, gelés. Le titre
   /// garde ses jetons (`@demain`, `#liste`), analysés seulement à l'insertion — comme s'il venait
@@ -199,8 +245,17 @@ private struct QuickEntryView: View {
       .onAppear {
         withAnimation(Self.motion) { appeared = true }
       }
-      .onChange(of: dismissal.isRequested) { _, requested in
-        if requested { dismiss() }
+      .onChange(of: channel.isRequested) { _, requested in
+        guard requested else { return }
+        // Échap referme d'abord ce qui est ouvert PAR-DESSUS la capsule, comme un menu système :
+        // emporter tout le panneau ferait perdre une saisie en cours pour un simple clic de trop.
+        if picking {
+          channel.isRequested = false
+          withAnimation(.bouncy(duration: 0.4)) { picking = false }
+          focus = .title
+          return
+        }
+        dismiss()
       }
       // Le focus se pose ICI et pas dans `onAppear` : à ce moment-là le panneau n'est pas encore
       // clé (`makeKeyAndOrderFront` est en cours), et AppKit rend son premier répondeur à la
@@ -208,7 +263,17 @@ private struct QuickEntryView: View {
       // passer après.
       .task {
         try? await Task.sleep(for: .milliseconds(50))
+        // Après le sommeil, donc après le premier tour de boucle : la `@Query` a livré les listes,
+        // et un `#Courses` de prefill trouve sa destination. Avant, elle serait tombée à côté.
+        applyToken(prefill)
         focus = .title
+      }
+      // Raccourci clavier frappé alors que la capsule est déjà ouverte : le jeton rejoint la tâche
+      // en cours d'écriture.
+      .onChange(of: channel.token) { _, token in
+        guard let token else { return }
+        applyToken(token)
+        channel.token = nil
       }
       // La destination par défaut doit être COCHÉE, pas seulement sous-entendue par le chip. Sur
       // `inbox` et pas dans `onAppear` : la `@Query` peut n'avoir encore rien livré au premier
@@ -232,40 +297,103 @@ private struct QuickEntryView: View {
     }
   }
 
+  /// `spacing: 0` et un écart porté par chaque bloc : celui des destinations est TOUJOURS monté
+  /// (cf. `destinationPane`), il doit donc pouvoir replier son écart en même temps que sa hauteur,
+  /// sinon un trou de 10pt resterait sous la barre quand il est fermé.
   private var stack: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: 0) {
       pane(.bar, shape: Capsule()) { bar }
+      destinationPane
       if expanded {
         pane(.details, shape: RoundedRectangle(cornerRadius: 22, style: .continuous)) {
           detailsBox
         }
+        .padding(.top, 10)
         .padding(.horizontal, 26)
       }
       if !queued.isEmpty {
         pane(.queue, shape: RoundedRectangle(cornerRadius: 22, style: .continuous)) {
           queueBox
         }
+        .padding(.top, 10)
         .padding(.horizontal, 14)
       }
     }
   }
 
+  /// Le bloc des destinations n'est JAMAIS inséré ni retiré : il est toujours là, à hauteur nulle
+  /// quand il est fermé. C'est la seule façon d'obtenir la fusion progressive du verre — pendant
+  /// une `transition`, SwiftUI compose la vue qui entre dans un calque séparé, et le
+  /// `GlassEffectContainer` ne la fond au reste qu'une fois la transition terminée : le pont se
+  /// collait d'un coup, à la dernière image. En animant la HAUTEUR d'une vue déjà en place, le
+  /// verre s'étire hors de la barre et la jonction se forme au fil de la croissance.
+  ///
+  /// Un `HStack` + `Spacer` plutôt qu'un `frame(maxWidth:alignment:)` pour le caler à gauche : le
+  /// gabarit pleine largeur deviendrait la vue animée, et le bloc grandirait depuis le milieu de
+  /// la capsule au lieu de son chip.
+  private var destinationPane: some View {
+    HStack(spacing: 0) {
+      pane(
+        .destination, shape: RoundedRectangle(cornerRadius: 22, style: .continuous),
+        morphing: false
+      ) {
+        destinationBox
+      }
+      // Une mesure ratée doit donner un bloc TROP GRAND, jamais un bloc invisible : sans ce repli,
+      // une hauteur restée à zéro rendrait le menu impossible à ouvrir.
+      .frame(
+        width: 290,
+        height: picking ? (destinationHeight > 0 ? min(destinationHeight, 260) : 260) : 0
+      )
+      // La hauteur cible se mesure sur une copie INVISIBLE, laissée à sa taille idéale. Mesurer
+      // la vraie ferait un nœud : repliée à zéro, elle se mesure à zéro, et le bloc ne pourrait
+      // plus jamais s'ouvrir.
+      .background(alignment: .top) {
+        destinationList
+          .frame(width: 290)
+          .fixedSize(horizontal: false, vertical: true)
+          .hidden()
+          .background {
+            GeometryReader { proxy in
+              Color.clear.preference(key: DestinationHeightKey.self, value: proxy.size.height)
+            }
+          }
+      }
+      .onPreferenceChange(DestinationHeightKey.self) { destinationHeight = $0 }
+      Spacer(minLength: 0)
+    }
+    .padding(.leading, 14)
+    .padding(.top, picking ? 10 : 0)
+    // Fermé, le bloc ne fait plus que 0pt de haut mais reste dans l'arbre : sans ça il avalerait
+    // les clics de la zone qu'il occupe encore.
+    .allowsHitTesting(picking)
+  }
+
   /// Un bloc de la pile. Générique sur la forme pour que le repli garde `.strokeBorder` (défini sur
   /// `InsettableShape` seulement), et pour n'écrire qu'une fois le contenu des deux branches.
+  ///
+  /// `morphing: false` laisse le bloc HORS du morphing : un bloc identifié naît du barycentre des
+  /// autres verres du conteneur — soit le centre de la capsule — et aucune `.transition` ne reprend
+  /// la main dessus. C'est juste pour les blocs pleine largeur, faux pour un bloc accroché à un
+  /// bouton précis, qui doit sortir de CE bouton.
   @ViewBuilder
   private func pane<S: InsettableShape, V: View>(
-    _ id: Block, shape: S, @ViewBuilder content: () -> V
+    _ id: Block, shape: S, morphing: Bool = true, @ViewBuilder content: () -> V
   ) -> some View {
     if #available(macOS 26, *) {
-      content()
-        // Le verre nu laisse trop passer le bureau : le texte perd son contraste. Le `tint` est la
-        // seule densification prévue par l'API — un calque posé par-dessus tuerait les reflets
-        // internes. `windowBackgroundColor` suit déjà le thème, pas de couleur figée ici.
+      // Le verre nu laisse trop passer le bureau : le texte perd son contraste. Le `tint` est la
+      // seule densification prévue par l'API — un calque posé par-dessus tuerait les reflets
+      // internes. `windowBackgroundColor` suit déjà le thème, pas de couleur figée ici.
+      let glass = content()
         .glassEffect(
           .regular.tint(Color(nsColor: .windowBackgroundColor).opacity(0.45)).interactive(),
           in: shape
         )
-        .glassEffectID(id, in: morph)
+      if morphing {
+        glass.glassEffectID(id, in: morph)
+      } else {
+        glass
+      }
     } else {
       content()
         .background(.regularMaterial, in: shape)
@@ -278,6 +406,14 @@ private struct QuickEntryView: View {
   private var bar: some View {
     HStack(spacing: 12) {
       destinationChip
+      // La date à GAUCHE, en pastille, exactement comme la rangée « Nouvelle tâche » d'une liste
+      // (cf. `TokenPill`) : c'est là que se lit ce qui est déjà décidé. Le menu calendrier de
+      // droite n'en garde que l'icône, sans quoi la date s'afficherait deux fois.
+      if let when {
+        TokenPill(text: when.formatted(.dateTime.day().month(.abbreviated)))
+          .onTapGesture { self.when = nil }
+          .help("Retirer la date")
+      }
       TextField("Nouvelle tâche", text: $title)
         .textFieldStyle(.plain)
         .font(.app(19))
@@ -285,9 +421,24 @@ private struct QuickEntryView: View {
         // Seul chemin d'enregistrement au clavier depuis que la barre de validation a disparu :
         // plus de bouton par défaut avec qui se dédoubler.
         .onSubmit(save)
+        // Les jetons quittent le texte dès qu'un espace les valide, comme dans les listes. Le
+        // panneau ne les analysait qu'à l'enregistrement : rien ne confirmait « @demain » sous les
+        // doigts — et un raccourci texte n'aurait rien eu à montrer non plus.
+        .onChange(of: title) { _, new in
+          let cleaned = consumeTokens(new)
+          if cleaned != new { title = cleaned }
+        }
         .onKeyPress(phases: .down, action: enqueueShortcut)
+        // Tab sert deux gestes qui ne peuvent pas se croiser : le dernier mot est un raccourci
+        // texte (« ajd ») et il se change en jeton, sinon Tab ouvre les notes comme avant.
         .onKeyPress(.tab) {
-          expand(focusing: .notes)
+          guard let resolved = QuickEntry.resolving(title, shortcuts: shortcuts) else {
+            expand(focusing: .notes)
+            return .handled
+          }
+          // Une commande n'écrit rien : elle emmène ailleurs, et la capsule s'efface derrière elle.
+          // `save` la reconnaît par le même chemin qu'Entrée, emporte la fournée et referme.
+          if resolved.command == nil { title = resolved.text } else { save() }
           return .handled
         }
       if canSave {
@@ -304,6 +455,9 @@ private struct QuickEntryView: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 13)
+    // La pastille de date entre et sort de la rangée : sans ça, la barre se réagence d'un coup
+    // sous le curseur au moment où le jeton est reconnu.
+    .animation(.bouncy(duration: 0.35), value: when)
   }
 
   private var detailsBox: some View {
@@ -325,6 +479,15 @@ private struct QuickEntryView: View {
           }
           guard press.modifiers.isDisjoint(with: [.shift, .option]) else { return .ignored }
           save()
+          return .handled
+        }
+        // Tab a ouvert le bloc, le même Tab le referme : sans ça l'icône était la SEULE sortie, il
+        // fallait lâcher le clavier pour annuler un dépli fait au clavier. Des notes ou des
+        // sous-tâches déjà écrites le retiennent — replier effacerait du travail de la vue.
+        .onKeyPress(.tab) {
+          guard notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, subtasks.isEmpty
+          else { return .ignored }
+          collapseDetails()
           return .handled
         }
       if !subtasks.isEmpty {
@@ -403,33 +566,15 @@ private struct QuickEntryView: View {
 
   /// Où ira la tâche, à gauche du champ : la seule information que la capsule doit porter en
   /// permanence, parce qu'elle est la seule qu'on ne peut pas deviner en lisant ce qu'on tape.
-  ///
-  /// Un `Picker` inline plutôt qu'une pile de `Button` : c'est lui qui fait poser à AppKit la coche
-  /// sur l'entrée active — écrite à la main, elle demanderait de bricoler un `checkmark` dans le
-  /// libellé, que `NSMenu` place à gauche, là où va déjà l'icône de la liste.
   private var destinationChip: some View {
-    Menu {
-      Picker(selection: $targetID) {
-        if let inbox {
-          Label(inbox.title, systemImage: "tray.full.fill")
-            .tag(inbox.persistentModelID as PersistentIdentifier?)
-        }
-        // Un projet n'est PAS une destination : `TaskItem.project` se déduit de la liste
-        // (`list?.project`), une tâche se pose donc toujours dans une liste. Il n'est ici qu'un
-        // titre de section, ce qui lui donne au passage le trait de séparation de Things.
-        ForEach(projects) { project in
-          Section(project.title.isEmpty ? "Sans titre" : project.title) {
-            ForEach(project.orderedLists, content: listRow)
-          }
-        }
-        let loose = lists.filter { !$0.isInbox && $0.project == nil }
-        if !loose.isEmpty {
-          Section("Listes") { ForEach(loose, content: listRow) }
-        }
-      } label: {
-        EmptyView()
+    Button {
+      // Un seul bloc ouvert à la fois sous la barre : les destinations et les notes empilées
+      // faisaient une colonne plus haute que la capsule elle-même, dans une fenêtre qui doit se
+      // lire d'un coup d'œil.
+      withAnimation(.bouncy(duration: 0.4)) {
+        picking.toggle()
+        if picking { expanded = false }
       }
-      .pickerStyle(.inline)
     } label: {
       HStack(spacing: 6) {
         destinationIcon
@@ -439,16 +584,13 @@ private struct QuickEntryView: View {
       .padding(.vertical, 4)
       .padding(.horizontal, 11)
       .contentShape(Capsule())
-      .background(.quaternary.opacity(0.5), in: Capsule())
+      .background(.quaternary.opacity(picking ? 0.9 : 0.5), in: Capsule())
     }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
+    .buttonStyle(.plain)
     .fixedSize()
+    .help("Choisir la destination")
   }
 
-  /// Le vrai anneau de la sidebar (`ProgressRing`) sur le chip : il est rendu par SwiftUI, donc rien
-  /// n'y limite le tracé. Dans le menu, en revanche, `NSMenu` n'accepte qu'une image — d'où le
-  /// symbole approché de `listRow`.
   @ViewBuilder private var destinationIcon: some View {
     if let destination, !destination.isInbox {
       ProgressRing(progress: destination.progress, size: 11, lineWidth: 1.8)
@@ -457,22 +599,76 @@ private struct QuickEntryView: View {
     }
   }
 
-  private func listRow(_ list: TodoList) -> some View {
-    Label(list.title.isEmpty ? "Sans titre" : list.title, systemImage: ringSymbol(list.progress))
-      .foregroundStyle(Color.accentColor)
-      .tag(list.persistentModelID as PersistentIdentifier?)
+  /// Les destinations, dans un bloc de la pile plutôt que dans un `Menu` : le verre d'un `NSMenu`
+  /// est celui du système, impossible à accorder à celui de la capsule (ni à faire participer au
+  /// morphing du `GlassEffectContainer`). Le prix est la coche et le survol à écrire à la main.
+  private var destinationBox: some View {
+    ScrollView { destinationList }
+      // Les listes sans projet sont volontairement absentes : la sidebar n'en montre aucune (elle
+      // ne rend que l'inbox et les listes DANS un projet), les proposer ici revenait à offrir
+      // comme destination des listes héritées que rien d'autre dans l'app ne sait rouvrir.
+      .scrollBounceBehavior(.basedOnSize)
   }
 
-  /// Anneau de progression réduit à trois paliers : `NSMenu` ne sait afficher qu'une image devant
-  /// une entrée, pas une vue, donc pas de `ProgressRing` continu ici.
-  // ponytail: trois symboles plutôt qu'un rendu d'anneau en NSImage — à remplacer par un
-  // `Image(nsImage:)` dessiné hors écran si l'approximation se voit à l'usage.
-  private func ringSymbol(_ progress: Double) -> String {
-    switch progress {
-    case ..<0.01: "circle"
-    case ..<0.99: "circle.lefthalf.filled"
-    default: "circle.inset.filled"
+  private var destinationList: some View {
+    VStack(alignment: .leading, spacing: 1) {
+      if let inbox { destinationRow(inbox) }
+      // Un projet n'est PAS une destination : `TaskItem.project` se déduit de la liste
+      // (`list?.project`), une tâche se pose donc toujours dans une liste. Il n'est ici qu'un
+      // titre de section.
+      ForEach(projects) { project in
+        if !project.orderedLists.isEmpty {
+          Text(project.title.isEmpty ? "Sans titre" : project.title)
+            .font(.app(11, weight: .medium))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 1)
+          ForEach(project.orderedLists, content: destinationRow)
+        }
+      }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.vertical, 6)
+    .padding(.horizontal, 6)
+  }
+
+  private func destinationRow(_ list: TodoList) -> some View {
+    let id = list.persistentModelID
+    return Button {
+      withAnimation(.bouncy(duration: 0.4)) {
+        targetID = id
+        picking = false
+      }
+      focus = .title
+    } label: {
+      HStack(spacing: 8) {
+        Group {
+          if list.isInbox {
+            Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
+          } else {
+            ProgressRing(progress: list.progress, size: 11, lineWidth: 1.8)
+          }
+        }
+        .frame(width: 14)
+        Text(list.title.isEmpty ? "Sans titre" : list.title).font(.app(13)).lineLimit(1)
+        Spacer(minLength: 8)
+        if destination?.persistentModelID == id {
+          Image(systemName: "checkmark")
+            .font(.app(11, weight: .semibold))
+            .foregroundStyle(Color.accentColor)
+        }
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+      .background(
+        hovered == id ? Color.primary.opacity(0.08) : .clear,
+        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .onHover { hovered = $0 ? id : (hovered == id ? nil : hovered) }
   }
 
   /// La date est le seul réglage que le modèle porte ET que la saisie rapide ne sait pas déjà
@@ -491,13 +687,9 @@ private struct QuickEntryView: View {
         Button("Aucune date") { when = nil }
       }
     } label: {
-      HStack(spacing: 5) {
-        Image(systemName: "calendar")
-        if let when {
-          Text(when.formatted(.dateTime.day().month(.abbreviated))).font(.app(13))
-        }
-      }
-      .foregroundStyle(when == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
+      // Icône seule : la date choisie se lit dans la pastille de gauche (cf. `bar`).
+      Image(systemName: "calendar")
+        .foregroundStyle(when == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
@@ -509,8 +701,7 @@ private struct QuickEntryView: View {
   private var notesToggle: some View {
     Button {
       if expanded {
-        withAnimation(.bouncy(duration: 0.4)) { expanded = false }
-        focus = .title
+        collapseDetails()
       } else {
         expand(focusing: .notes)
       }
@@ -544,9 +735,19 @@ private struct QuickEntryView: View {
     .help(queued.isEmpty ? "Enregistrer (↩)" : "Enregistrer les \(queued.count + 1) tâches (↩)")
   }
 
+  /// Ouvre le bloc notes/sous-tâches — et referme les destinations : réciproque du chip, un seul
+  /// bloc à la fois.
   private func expand(focusing field: Field) {
-    withAnimation(.bouncy(duration: 0.45)) { expanded = true }
+    withAnimation(.bouncy(duration: 0.45)) {
+      expanded = true
+      picking = false
+    }
     focus = field
+  }
+
+  private func collapseDetails() {
+    withAnimation(.bouncy(duration: 0.4)) { expanded = false }
+    focus = .title
   }
 
   private func addSubtask() {
@@ -556,9 +757,15 @@ private struct QuickEntryView: View {
 
   // MARK: Enregistrement
 
-  private var inbox: TodoList? { lists.first(where: \.isInbox) }
+  /// Les listes que l'app sait ROUVRIR : l'inbox et celles rangées dans un projet. Une liste sans
+  /// projet n'apparaît nulle part dans la sidebar (cf. `projectsGroup`) — il en traîne d'anciennes
+  /// en base, et le panneau était le seul endroit à les rendre visibles, donc atteignables au
+  /// `#jeton` comme au chip. Une tâche qui y tombait devenait introuvable.
+  private var reachable: [TodoList] { lists.filter { $0.isInbox || $0.project != nil } }
+  private var inbox: TodoList? { reachable.first(where: \.isInbox) }
   private func list(for id: PersistentIdentifier?) -> TodoList? {
-    id.flatMap { wanted in lists.first { $0.persistentModelID == wanted } } ?? inbox ?? lists.first
+    id.flatMap { wanted in reachable.first { $0.persistentModelID == wanted } } ?? inbox
+      ?? reachable.first
   }
   private var destination: TodoList? { list(for: targetID) }
   private var canSave: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -566,9 +773,14 @@ private struct QuickEntryView: View {
   /// L'état de saisie, figé tel quel : ce que ⌘↩ dépose dans la fournée et ce que ↩ emporte avec
   /// elle. `nil` si le titre est vide — une tâche sans titre n'existe pas.
   private var draft: PendingTask? {
-    guard canSave else { return nil }
+    // Le raccourci resté en fin de frappe est résolu ICI, donc pour TOUS les chemins qui valident
+    // (Entrée, ⌘↩, le bouton d'envoi) et pas seulement pour ⇥ : sans ça « ajd » seul deviendrait
+    // une tâche nommée « ajd ». Un déclencheur de commande ne laisse rien derrière lui, la tâche
+    // disparaît alors d'elle-même — c'est `save` qui exécute la commande.
+    let text = QuickEntry.resolving(title, shortcuts: shortcuts)?.text ?? title
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return PendingTask(
-      title: title, notes: notes, subtasks: subtasks, when: when, targetID: targetID)
+      title: text, notes: notes, subtasks: subtasks, when: when, targetID: targetID)
   }
 
   /// ⌘↩ depuis n'importe quel champ : dépose et rend le champ vide. Partagé plutôt que réécrit sur
@@ -598,23 +810,27 @@ private struct QuickEntryView: View {
     // Entrée maintenue pendant la sortie : une tâche, pas deux. `dismiss()` a déjà remis `appeared`
     // à false quand il repasse ici.
     guard appeared else { return }
+    // Une commande d'app laissée en fin de frappe (« op ↩ ») : elle part APRÈS la fermeture, pour
+    // que la capsule ne reste pas devant la fenêtre qu'elle vient de ramener.
+    let command = QuickEntry.resolving(title, shortcuts: shortcuts)?.command
     // La tâche en cours de frappe part avec la fournée : ↩ enregistre TOUT, sans quoi la dernière
     // resterait à l'écran au moment où la fenêtre se ferme.
     let batch = queued + [draft].compactMap { $0 }
     // Rien à enregistrer : on sort par la même porte que Échap, pas en escamotant la fenêtre.
     guard !batch.isEmpty else {
       dismiss()
+      command?.run()
       return
     }
     batch.forEach(insert)
     dismiss()
+    command?.run()
   }
 
   private func insert(_ pending: PendingTask) {
     // Mêmes jetons que partout ailleurs (`@demain`, `#Courses`) : le panneau n'invente pas sa
     // propre syntaxe, il rejoue `applyQuickEntry`.
-    let entry = QuickEntry(
-      parsing: pending.title, names: lists.map(\.title) + projects.map(\.title))
+    let entry = QuickEntry(parsing: pending.title, names: quickEntryNames)
     let text = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, let list = entry.target.flatMap(resolve) ?? list(for: pending.targetID)
     else { return }
@@ -643,8 +859,35 @@ private struct QuickEntryView: View {
     }
   }
 
+  /// Sort du texte les jetons validés par un espace (cf. `QuickEntry.consuming`) et les range dans
+  /// l'état du panneau, que le chip de destination et la pastille de date affichent déjà ; renvoie
+  /// le texte à réafficher. Le jeton tapé sans espace final reste dans le titre : `insert` le
+  /// rattrapera au moment d'écrire.
+  /// Colle un jeton en fin de titre et le laisse consommer : l'espace final est ce qui déclenche
+  /// `consuming` (cf. `QuickEntry`), donc la date et la destination se rangent dans l'état du
+  /// panneau au lieu de rester écrites dans le champ.
+  private func applyToken(_ token: String) {
+    let token = token.trimmingCharacters(in: .whitespaces)
+    guard !token.isEmpty else { return }
+    let base = title.trimmingCharacters(in: .whitespaces)
+    withAnimation(.bouncy(duration: 0.35)) {
+      title = consumeTokens(base.isEmpty ? token + " " : base + " " + token + " ")
+    }
+  }
+
+  private func consumeTokens(_ text: String) -> String {
+    guard let (remaining, entry) = QuickEntry.consuming(text, names: quickEntryNames) else {
+      return text
+    }
+    if let date = entry.when { when = date }
+    if let list = entry.target.flatMap(resolve) { targetID = list.persistentModelID }
+    return remaining
+  }
+
+  private var quickEntryNames: [String] { reachable.map(\.title) + projects.map(\.title) }
+
   private func resolve(_ name: String) -> TodoList? {
-    lists.first { $0.title == name } ?? projects.first { $0.title == name }?.orderedLists.first
+    reachable.first { $0.title == name } ?? projects.first { $0.title == name }?.orderedLists.first
   }
 
   /// Mêmes police et couleur que le cadre de notes des pages (cf. `NotesBox`) : sans elles, le RTF

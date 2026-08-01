@@ -43,6 +43,17 @@ struct WindowConfigurator: NSViewRepresentable {
 
   func updateNSView(_ nsView: NSView, context: Context) {}
 
+  /// L'observateur ci-dessus tire à la fréquence d'affichage (120 Hz, mesuré) et RETIENT la
+  /// fenêtre par sa capture. Sans ce démontage, fermer la fenêtre au bouton rouge puis la rouvrir
+  /// (⌘N, une commande de raccourci, le clic Dock) empilait un observateur de plus à chaque cycle,
+  /// tous vivants pour le reste du process, chacun sur une fenêtre morte.
+  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    if let observer = coordinator.observer {
+      NotificationCenter.default.removeObserver(observer)
+      coordinator.observer = nil
+    }
+  }
+
   /// Appelée UNE fois, au montage. Cf. l'observateur de `didUpdateNotification` ci-dessus pour
   /// pourquoi elle n'est pas rejouée ensuite.
   private func configure(_ window: NSWindow) {

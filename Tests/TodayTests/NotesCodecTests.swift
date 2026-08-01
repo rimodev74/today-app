@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Today
 
 final class NotesCodecTests: XCTestCase {
@@ -25,7 +26,9 @@ final class NotesCodecTests: XCTestCase {
     let data = NotesCodec.encode(bold)
     let decoded = NotesCodec.decode(data)
     let font = decoded.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-    XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false, "le gras doit survivre à l'aller-retour RTF")
+    XCTAssertTrue(
+      font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false,
+      "le gras doit survivre à l'aller-retour RTF")
   }
 
   func testPlainText_matchesDecodedString() {
@@ -38,7 +41,8 @@ final class NotesCodecTests: XCTestCase {
   }
 
   func testPlainText_collapsesNewlinesToSingleLine() {
-    let data = NotesCodec.encode(NSAttributedString(string: "Créer les dossiers\net ranger les rushes"))
+    let data = NotesCodec.encode(
+      NSAttributedString(string: "Créer les dossiers\net ranger les rushes"))
     XCTAssertEqual(NotesCodec.plainText(data), "Créer les dossiers et ranger les rushes")
   }
 }

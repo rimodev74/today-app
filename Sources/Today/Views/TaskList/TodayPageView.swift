@@ -46,10 +46,10 @@ struct TodayPageView: View {
   /// Repliée par défaut, et l'état survit au relancement : la réserve est un fourre-tout qu'on
   /// ouvre quand on cherche quoi faire, pas la première chose qu'on doit lire en arrivant.
   @AppStorage("todayUndatedExpanded") private var undatedExpanded = false
-  /// Sélection (clic) et édition (double-clic) de la ligne, comme dans une page de liste — c'est
-  /// `TaskRow` qui les consomme.
-  @State private var selectedID: PersistentIdentifier?
-  @State private var editingID: PersistentIdentifier?
+  /// Sélection (clic) et édition (clic sur une ligne déjà sélectionnée) — c'est `TaskRow` qui les
+  /// consomme. Même type que les autres pages de tâches (cf. `TaskFocus`) : les transitions y sont
+  /// écrites une fois, les courbes restent ici.
+  @State private var focus = TaskFocus()
 
   /// `scoped` (et non `filter`) : les tâches cochées du jour restent affichées, barrées, jusqu'au
   /// lendemain. `sort` les descend en bas si le réglage « Descendre en bas de la liste » est actif.
@@ -121,9 +121,9 @@ struct TodayPageView: View {
             taskRow(for: task)
           }
           newTaskRow
+          remindersSection
 
           undatedSection
-          remindersSection
         }
         .pageReveal()
       }
@@ -222,8 +222,8 @@ struct TodayPageView: View {
   ) -> some View {
     TaskRow(
       task: task,
-      isSelected: selectedID == task.persistentModelID,
-      isEditing: editingID == task.persistentModelID,
+      isSelected: focus.isSelected(task),
+      isEditing: focus.isEditing(task),
       moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: false,
       parentLabel: showsParent ? parentLabel(of: task) : nil,
@@ -239,8 +239,8 @@ struct TodayPageView: View {
     // attendu la fin de la fenêtre de double-clic avant d'être délivré (cf. `RowPressGesture`,
     // qui documente la demi-seconde que ça coûtait ici).
     .rowPressGesture(
-      isSelected: selectedID == task.persistentModelID,
-      isEditing: editingID == task.persistentModelID,
+      isSelected: focus.isSelected(task),
+      isEditing: focus.isEditing(task),
       onSelect: { select(task) },
       onEdit: { beginEditing(task) }
     )
@@ -252,43 +252,30 @@ struct TodayPageView: View {
   }
 
   private func select(_ task: TaskItem) {
-    withAnimation(taskSelectFade) {
-      editingID = nil
-      selectedID = task.persistentModelID
-    }
+    withAnimation(taskSelectFade) { focus.select(task) }
     // Même raison que dans `ListPageView.select` : sans ça le champ « Nouvelle tâche » reste le
     // premier répondeur AppKit et intercepte ⌫ au lieu de la suppression de la sélection.
     draftFocused = false
   }
 
   private func beginEditing(_ task: TaskItem) {
-    withAnimation(taskFlow) {
-      selectedID = task.persistentModelID
-      editingID = task.persistentModelID
-    }
+    withAnimation(taskFlow) { focus.edit(task) }
     draftFocused = false
   }
 
   private func endEditing(_ task: TaskItem) {
-    guard editingID == task.persistentModelID else { return }
-    withAnimation(taskFlow) {
-      editingID = nil
-      selectedID = nil
-    }
+    guard focus.isEditing(task) else { return }
+    withAnimation(taskFlow) { focus.endEditing(task) }
   }
 
   private func dismissEditing() {
-    guard editingID != nil || selectedID != nil else { return }
-    withAnimation(taskFlow) {
-      editingID = nil
-      selectedID = nil
-    }
+    guard !focus.isIdle else { return }
+    withAnimation(taskFlow) { focus.dismiss() }
   }
 
   /// Pose la tâche à la fin de sa nouvelle liste, comme `ListPageView.move`.
   private func move(_ task: TaskItem, to target: TodoList) {
-    if selectedID == task.persistentModelID { selectedID = nil }
-    if editingID == task.persistentModelID { editingID = nil }
+    focus.forget(task)
     task.list = target
     task.sortIndex = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
     try? modelContext.save()
@@ -302,8 +289,7 @@ struct TodayPageView: View {
   }
 
   private func delete(_ task: TaskItem) {
-    if selectedID == task.persistentModelID { selectedID = nil }
-    if editingID == task.persistentModelID { editingID = nil }
+    focus.forget(task)
     withAnimation(taskInsert) {
       modelContext.delete(task)
       try? modelContext.save()
@@ -457,10 +443,8 @@ private struct AppleItemsSection<Content: View>: View {
   }
 }
 
-/// Ligne d'un rappel Apple — MÊME design qu'une tâche (`TaskCheckbox`, titre, sous-titre), pour
-/// qu'il se lise comme une tâche du jour parmi les autres. La case est cochable : cocher coche
-/// le vrai rappel (cf. `TodayPageView.completeReminder`) — un tag à droite rappelle sa source,
-/// seule différence visuelle avec une tâche de l'app.
+/// Ligne d'un rappel Apple — MÊME design qu'une tâche (`TaskCheckbox`, titre), pour qu'il se lise
+/// comme une tâche du jour parmi les autres, sans repère de provenance.
 struct ReminderRow: View {
   let reminder: EKReminder
   var onToggle: () -> Void
@@ -468,32 +452,13 @@ struct ReminderRow: View {
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
       TaskCheckbox(isCompleted: false, onToggle: onToggle)
-
-      VStack(alignment: .leading, spacing: 1) {
-        Text((reminder.title?.isEmpty == false ? reminder.title : nil) ?? "Sans titre")
-        if let listTitle {
-          Text(listTitle)
-            .font(.app(.callout))
-            .foregroundStyle(.secondary)
-        }
-      }
+      Text((reminder.title?.isEmpty == false ? reminder.title : nil) ?? "Sans titre")
+        .font(.app(.body))
       Spacer(minLength: 0)
-      SourceTag(label: dueTime.map { "Rappels · \($0)" } ?? "Rappels")
     }
-    .padding(.vertical, 4)
+    .padding(.vertical, 6)
+    .padding(.horizontal, rowInset)
     .contentShape(Rectangle())
-  }
-
-  private var listTitle: String? {
-    reminder.calendar.title.isEmpty ? nil : reminder.calendar.title
-  }
-
-  /// `nil` si le rappel n'a qu'une date sans heure (`dueDateComponents.hour` absent).
-  private var dueTime: String? {
-    guard let components = reminder.dueDateComponents, components.hour != nil,
-      let date = Calendar.current.date(from: components)
-    else { return nil }
-    return date.formatted(date: .omitted, time: .shortened)
   }
 }
 
@@ -503,7 +468,12 @@ struct ReminderRow: View {
 struct EventRow: View {
   let event: EKEvent
 
-  private var tint: Color { Color(cgColor: event.calendar.cgColor) }
+  // `calendar` et `cgColor` sont tous deux `null_unspecified` côté EventKit (donc implicitement
+  // déballés) : un calendrier d'abonnement peut n'avoir aucune couleur, et l'`init` de `Color` la
+  // veut non optionnelle — la teinte système sert alors de repli plutôt que de planter.
+  private var tint: Color {
+    (event.calendar?.cgColor).map(Color.init(cgColor:)) ?? .accentColor
+  }
 
   var body: some View {
     HStack(spacing: 8) {
@@ -526,25 +496,6 @@ struct EventRow: View {
   private var timeLabel: String {
     event.isAllDay
       ? "Toute la journée" : event.startDate.formatted(date: .omitted, time: .shortened)
-  }
-}
-
-/// Pastille neutre indiquant qu'une ligne vient de Rappels/Calendrier — même gabarit
-/// qu'`EstimateTag` (même hauteur de ligne), teinte volontairement neutre : ce n'est pas une
-/// donnée actionnable de l'app, juste un repère de provenance.
-struct SourceTag: View {
-  let label: String
-
-  var body: some View {
-    Text(label)
-      .font(.app(.callout))
-      .foregroundStyle(.secondary)
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .background(
-        Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-      )
-      .fixedSize()
   }
 }
 

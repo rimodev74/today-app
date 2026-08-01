@@ -31,8 +31,7 @@ struct AllTasksPageView: View {
   /// projet ni date, c'est la définition même de l'Inbox.
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
-  @State private var selectedID: PersistentIdentifier?
-  @State private var editingID: PersistentIdentifier?
+  @State private var focus = TaskFocus()
   /// Sections dont le repli DIFFÈRE de leur défaut (cf. `expansion(of:)`) — stocker l'écart plutôt
   /// que l'état permet à chaque section de garder son propre défaut sans initialisation.
   /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
@@ -207,8 +206,8 @@ struct AllTasksPageView: View {
   private func taskRow(for task: TaskItem, isToday: Bool) -> some View {
     TaskRow(
       task: task,
-      isSelected: selectedID == task.persistentModelID,
-      isEditing: editingID == task.persistentModelID,
+      isSelected: focus.isSelected(task),
+      isEditing: focus.isEditing(task),
       moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: !isToday,
       parentLabel: isToday ? parentLabel(of: task) : nil,
@@ -221,8 +220,8 @@ struct AllTasksPageView: View {
       onCompletionChanged: {}
     )
     .rowPressGesture(
-      isSelected: selectedID == task.persistentModelID,
-      isEditing: editingID == task.persistentModelID,
+      isSelected: focus.isSelected(task),
+      isEditing: focus.isEditing(task),
       onSelect: { select(task) },
       onEdit: { beginEditing(task) }
     )
@@ -234,42 +233,29 @@ struct AllTasksPageView: View {
   }
 
   private func select(_ task: TaskItem) {
-    withAnimation(taskSelectFade) {
-      editingID = nil
-      selectedID = task.persistentModelID
-    }
+    withAnimation(taskSelectFade) { focus.select(task) }
     // Même raison que dans `ListPageView.select` : sans ça le champ « Nouvelle tâche » reste le
     // premier répondeur AppKit et intercepte ⌫ au lieu de la suppression de la sélection.
     draftFocused = false
   }
 
   private func beginEditing(_ task: TaskItem) {
-    withAnimation(taskFlow) {
-      selectedID = task.persistentModelID
-      editingID = task.persistentModelID
-    }
+    withAnimation(taskFlow) { focus.edit(task) }
     draftFocused = false
   }
 
   private func endEditing(_ task: TaskItem) {
-    guard editingID == task.persistentModelID else { return }
-    withAnimation(taskFlow) {
-      editingID = nil
-      selectedID = nil
-    }
+    guard focus.isEditing(task) else { return }
+    withAnimation(taskFlow) { focus.endEditing(task) }
   }
 
   private func dismissEditing() {
-    guard editingID != nil || selectedID != nil else { return }
-    withAnimation(taskFlow) {
-      editingID = nil
-      selectedID = nil
-    }
+    guard !focus.isIdle else { return }
+    withAnimation(taskFlow) { focus.dismiss() }
   }
 
   private func move(_ task: TaskItem, to target: TodoList) {
-    if selectedID == task.persistentModelID { selectedID = nil }
-    if editingID == task.persistentModelID { editingID = nil }
+    focus.forget(task)
     task.list = target
     task.sortIndex = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
     try? modelContext.save()
@@ -283,8 +269,7 @@ struct AllTasksPageView: View {
   }
 
   private func delete(_ task: TaskItem) {
-    if selectedID == task.persistentModelID { selectedID = nil }
-    if editingID == task.persistentModelID { editingID = nil }
+    focus.forget(task)
     withAnimation(taskInsert) {
       modelContext.delete(task)
       try? modelContext.save()
