@@ -43,4 +43,12 @@ extension Array where Element == TaskPageBlock {
   var displayedRows: [TaskItem] {
     flatMap { $0.isExpanded ? $0.tasks : [] }
   }
+
+  /// Toutes les lignes que la page PORTE, repliées comprises. Ne bouge donc que si une tâche entre
+  /// ou sort vraiment — replier une section n'y change rien, contrairement à `displayedRows`.
+  /// C'est le repère qui sert à animer une apparition dont nous ne sommes pas l'auteur (cf.
+  /// `TaskPageBase`, ⌘Z) sans transformer chaque dépliant en ressort.
+  var carriedRowCount: Int {
+    reduce(0) { $0 + $1.tasks.count }
+  }
 }

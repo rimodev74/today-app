@@ -117,18 +117,15 @@ struct TodayApp: App {
       // il n'y a plus d'app à lancer, autant planter ici avec l'erreur sous les yeux.
       container = try! open()
     }
-    // ⌘Z. Poser un `UndoManager` sur le contexte principal SUFFIT : SwiftData y enregistre de
-    // lui-même insertions, suppressions et modifications — il n'y a aucune pile à tenir à la main.
+    // Pas d'`UndoManager` posé ici. SwiftData enregistre bien tout seul dans celui du contexte,
+    // mais un manager fabriqué au démarrage n'est relié à RIEN : le menu *Édition ▸ Annuler* parle
+    // à celui de la FENÊTRE, qui n'existe pas encore à cet instant. C'est `ContentView` qui fait le
+    // branchement, une fois la fenêtre là — la démonstration est dans son `.onChange`.
     //
-    // Ça n'a rien d'un confort : ⌫ supprime DÉFINITIVEMENT et l'app n'a pas de corbeille. Le jour
-    // où la touche a été généralisée aux pages intelligentes (cf. `TaskPageBase`), le nombre
-    // d'occasions de perdre une tâche d'un geste a été multiplié par le nombre de pages. L'annulation
-    // devait arriver avant, pas après.
-    //
-    // Après `ensureInbox` : la création de l'inbox et le rattachement des orphelines sont de la
-    // maintenance de démarrage, pas un geste de l'utilisateur — les annuler n'aurait aucun sens.
+    // Ça n'a rien d'un confort : ⌫ supprime DÉFINITIVEMENT et l'app n'a pas de corbeille. Depuis
+    // que la touche vaut sur toutes les pages (cf. `TaskPageBase`), les occasions de perdre une
+    // tâche d'un geste ont été multipliées par le nombre de pages.
     ensureInbox(in: container)
-    container.mainContext.undoManager = UndoManager()
     return container
   }()
 

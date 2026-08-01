@@ -22,6 +22,9 @@ struct ContentView: View {
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.modelContext) private var modelContext
+  /// Celui de la fenêtre : c'est lui que le menu *Édition ▸ Annuler* atteint (cf. `.onChange`
+  /// plus bas, qui le donne au contexte SwiftData).
+  @Environment(\.undoManager) private var undoManager
 
   @State private var selection: SidebarSelection? = .smartList(.today)
   @State private var searchPresented = false
@@ -151,6 +154,17 @@ struct ContentView: View {
     // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande,
     // donc elle arrive APRÈS la notification et doit venir chercher la sélection elle-même.
     .onAppear(perform: applyPendingSelection)
+    // ⌘Z. Le menu *Édition ▸ Annuler* n'annule pas « ce qui vient d'être fait » dans l'absolu : il
+    // envoie `undo:` dans la chaîne des répondeurs, qui aboutit à l'`UndoManager` DE LA FENÊTRE.
+    // Poser un `UndoManager` neuf sur le contexte SwiftData — ce qui était fait au démarrage —
+    // ouvrait une SECONDE pile, correctement alimentée mais que rien ne pouvait atteindre : ⌘Z
+    // restait sans effet partout, sans erreur ni menu grisé pour le dire.
+    //
+    // C'est ce que branche `modelContainer(for:isUndoEnabled:)` quand on laisse SwiftUI fabriquer
+    // le container ; le nôtre est bâti à la main (cf. `TodayApp.openStore`, qui sauvegarde la base
+    // avant de l'ouvrir), donc ce fil-là est à notre charge. L'environnement donne EXACTEMENT le
+    // manager de la fenêtre — celui que le menu atteindra.
+    .onChange(of: undoManager, initial: true) { modelContext.undoManager = undoManager }
     // Retour de complétion Rappels → app : EventKit prévient de tout changement du store ;
     // le retour au premier plan couvre le rappel coché pendant que l'app était en arrière-plan.
     .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in

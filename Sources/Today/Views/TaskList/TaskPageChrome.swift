@@ -117,6 +117,18 @@ extension View {
   }
 }
 
+extension View {
+  /// Le rebond d'apparition d'une ligne de tâche : elle grandit depuis sa case à cocher, pas
+  /// depuis son centre — d'où l'ancrage à gauche.
+  ///
+  /// Il n'existait que sur la page d'une liste ; « Aujourd'hui » et « Tâches » faisaient apparaître
+  /// leurs lignes en fondu. Rien ne justifiait que la même tâche entre différemment selon l'onglet
+  /// où on la regarde.
+  func taskRowInsertion() -> some View {
+    transition(.scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
+  }
+}
+
 // MARK: - Le socle commun d'une page de tâches
 
 /// Ce que TOUTE page de tâches doit savoir faire, posé une fois.
@@ -157,6 +169,17 @@ struct TaskPageBase: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      // Une ligne qui apparaît ou disparaît SANS que ce soit nous qui l'ayons décidé. C'est le cas
+      // de ⌘Z : l'annulation part du menu *Édition*, traverse la chaîne des répondeurs et arrive
+      // dans SwiftData sans passer par une seule de nos méthodes — donc sans le `withAnimation`
+      // que chacune d'elles ouvre. La tâche ressuscitée apparaissait d'un coup, sèche.
+      //
+      // Le nombre de lignes PORTÉES suffit à repérer ces cas : il ne bouge que si une tâche entre
+      // ou sort. Pas le nombre de lignes affichées — celui-là tombe aussi quand on replie une
+      // section, ce qui aurait mis un ressort sur chaque dépliant. Un glisser ou une frappe n'y
+      // touchent pas ; et quand un geste à NOUS le fait bouger (créer, supprimer, cocher sur une
+      // page qui masque les cochées), son propre `withAnimation` ouvre déjà la même courbe.
+      .animation(taskInsert, value: blocks().carriedRowCount)
       .background(
         TaskKeyMonitor(
           isActive: { focus.editing == nil },

@@ -555,9 +555,10 @@ private struct ListPageView: View {
       )
       .animation(.easeOut(duration: 0.15), value: lifted)
       .animation(.easeInOut(duration: 0.2), value: folding)
-      // Rebond à la création (déclenché par le withAnimation de `createTask`). Ancré à gauche : la
-      // rangée grandit depuis sa case à cocher, pas depuis son centre.
-      .transition(.scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
+      // Rebond à la création (déclenché par le withAnimation de `createTask`), et au retour d'un
+      // ⌘Z (par celui du socle). La courbe vit dans `TaskPageChrome` — les trois pages entrent
+      // leurs lignes de la même façon.
+      .taskRowInsertion()
       // En édition, `.subviews` désactive ce geste : les clics/glissers vont au champ texte.
       .gesture(
         dragGesture(for: task),

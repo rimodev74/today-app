@@ -253,6 +253,8 @@ struct TodayPageView: View {
       onSelect: { select(task) },
       onEdit: { beginEditing(task) }
     )
+    // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
+    .taskRowInsertion()
   }
 
   private func parentLabel(of task: TaskItem) -> String? {
