@@ -124,10 +124,6 @@ struct AllTasksPageView: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
       .padding(.top, 30)
-      // Clic dans le vide = on referme, comme sur « Aujourd'hui » : les lignes captent déjà les
-      // leurs, rien ne se réordonne ici, un simple tap sur le fond suffit.
-      .contentShape(Rectangle())
-      .onTapGesture { dismissEditing() }
     }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓. Les mêmes sections que le `body` rend.
     .taskPageBase(
@@ -261,6 +257,8 @@ struct AllTasksPageView: View {
     )
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
+    // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches.
+    .measureTaskRow(task)
   }
 
   private func parentLabel(of task: TaskItem) -> String? {
@@ -283,11 +281,6 @@ struct AllTasksPageView: View {
   private func endEditing(_ task: TaskItem) {
     guard focus.isEditing(task) else { return }
     withAnimation(taskFlow) { focus.endEditing(task) }
-  }
-
-  private func dismissEditing() {
-    guard !focus.isIdle else { return }
-    withAnimation(taskFlow) { focus.dismiss() }
   }
 
   private func move(_ task: TaskItem, to target: TodoList) {

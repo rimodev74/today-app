@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 
 /// Le vocabulaire commun des pages de tâches : métriques, icône de bandeau, fondu d'ouverture,
@@ -129,6 +130,43 @@ extension View {
   }
 }
 
+// MARK: - Où sont les lignes
+
+/// Le repère dans lequel une page de tâches mesure ses lignes, et dans lequel elle convertit les
+/// clics de la fenêtre pour les comparer à elles. Un seul nom : deux repères différents rendraient
+/// la comparaison silencieusement fausse (des points justes, dans le mauvais système).
+let taskPageSpace = "taskPage"
+
+/// Les cadres des lignes, publiés par chacune en se rendant et reçus par la page.
+///
+/// Aucune valeur en mémoire ne peut y suppléer : savoir si un clic est tombé À CÔTÉ d'une tâche,
+/// ou où ouvrir le trou d'insertion d'un glissement, ce sont des questions de position — donc de
+/// mesure. C'est le pendant exact de `TaskPageBlock`, qui répond, lui, à « quelles lignes, dans
+/// quel ordre ».
+struct TaskRowFrameKey: PreferenceKey {
+  static let defaultValue: [PersistentIdentifier: CGRect] = [:]
+  static func reduce(
+    value: inout [PersistentIdentifier: CGRect],
+    nextValue: () -> [PersistentIdentifier: CGRect]
+  ) {
+    value.merge(nextValue()) { _, new in new }
+  }
+}
+
+extension View {
+  /// À poser sur CHAQUE ligne d'une page qui utilise `taskPageBase`. Sans elle, la page garde son
+  /// clavier mais reste aveugle : le clic dans le vide ne peut pas savoir qu'il est dans le vide.
+  func measureTaskRow(_ task: TaskItem) -> some View {
+    background {
+      GeometryReader { proxy in
+        Color.clear.preference(
+          key: TaskRowFrameKey.self,
+          value: [task.persistentModelID: proxy.frame(in: .named(taskPageSpace))])
+      }
+    }
+  }
+}
+
 // MARK: - Le socle commun d'une page de tâches
 
 /// Ce que TOUTE page de tâches doit savoir faire, posé une fois.
@@ -142,21 +180,18 @@ extension View {
 /// cas**. Une page qui ne sait pas supprimer passe une action qui ne fait rien — elle ne fait pas
 /// DISPARAÎTRE le geste.
 ///
-/// ## Ce qu'il ne fait PAS encore : le clic dans le vide
+/// ## Le clic dans le vide
 ///
-/// Il ne porte que le CLAVIER. Le clic qui relâche la sélection demande de savoir si le point cliqué
-/// est tombé sur une ligne — donc de connaître le cadre de chaque ligne. Seule la page d'une liste
-/// les mesure aujourd'hui (`rowFrames`, pour son glisser), et elle garde donc son propre
-/// `LeftClickOutsideObserver`.
-///
-/// Un fond transparent posé derrière la page NE MARCHE PAS, et c'est déjà écrit noir sur blanc dans
+/// Un fond transparent posé derrière la page NE MARCHE PAS, et c'est écrit noir sur blanc dans
 /// l'en-tête de `LeftClickOutsideObserver` : le ScrollView capte les clics de toute sa surface, et
 /// un fond de contenu ne couvre de toute façon ni les marges (`gutter`) ni le vide sous la dernière
 /// ligne. Essayé deux fois, rejeté deux fois.
 ///
-/// La bonne réponse est celle de la page d'une liste — un moniteur NSEvent + les cadres des lignes.
-/// Elle arrivera avec la mesure des cadres sur les pages intelligentes, dont le glisser a de toute
-/// façon besoin : ce n'est pas un contournement à inventer, c'est la même brique.
+/// La réponse qui marche est celle de la page d'une liste : un moniteur qui voit TOUS les clics de
+/// la fenêtre, et les cadres des lignes pour trancher. Ici les cadres arrivent d'eux-mêmes
+/// (`TaskRowFrameKey`), et une page qui ne les publie pas garde simplement son clavier — le socle
+/// reste inerte plutôt que de relâcher la sélection au moindre clic, faute de savoir où sont les
+/// lignes.
 struct TaskPageBase: ViewModifier {
   @Binding var focus: TaskFocus
   /// Les pans que la page AFFICHE, dans l'ordre où elle les rend — pas un ordre de lignes recopié
@@ -165,10 +200,38 @@ struct TaskPageBase: ViewModifier {
   let blocks: () -> [TaskPageBlock]
   let delete: (TaskItem) -> Void
 
+  /// Renseigné par les lignes qui appellent `measureTaskRow`, dans le repère `taskPageSpace`.
+  @State private var rowFrames: [PersistentIdentifier: CGRect] = [:]
+
   private var rows: [TaskItem] { blocks().displayedRows }
+
+  /// Un clic quelque part dans la fenêtre : hors de toute ligne, il relâche la sélection.
+  ///
+  /// La garde `isIdle` n'est pas une optimisation. Ce moniteur voit TOUS les `mouseDown` de la
+  /// fenêtre — sidebar, barre du bas, bouton des réglages compris. Sans elle, chaque appui rejouait
+  /// une transaction animée, donc une résignation de premier répondeur ENTRE le mouseDown et le
+  /// mouseUp du contrôle visé : le contrôle perdait le suivi de son propre clic et il fallait
+  /// cliquer deux fois (cf. la même garde dans `ListPageView.dismissSelectionIfOutside`).
+  private func releaseSelectionIfOutside(_ point: CGPoint) {
+    guard !focus.isIdle, !rowFrames.isEmpty else { return }
+    guard !rowFrames.values.contains(where: { $0.contains(point) }) else { return }
+    withAnimation(taskFlow) { focus.dismiss() }
+  }
 
   func body(content: Content) -> some View {
     content
+      // Le repère de `measureTaskRow` et celui du moniteur, posés au MÊME endroit : c'est la seule
+      // façon que les points comparés soient dans le même monde. Ici le socle coiffe le ScrollView,
+      // donc le repère est celui de la FENÊTRE de défilement — et c'est bien celui qu'il faut : la
+      // vue AppKit du moniteur est un fond de ce même ScrollView, ses clics arrivent déjà là-dedans.
+      //
+      // ponytail: les cadres suivent donc le défilement et sont republiés en défilant. Coût réel
+      // mesurable seulement si une page devient longue ; le jour où ça se sent, mesurer dans le
+      // repère du CONTENU (invariant au défilement, cf. `ListPageView.dragSpace`) et convertir le
+      // point du clic.
+      .coordinateSpace(name: taskPageSpace)
+      .onPreferenceChange(TaskRowFrameKey.self) { frames in rowFrames = frames }
+      .background(LeftClickOutsideObserver(onClick: releaseSelectionIfOutside))
       // Une ligne qui apparaît ou disparaît SANS que ce soit nous qui l'ayons décidé. C'est le cas
       // de ⌘Z : l'annulation part du menu *Édition*, traverse la chaîne des répondeurs et arrive
       // dans SwiftData sans passer par une seule de nos méthodes — donc sans le `withAnimation`

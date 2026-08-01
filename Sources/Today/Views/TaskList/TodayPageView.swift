@@ -137,11 +137,6 @@ struct TodayPageView: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
       .padding(.top, 30)
-      // Clic dans le vide = on referme. La page de liste, elle, traque les cadres de chaque ligne
-      // (`rowFrames`) parce que son geste de drag lui interdit un simple tap ; ici un `onTapGesture`
-      // sur le fond suffit — les lignes captent déjà les leurs.
-      .contentShape(Rectangle())
-      .onTapGesture { dismissEditing() }
     }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓.
     .taskPageBase(focus: $focus, blocks: { displayedBlocks }, delete: delete)
@@ -255,6 +250,8 @@ struct TodayPageView: View {
     )
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
+    // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches.
+    .measureTaskRow(task)
   }
 
   private func parentLabel(of task: TaskItem) -> String? {
@@ -277,11 +274,6 @@ struct TodayPageView: View {
   private func endEditing(_ task: TaskItem) {
     guard focus.isEditing(task) else { return }
     withAnimation(taskFlow) { focus.endEditing(task) }
-  }
-
-  private func dismissEditing() {
-    guard !focus.isIdle else { return }
-    withAnimation(taskFlow) { focus.dismiss() }
   }
 
   /// Pose la tâche à la fin de sa nouvelle liste, comme `ListPageView.move`.
