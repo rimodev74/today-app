@@ -255,20 +255,14 @@ private struct ListPageView: View {
       KeyCommandMonitor(keyCode: 45, modifiers: [.command, .shift], action: insertHeader)
     }
     // Retour arrière (⌫) sur la sélection courante (tâche OU en-tête, hors édition) : la supprime.
-    // PAS le bouton caché + `.keyboardShortcut` utilisé pour Échap ci-dessus (et pas non plus
-    // `.onKeyPress`, essayé puis abandonné) : ces deux mécanismes exigent qu'un VRAI premier
-    // répondeur existe déjà dans la fenêtre. Un champ d'édition en a un ; une ligne juste
-    // SÉLECTIONNÉE (tap, aucun champ focalisé) n'en établit aucun — la frappe servait alors à
-    // ÉTABLIR le key-view-loop (focus jeté sur le 1er champ focalisable, le « Nouvelle tâche » du
-    // bloc) au lieu d'atteindre le gestionnaire. `DeleteKeyMonitor` voit la touche AVANT sa
-    // distribution normale, indépendamment de tout premier répondeur — et se retire lui-même dès
-    // qu'un VRAI champ de texte a le focus (cf. son check `NSText`), pour ne jamais lui voler ⌫.
-    .background {
-      DeleteKeyMonitor(
-        isActive: { focus.hasIdleSelection },
-        action: requestDeleteSelected
-      )
-    }
+    // Le socle commun des pages de tâches : ⌫ sur la sélection, ↑/↓ pour la déplacer, clic dans le
+    // vide pour la relâcher. `rows` suit l'ordre AFFICHÉ (les archivées n'y sont pas), donc celui
+    // que l'œil parcourt — pas l'ordre du modèle.
+    .taskPageBase(
+      focus: $focus,
+      rows: { blocks.flatMap(\.items) },
+      delete: requestDelete
+    )
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
     // supprime directement. Les tâches, elles, ne sont PAS supprimées — l'en-tête retirée, elles
     // rejoignent la section précédente.
@@ -344,17 +338,17 @@ private struct ListPageView: View {
     }
   }
 
-  /// ⌫ sur la sélection courante : délègue à la confirmation d'en-tête si elle en est une, sinon
-  /// supprime la tâche directement (pas de tâches rattachées à protéger, contrairement à l'en-tête).
-  private func requestDeleteSelected() {
-    guard let id = focus.selected,
-      let task = list.tasks.first(where: { $0.persistentModelID == id })
-    else { return }
-    if task.isHeader {
-      requestDeleteSelectedHeader()
-    } else {
+  /// ⌫ sur une ligne : délègue à la confirmation d'en-tête si elle en est une, sinon supprime la
+  /// tâche directement (pas de tâches rattachées à protéger, contrairement à l'en-tête).
+  ///
+  /// Prend sa cible en paramètre plutôt que de la chercher : c'est le socle commun
+  /// (`TaskPageBase`) qui la désigne, à partir de l'ordre AFFICHÉ de la page.
+  private func requestDelete(_ task: TaskItem) {
+    guard task.isHeader else {
       delete(task)
+      return
     }
+    if attachedTasks(of: task).isEmpty { delete(task) } else { headerDeletionCandidate = task }
   }
 
   /// Découpe les lignes en blocs : une en-tête et les tâches qui la suivent jusqu'à la prochaine.

@@ -134,6 +134,14 @@ struct TodayPageView: View {
       .contentShape(Rectangle())
       .onTapGesture { dismissEditing() }
     }
+    // Le socle commun des pages de tâches : ⌫ et ↑/↓. `rows` suit ce que l'ŒIL
+    // voit — la réserve repliée n'en fait donc pas partie, les flèches ne peuvent pas emmener la
+    // sélection sur une ligne invisible.
+    .taskPageBase(
+      focus: $focus,
+      rows: { tasks + (undatedExpanded ? undatedGroups.flatMap(\.tasks) : []) },
+      delete: delete
+    )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: { draftFocused = true }, onInsertHeader: nil,

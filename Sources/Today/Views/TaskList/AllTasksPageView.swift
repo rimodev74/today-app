@@ -124,6 +124,17 @@ struct AllTasksPageView: View {
       .contentShape(Rectangle())
       .onTapGesture { dismissEditing() }
     }
+    // Le socle commun des pages de tâches : ⌫ et ↑/↓.
+    //
+    // `rows` doit suivre le rendu du `body` À L'IDENTIQUE, dans le même ORDRE : la boîte de
+    // réception d'abord (elle ouvre la page, sans dépliant), puis les sections. L'oublier ne se voit
+    // pas à l'écran — ⌫ et les flèches cessent simplement d'atteindre les lignes manquantes, ce qui
+    // se lit comme « la touche ne marche pas ».
+    .taskPageBase(
+      focus: $focus,
+      rows: { inboxTasks + sections.filter(isExpanded).flatMap(\.tasks) },
+      delete: delete
+    )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: { draftFocused = true }, onInsertHeader: nil,
@@ -183,9 +194,16 @@ struct AllTasksPageView: View {
 
   /// `toggled` retient l'ÉCART au défaut, pas l'état : `contains` ⇔ « replié si le défaut est
   /// ouvert, ouvert sinon ». Une `Set` d'ouvertes aurait demandé de l'amorcer au premier rendu.
+  /// Une section est-elle dépliée ? `toggled` ne retient que les écarts au défaut, d'où le XOR.
+  /// Lu par le `DisclosureGroup` ET par le socle (les flèches ne parcourent que le visible) : la
+  /// règle vit donc à un seul endroit.
+  private func isExpanded(_ section: TaskSection) -> Bool {
+    toggled.contains(section.id) != section.defaultExpanded
+  }
+
   private func expansion(of section: TaskSection) -> Binding<Bool> {
     Binding(
-      get: { toggled.contains(section.id) != section.defaultExpanded },
+      get: { isExpanded(section) },
       set: { open in
         if open == section.defaultExpanded {
           toggled.remove(section.id)

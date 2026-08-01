@@ -5,6 +5,10 @@ SwiftPM (pas de `.xcodeproj`), SwiftUI + SwiftData, ~11 200 lignes dans `Sources
 (+ ~1 620 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
 de `ThingsCloneApp.swift`.
 
+> **Un chantier est en cours.** Avant de toucher aux pages de tâches (sélection, clavier, clic dans
+> le vide, glisser), lire `docs/CHANTIER-EN-COURS.md` : il dit ce qui reste, pourquoi, et surtout ce
+> qui a **déjà été essayé et rejeté** — deux approches y ont été refaites par oubli.
+
 ## Lancer
 
 ```bash

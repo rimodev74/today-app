@@ -116,3 +116,65 @@ extension View {
         isSelected: isSelected, isEditing: isEditing, onSelect: onSelect, onEdit: onEdit))
   }
 }
+
+// MARK: - Le socle commun d'une page de tâches
+
+/// Ce que TOUTE page de tâches doit savoir faire, posé une fois.
+///
+/// Historiquement, chaque page recevait ses gestes au coup par coup : la page d'une liste avait ⌫,
+/// le glisser et le clic dans le vide ; « Aujourd'hui » et « Tâches » n'avaient rien. La même
+/// touche donnait donc des résultats différents d'un onglet à l'autre, sans qu'aucune règle ne le
+/// justifie.
+///
+/// La règle est désormais l'inverse : **une base unique, puis des contraintes ajoutées au cas par
+/// cas**. Une page qui ne sait pas supprimer passe une action qui ne fait rien — elle ne fait pas
+/// DISPARAÎTRE le geste.
+///
+/// ## Ce qu'il ne fait PAS encore : le clic dans le vide
+///
+/// Il ne porte que le CLAVIER. Le clic qui relâche la sélection demande de savoir si le point cliqué
+/// est tombé sur une ligne — donc de connaître le cadre de chaque ligne. Seule la page d'une liste
+/// les mesure aujourd'hui (`rowFrames`, pour son glisser), et elle garde donc son propre
+/// `LeftClickOutsideObserver`.
+///
+/// Un fond transparent posé derrière la page NE MARCHE PAS, et c'est déjà écrit noir sur blanc dans
+/// l'en-tête de `LeftClickOutsideObserver` : le ScrollView capte les clics de toute sa surface, et
+/// un fond de contenu ne couvre de toute façon ni les marges (`gutter`) ni le vide sous la dernière
+/// ligne. Essayé deux fois, rejeté deux fois.
+///
+/// La bonne réponse est celle de la page d'une liste — un moniteur NSEvent + les cadres des lignes.
+/// Elle arrivera avec la mesure des cadres sur les pages intelligentes, dont le glisser a de toute
+/// façon besoin : ce n'est pas un contournement à inventer, c'est la même brique.
+struct TaskPageBase: ViewModifier {
+  @Binding var focus: TaskFocus
+  /// L'ordre AFFICHÉ de la page — celui que suivent ↑ et ↓, donc celui que voit l'œil, pas celui
+  /// du modèle.
+  let rows: () -> [TaskItem]
+  let delete: (TaskItem) -> Void
+
+  func body(content: Content) -> some View {
+    content
+      .background(
+        TaskKeyMonitor(
+          isActive: { focus.editing == nil },
+          onDelete: {
+            guard let target = rows().first(where: { focus.isSelected($0) }) else { return }
+            delete(target)
+          },
+          onMove: { offset in
+            withAnimation(taskSelectFade) { focus.moveSelection(by: offset, in: rows()) }
+          }
+        )
+      )
+  }
+}
+
+extension View {
+  func taskPageBase(
+    focus: Binding<TaskFocus>,
+    rows: @escaping () -> [TaskItem],
+    delete: @escaping (TaskItem) -> Void
+  ) -> some View {
+    modifier(TaskPageBase(focus: focus, rows: rows, delete: delete))
+  }
+}

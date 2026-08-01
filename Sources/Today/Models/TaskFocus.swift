@@ -92,4 +92,28 @@ struct TaskFocus: Equatable {
     if selected == task.persistentModelID { selected = nil }
     if editing == task.persistentModelID { editing = nil }
   }
+
+  /// Déplace la sélection de `offset` crans dans `rows`, l'ordre AFFICHÉ de la page.
+  ///
+  /// Rien de sélectionné → on entre par le bord d'où l'on vient : ↓ prend la première ligne, ↑ la
+  /// dernière. C'est ce qui permet de saisir une liste au clavier sans avoir à cliquer d'abord.
+  ///
+  /// Aux extrémités, la sélection RESTE. Pas d'enroulement : sauter du bas vers le haut fait perdre
+  /// sa place à l'œil, et rien à l'écran ne l'annonce.
+  ///
+  /// Une ligne en cours d'édition n'est pas navigable — les flèches appartiennent alors au champ de
+  /// texte. C'est à l'appelant de ne pas router la touche (cf. `hasIdleSelection`) ; ici on se
+  /// contente de refuser de bouger, pour que la règle tienne même si un appelant l'oublie.
+  mutating func moveSelection(by offset: Int, in rows: [TaskItem]) {
+    guard editing == nil, !rows.isEmpty, offset != 0 else { return }
+    guard let current = selected,
+      let index = rows.firstIndex(where: { $0.persistentModelID == current })
+    else {
+      selected = (offset > 0 ? rows.first : rows.last)?.persistentModelID
+      return
+    }
+    let next = index + (offset > 0 ? 1 : -1)
+    guard rows.indices.contains(next) else { return }
+    selected = rows[next].persistentModelID
+  }
 }

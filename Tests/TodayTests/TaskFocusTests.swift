@@ -104,4 +104,69 @@ final class TaskFocusTests: XCTestCase {
     XCTAssertNil(focus.selected)
     XCTAssertNil(focus.editing)
   }
+
+  // MARK: Navigation au clavier
+
+  private var rows: [TaskItem] { [a, b, c] }
+  private let c = TaskItem(title: "C")
+
+  /// Sans rien de sélectionné, on entre par le bord d'où l'on vient : c'est ce qui permet de saisir
+  /// une page au clavier sans cliquer d'abord.
+  func testArrowEntersTheListFromTheEdgeYouComeFrom() {
+    var down = TaskFocus()
+    down.moveSelection(by: 1, in: rows)
+    XCTAssertTrue(down.isSelected(a), "↓ entre par le haut")
+
+    var up = TaskFocus()
+    up.moveSelection(by: -1, in: rows)
+    XCTAssertTrue(up.isSelected(c), "↑ entre par le bas")
+  }
+
+  func testArrowsMoveOneRowAtATime() {
+    var focus = TaskFocus()
+    focus.select(a)
+    focus.moveSelection(by: 1, in: rows)
+    XCTAssertTrue(focus.isSelected(b))
+    focus.moveSelection(by: 1, in: rows)
+    XCTAssertTrue(focus.isSelected(c))
+    focus.moveSelection(by: -1, in: rows)
+    XCTAssertTrue(focus.isSelected(b))
+  }
+
+  /// Pas d'enroulement : sauter du bas vers le haut ferait perdre sa place à l'œil, et rien à
+  /// l'écran ne l'annoncerait.
+  func testSelectionStaysPutAtBothEnds() {
+    var focus = TaskFocus()
+    focus.select(c)
+    focus.moveSelection(by: 1, in: rows)
+    XCTAssertTrue(focus.isSelected(c), "en bas, ↓ ne fait rien")
+
+    focus.select(a)
+    focus.moveSelection(by: -1, in: rows)
+    XCTAssertTrue(focus.isSelected(a), "en haut, ↑ ne fait rien")
+  }
+
+  /// Les flèches appartiennent au champ de texte quand une carte est ouverte.
+  func testArrowsDoNotMoveWhileEditing() {
+    var focus = TaskFocus()
+    focus.edit(a)
+    focus.moveSelection(by: 1, in: rows)
+    XCTAssertTrue(focus.isSelected(a), "la sélection n'a pas bougé")
+    XCTAssertTrue(focus.isEditing(a), "et la carte est restée ouverte")
+  }
+
+  /// La ligne sélectionnée a disparu de la page (filtrée, déplacée) : la flèche doit rattraper le
+  /// coup en entrant par le bord plutôt que de rester bloquée.
+  func testArrowRecoversWhenTheSelectedRowIsGone() {
+    var focus = TaskFocus()
+    focus.select(c)
+    focus.moveSelection(by: 1, in: [a, b])
+    XCTAssertTrue(focus.isSelected(a))
+  }
+
+  func testArrowsOnAnEmptyPageDoNothing() {
+    var focus = TaskFocus()
+    focus.moveSelection(by: 1, in: [])
+    XCTAssertTrue(focus.isIdle)
+  }
 }

@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 /// Les ponts vers AppKit que SwiftUI ne fournit pas : curseur en zone précise, clic droit, clic
-/// hors zone, ⌫ et raccourcis clavier au niveau fenêtre.
+/// hors zone, touches de sélection (⌫, ↑/↓) et raccourcis clavier au niveau fenêtre.
 ///
 /// AUCUN ne connaît la moindre notion de tâche ou de liste — ce sont des primitives d'interaction,
 /// réutilisables telles quelles par n'importe quelle vue (cf. `WindowConfigurator`, qui se sert
-/// déjà de `DeleteKeyMonitor`). Elles n'avaient donc rien à faire dans la page d'une liste.
+/// déjà de `TaskKeyMonitor`). Elles n'avaient donc rien à faire dans la page d'une liste.
 ///
 /// Chacun démonte son moniteur dans `dismantleNSView` : un moniteur `NSEvent` laissé installé
 /// continue d'avaler les frappes de toute l'app (cf. CLAUDE.md, « Ce qui s'installe se démonte »).
@@ -29,7 +29,7 @@ struct PointingHandCursorArea: NSViewRepresentable {
 /// SwiftUI ne notifie pas l'ouverture d'un `.contextMenu` (pas de hook « avant présentation ») ;
 /// une première tentative interceptait l'événement AppKit directement sur la ligne, mais son
 /// propre hit-test empêchait alors la sélection ET le menu de se déclencher. On observe donc le
-/// clic droit à CÔTÉ, via un moniteur NSEvent (même mécanisme que `DeleteKeyMonitor`) qui ne
+/// clic droit à CÔTÉ, via un moniteur NSEvent (même mécanisme que `TaskKeyMonitor`) qui ne
 /// consomme JAMAIS l'événement (toujours `return event`) et retrouve la ligne visée par géométrie,
 /// dans le même espace de coordonnées (`Self.dragSpace`) que `rowFrames` — sans jamais toucher au
 /// menu natif, qui continue de s'afficher par son propre mécanisme, intact.
@@ -145,18 +145,32 @@ struct LeftClickOutsideObserver: NSViewRepresentable {
   }
 }
 
-/// Surveille ⌫ (retour arrière, keyCode 51) au niveau de la fenêtre, hors du système de focus
-/// SwiftUI : `.keyboardShortcut`/`.onKeyPress` sans modificateur n'atteignent leur gestionnaire que
-/// s'il existe DÉJÀ un premier répondeur AppKit dans la fenêtre — une ligne juste sélectionnée
-/// (tap, aucun champ focalisé) n'en établit aucun. Un moniteur local d'événements voit la touche
-/// AVANT sa distribution normale, quel que soit le premier répondeur : ni la sélection d'une ligne
-/// ni son absence n'entrent en jeu. Il se retire lui-même dès qu'un VRAI champ de texte a le focus
-/// (même check `NSText` que `SidebarView.editableTitle`) pour ne jamais lui voler la frappe.
-struct DeleteKeyMonitor: NSViewRepresentable {
+/// Les touches qui pilotent la SÉLECTION d'une page de tâches : ⌫ pour supprimer, ↑/↓ pour se
+/// déplacer d'une ligne à l'autre.
+///
+/// Au niveau de la FENÊTRE, hors du système de focus SwiftUI : `.keyboardShortcut`/`.onKeyPress`
+/// sans modificateur n'atteignent leur gestionnaire que s'il existe DÉJÀ un premier répondeur AppKit
+/// dans la fenêtre — or une ligne juste sélectionnée (un tap, aucun champ focalisé) n'en établit
+/// aucun. Un moniteur local voit la touche AVANT sa distribution normale, quel que soit le premier
+/// répondeur : ni la sélection d'une ligne ni son absence n'entrent en jeu.
+///
+/// C'est la PAGE qui écoute, pas la rangée — la sélection n'appartient à aucune vue en particulier,
+/// et une ligne non focalisée ne recevrait jamais de frappe.
+///
+/// Il se retire de lui-même dès qu'un VRAI champ de texte a le focus (même contrôle `NSText` que
+/// `SidebarView.editableTitle`) : ⌫ et les flèches y ont un tout autre sens, et ne doivent jamais
+/// lui être volées.
+struct TaskKeyMonitor: NSViewRepresentable {
+  /// La page est-elle en état de consommer ces touches ? Faux dès qu'une carte d'édition est
+  /// ouverte : les flèches appartiennent alors au texte.
   var isActive: () -> Bool
-  var action: () -> Void
+  var onDelete: () -> Void
+  /// -1 vers le haut, +1 vers le bas.
+  var onMove: (Int) -> Void
 
-  func makeCoordinator() -> Coordinator { Coordinator(isActive: isActive, action: action) }
+  func makeCoordinator() -> Coordinator {
+    Coordinator(isActive: isActive, onDelete: onDelete, onMove: onMove)
+  }
 
   func makeNSView(context: Context) -> NSView {
     context.coordinator.install()
@@ -165,7 +179,8 @@ struct DeleteKeyMonitor: NSViewRepresentable {
 
   func updateNSView(_ nsView: NSView, context: Context) {
     context.coordinator.isActive = isActive
-    context.coordinator.action = action
+    context.coordinator.onDelete = onDelete
+    context.coordinator.onMove = onMove
   }
 
   static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -177,26 +192,35 @@ struct DeleteKeyMonitor: NSViewRepresentable {
   @MainActor
   final class Coordinator {
     var isActive: () -> Bool
-    var action: () -> Void
+    var onDelete: () -> Void
+    var onMove: (Int) -> Void
     private var monitor: Any?
 
-    init(isActive: @escaping () -> Bool, action: @escaping () -> Void) {
+    init(
+      isActive: @escaping () -> Bool, onDelete: @escaping () -> Void,
+      onMove: @escaping (Int) -> Void
+    ) {
       self.isActive = isActive
-      self.action = action
+      self.onDelete = onDelete
+      self.onMove = onMove
     }
 
     func install() {
       guard monitor == nil else { return }
-      let ignoredMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+      // Sans modificateur : ⌘⌫ ou ⌥↑ appartiennent à d'autres gestes, existants ou à venir.
+      let ignored: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
       monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-        guard let self, event.keyCode == 51,
-          event.modifierFlags.intersection(ignoredMods).isEmpty, self.isActive()
+        guard let self, event.modifierFlags.intersection(ignored).isEmpty, self.isActive()
         else { return event }
-        // Un vrai champ de texte a le focus (renommage, notes, « Nouvelle tâche »…) : on le
-        // laisse gérer sa propre frappe, ⌫ ne doit jamais lui échapper.
         if NSApp.keyWindow?.firstResponder is NSText { return event }
-        self.action()
-        return nil
+
+        switch Int(event.keyCode) {
+        case 51: self.onDelete()
+        case 126: self.onMove(-1)
+        case 125: self.onMove(1)
+        default: return event
+        }
+        return nil  // consommée : elle ne doit pas remonter plus loin
       }
     }
 
@@ -208,7 +232,7 @@ struct DeleteKeyMonitor: NSViewRepresentable {
 }
 
 /// Raccourci clavier sur `keyCode` + un jeu EXACT de modificateurs, câblé en direct sur NSEvent
-/// (même mécanisme que `DeleteKeyMonitor` ci-dessus) — pour ⌘N/⌘⇧N : deux `.keyboardShortcut` sur
+/// (même mécanisme que `TaskKeyMonitor` ci-dessus) — pour ⌘N/⌘⇧N : deux `.keyboardShortcut` sur
 /// la même lettre avec des modificateurs différents se marchent dessus sous SwiftUI (⌘⇧N avalé
 /// par le gestionnaire ⌘N), ce moniteur compare les modificateurs à l'égalité et évite le conflit.
 struct KeyCommandMonitor: NSViewRepresentable {
