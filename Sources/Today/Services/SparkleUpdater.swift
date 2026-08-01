@@ -1,5 +1,9 @@
 import Sparkle
 
+/// Isolé au fil principal : `SPUUpdater` et son pilote d'interface sont des objets AppKit, et le
+/// singleton est construit depuis `TodayApp.init`. Sans cette annotation, `shared` est une variable
+/// globale mutable partagée — ce que Swift 6 refuse, à juste titre.
+@MainActor
 final class SparkleUpdater {
   static let shared = SparkleUpdater()
 

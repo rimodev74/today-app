@@ -168,9 +168,12 @@ final class RemindersService {
       withDueDateStarting: start, ending: end, calendars: nil)
     return await withCheckedContinuation { continuation in
       store.fetchReminders(matching: predicate) { reminders in
-        continuation.resume(returning: reminders ?? [])
+        // `EKReminder` n'est pas Sendable et EventKit répond sur une file à lui. Ce tableau n'est
+        // pourtant partagé avec personne : il naît dans ce rappel, traverse la continuation, et
+        // n'est plus touché que par l'appelant. Le convoyeur dit exactement ça, et rien de plus.
+        continuation.resume(returning: UncheckedBox(reminders ?? []))
       }
-    }
+    }.value
   }
 
   /// Rappels dont l'échéance tombe le `day` donné — cf. `reminders(dueFrom:to:)`.
@@ -240,4 +243,16 @@ final class RemindersService {
       throw RemindersError.saveFailed(underlying: error)
     }
   }
+}
+
+/// Fait traverser une frontière de concurrence à une valeur non-`Sendable` dont on sait qu'elle
+/// n'est partagée avec personne.
+///
+/// Réservé aux objets EventKit : ils ne sont pas `Sendable` (ce sont des classes mutables), mais
+/// ceux qui passent par ici naissent dans un rappel d'EventKit et ne sont lus qu'après, par un seul
+/// appelant. C'est une affirmation du programmeur — d'où le nom explicite plutôt qu'un
+/// `@unchecked Sendable` posé sur un type du domaine, qui l'aurait rendue invisible.
+struct UncheckedBox<Value>: @unchecked Sendable {
+  let value: Value
+  init(_ value: Value) { self.value = value }
 }

@@ -2,6 +2,9 @@ import XCTest
 
 @testable import Today
 
+/// `PomodoroTimer` est isolé au fil principal (son `Timer` vit sur `RunLoop.main`) : les tests
+/// s'y placent aussi, plutôt que de contourner l'isolation qu'on vient de rendre vérifiable.
+@MainActor
 final class PomodoroTimerTests: XCTestCase {
   func testAdvancePhase_triggersLongBreakEveryFourthWorkSession() {
     let timer = PomodoroTimer()

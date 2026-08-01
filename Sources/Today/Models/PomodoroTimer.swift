@@ -17,6 +17,9 @@ enum PomodoroPhase: Equatable {
 }
 
 @Observable
+/// Isolé au fil principal : le `Timer` est ajouté à `RunLoop.main` (cf. `start`), donc `tick()` n'a
+/// jamais lieu ailleurs, et l'objet est lu par des vues SwiftUI. L'annotation écrit cette réalité.
+@MainActor
 final class PomodoroTimer {
   static let sessionsBeforeLongBreak = 4
 
@@ -67,7 +70,10 @@ final class PomodoroTimer {
     guard !isRunning else { return }
     isRunning = true
     let newTimer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-      self?.tick()
+      // Le timer est ajouté à `RunLoop.main` juste en dessous : ce bloc ne part JAMAIS d'ailleurs
+      // que du fil principal. `Timer` ne sait pas l'exprimer dans son type (sa fermeture est
+      // `@Sendable`), on l'affirme donc ici, à l'endroit exact où l'invariant est établi.
+      MainActor.assumeIsolated { self?.tick() }
     }
     // .common (pas .default) : continue de tick pendant le tracking du menu (menu bar ouvert, resize, etc.)
     RunLoop.main.add(newTimer, forMode: .common)

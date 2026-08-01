@@ -2,175 +2,6 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Marge latérale du contenu du panneau de détail. Interne (pas `private`) : `ArchivePageView`
-/// vit dans son propre fichier et doit se caler sur la même marge que les pages de liste.
-let gutter: CGFloat = 75
-
-/// Retrait interne d'une ligne de tâche : la respiration du fond de sélection, entre le bord de
-/// section et la case à cocher. C'est lui qui définit la colonne des cases — donc celle sur
-/// laquelle l'en-tête de page doit se caler (cf. `pageHeader`), sinon le titre de la page flotte
-/// 10 pt à gauche de toutes les tâches qu'il coiffe.
-let rowInset: CGFloat = 10
-
-/// Icône d'un bandeau de page (« Tâches », « Aujourd'hui », « Archives »). Dessinée à la taille du
-/// titre, mais LARGEUR de layout figée à celle d'une `TaskCheckbox` et alignée à gauche : le glyphe
-/// débordera de quelques points dans l'espace qui suit (SwiftUI ne rogne pas), ce qui est exactement
-/// l'effet voulu — la colonne reste juste des deux côtés, bord gauche sur celui des cases à cocher et
-/// titre de page sur celui des titres de tâche, quel que soit le symbole (une étoile est plus large
-/// qu'une coche). Sans ce cadrage, chaque page décale son titre d'une valeur différente.
-struct PageHeaderIcon: View {
-  let systemImage: String
-  let tint: Color
-
-  var body: some View {
-    Image(systemName: systemImage)
-      .font(.app(.title2))
-      .foregroundStyle(tint)
-      .frame(width: 16, alignment: .leading)
-  }
-}
-
-/// Instant de la première ouverture de l'onglet courant, posé par `TaskListView`.
-///
-/// Un HORODATAGE et non un compteur : d'un onglet à l'autre, les lignes n'ont pas la même
-/// identité, elles sont donc CRÉÉES par le changement de page et ne reçoivent aucun `onChange`.
-/// Il leur faut une valeur qu'elles peuvent consulter à leur naissance pour savoir si elles
-/// arrivent avec leur page ou bien plus tard. Passe par l'environnement plutôt que par les
-/// initialiseurs : une page qui ne veut pas de fondu n'a rien à déclarer.
-struct PageOpenedAtKey: EnvironmentKey {
-  static let defaultValue = Date.distantPast
-}
-
-extension EnvironmentValues {
-  var pageOpenedAt: Date {
-    get { self[PageOpenedAtKey.self] }
-    set { self[PageOpenedAtKey.self] = newValue }
-  }
-}
-
-/// Fondu d'ouverture, à poser sur le CONTENU d'une page — jamais sur son en-tête.
-///
-/// L'anneau de progression, le titre de l'onglet et l'encadré de notes en sont volontairement
-/// exclus : ce sont le cadre fixe de la vue. Les faire pâlir donnait l'impression que la page
-/// entière tanguait, et surtout ça noyait l'animation propre de l'anneau — qui, lui, doit
-/// VRAIMENT parcourir sa valeur (cf. `ProgressRing`) plutôt que se contenter d'un fondu.
-///
-/// Opacité SEULE, aucun effet géométrique : un `offset` ou un `scaleEffect` posé ici entrerait
-/// dans les `rowFrames` que `ListPageView` mesure dans `dragSpace`, et le calcul du trou
-/// d'insertion travaillerait sur des positions de repos fausses — même famille de piège que la
-/// boucle offset→cadre→offset documentée plus bas.
-struct PageReveal: ViewModifier {
-  @Environment(\.pageOpenedAt) private var openedAt
-  @State private var opacity: Double = 1
-
-  /// Passé ce délai, ce qui apparaît le fait NET. C'est ce qui distingue « l'onglet vient de
-  /// s'ouvrir » de « le LazyVStack vient de créer cette rangée parce qu'on a fait défiler » :
-  /// sans cette fenêtre, chaque ligne atteinte au défilement serait apparue en fondu.
-  private static let window = 0.35
-
-  func body(content: Content) -> some View {
-    content
-      .opacity(opacity)
-      // Les deux déclencheurs sont nécessaires et ne se recouvrent pas : `onAppear` couvre ce que
-      // le changement d'onglet CRÉE (la quasi-totalité), `onChange` ce que SwiftUI réutilise et
-      // qui ne réapparaît donc jamais.
-      .onAppear(perform: reveal)
-      .onChange(of: openedAt) { reveal() }
-  }
-
-  private func reveal() {
-    guard Date().timeIntervalSince(openedAt) < Self.window else {
-      opacity = 1
-      return
-    }
-    // Le repli part sans animation, le retour à net est animé : un fondu montant, jamais un
-    // clignotement.
-    opacity = 0.55
-    withAnimation(.easeOut(duration: 0.18)) { opacity = 1 }
-  }
-}
-
-extension View {
-  func pageReveal() -> some View { modifier(PageReveal()) }
-}
-
-/// Le lavande de sélection de Things : #D1DFFC. Teinte de l'accent système, translucide, résolue par
-/// apparence : périwinkle clair sur fond blanc, bleu voilé sur fond sombre — et suit la couleur
-/// d'accent choisie par l'utilisateur. Plus opaque en sombre : sur le fond navy, une même alpha
-/// rendrait la sélection quasi invisible. Partagé par la sélection d'une tâche, d'une en-tête, et
-/// les calques en cascade du drag d'en-tête.
-private let thingsSelectionFill = Color(
-  nsColor: NSColor(name: nil) { appearance in
-    let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-    return NSColor.controlAccentColor.withAlphaComponent(dark ? 0.28 : 0.18)
-  })
-
-/// Transitions des états d'une tâche (normal ↔ select ↔ edit). Déclenchées en EXPLICITE
-/// (`withAnimation` côté parent), jamais en `.animation(value:)` par ligne : ainsi une ligne
-/// au repos ne porte aucun modificateur d'animation à traquer, et le scroll reste fluide.
-/// `taskFlow` = la Material standard de l'index.html de référence.
-// Internes et non `private` : « Aujourd'hui » pilote les mêmes transitions sur les mêmes
-// `TaskRow` — deux courbes distinctes se verraient au passage d'une page à l'autre.
-let taskFlow = Animation.timingCurve(0.4, 0, 0.2, 1, duration: 0.2)
-let taskSelectFade = Animation.easeOut(duration: 0.05)
-/// Apparition (création) ET disparition (suppression) d'une ligne : ressort peu amorti pour un
-/// léger rebond, dans les deux sens. Le réordonnancement, lui, passe par des offsets et pas des
-/// insertions/suppressions — la transition des rangées n'y répond donc jamais.
-/// Interne pour la même raison que `gutter` : `ArchivePageView` anime ses sorties de ligne avec.
-let taskInsert = Animation.spring(response: 0.32, dampingFraction: 0.62)
-
-/// Sélection au mouseDOWN + édition au clic sur une ligne DÉJÀ sélectionnée, en UN SEUL geste —
-/// pour les pages sans réordonnancement (« Tâches », « Aujourd'hui »).
-///
-/// SURTOUT PAS deux gestes séparés (`.onTapGesture(count: 2)` pour l'édition + `.onTapGesture`
-/// pour la sélection) : dès qu'une vue porte un tap double, AppKit RETIENT le tap simple le temps
-/// de la fenêtre de double-clic avant de le délivrer. La surbrillance n'arrivait donc qu'une
-/// demi-seconde après le clic — c'était toute la lenteur d'« Aujourd'hui », que les pages de liste
-/// n'ont jamais eue parce qu'elles fusionnent déjà tout dans leur geste de drag (même structure
-/// ici, moins le réordonnancement — cf. `ListPageView.dragGesture`).
-struct RowPressGesture: ViewModifier {
-  let isSelected: Bool
-  let isEditing: Bool
-  var onSelect: () -> Void
-  var onEdit: () -> Void
-
-  /// Appui en cours (le premier `onChanged` est le mouseDown) et état de sélection d'AVANT cet
-  /// appui : c'est lui qui décide si le relâchement ouvre l'édition (renommage façon Finder).
-  @State private var pressing = false
-  @State private var wasSelected = false
-
-  func body(content: Content) -> some View {
-    content.gesture(
-      DragGesture(minimumDistance: 0)
-        .onChanged { _ in
-          guard !pressing else { return }
-          pressing = true
-          wasSelected = isSelected
-          if !isEditing && !isSelected { onSelect() }
-        }
-        .onEnded { value in
-          pressing = false
-          let moved = abs(value.translation.width) > 4 || abs(value.translation.height) > 4
-          guard !moved, !isEditing, wasSelected else { return }
-          onEdit()
-        },
-      // En édition, les clics et les sélections de texte appartiennent au champ.
-      including: isEditing ? .subviews : .all
-    )
-  }
-}
-
-extension View {
-  func rowPressGesture(
-    isSelected: Bool, isEditing: Bool, onSelect: @escaping () -> Void,
-    onEdit: @escaping () -> Void
-  ) -> some View {
-    modifier(
-      RowPressGesture(
-        isSelected: isSelected, isEditing: isEditing, onSelect: onSelect, onEdit: onEdit))
-  }
-}
-
 /// Aiguillage du panneau de détail. Seule la page d'une to-do list est construite pour
 /// l'instant ; les vues intelligentes sont à rebrancher. La recherche vit dans la sidebar
 /// (cf. `SearchPopover`) et pilote la sélection, elle n'a plus de branche ici.
@@ -179,33 +10,7 @@ struct TaskListView: View {
   @Binding var searchPresented: Bool
   @Binding var pendingTitleFocus: PersistentIdentifier?
 
-  /// Onglets déjà ouverts dans cette session — au sens de la sidebar : liste, projet, Pomodoro,
-  /// Tâches, Aujourd'hui, À venir, Archives. Tout ce qui passe par `selection`, donc, et rien
-  /// d'autre : les Réglages sont une fenêtre à part, ils ne traversent jamais ce code.
-  ///
-  /// Le fondu ne joue qu'à la PREMIÈRE ouverture de chacun. Y revenir est une navigation courante,
-  /// pas une découverte — rejouer le fondu à chaque aller-retour finissait par se lire comme une
-  /// lourdeur.
-  @State private var seen: Set<SidebarSelection> = []
-  /// `.distantPast` au départ : la page affichée au lancement n'est l'ouverture de personne, elle
-  /// s'affiche d'un bloc. « Tâches » reste alors non-vu — le premier CLIC dessus fera son fondu.
-  @State private var openedAt = Date.distantPast
-
-  var body: some View {
-    page
-      .environment(\.pageOpenedAt, openedAt)
-      // Ni `.transition` ni `.id(...)` : les deux exigeraient que SwiftUI détruise puis
-      // reconstruise la page à chaque liste (NSTextView des notes, tous les TextField, le
-      // ScrollView) — précisément ce qui avait été retiré ici, cf. le cas `.list` ci-dessous.
-      //
-      // Et ceci ne retarde RIEN : quand on arrive ici la sélection est déjà appliquée et la page
-      // déjà construite (~1 ms, cf. le geste de `SidebarView`). On ne fait qu'horodater son
-      // arrivée à l'écran ; le fondu découvre ce qui est déjà posé.
-      .onChange(of: selection) { _, new in
-        guard let new, seen.insert(new).inserted else { return }
-        openedAt = Date()
-      }
-  }
+  var body: some View { page }
 
   @ViewBuilder
   private var page: some View {
@@ -387,14 +192,13 @@ private struct ListPageView: View {
                 value: fieldOffset(for: block, offsets: offsets)
               )
               .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
-              .pageReveal()
           }
 
           // Repliée pendant un drag : elle n'entre pas dans `rowFrames`/`dragState` (gelés à
           // l'empoignade), une ouverture en cours de drag décalerait le calcul du trou.
           if draggingID == nil {
-            dormantSummary.pageReveal()
-            archiveSection.pageReveal()
+            dormantSummary
+            archiveSection
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -764,10 +568,9 @@ private struct ListPageView: View {
         dragGesture(for: task),
         including: focus.isEditing(task) ? .subviews : .all
       )
-      // Posé sur la LIGNE et non sur un `Group` englobant : un modificateur sur le `ForEach` d'un
-      // `LazyVStack` risque de lui faire évaluer d'un coup toutes ses rangées — la lenteur qu'on
-      // vient justement de retirer. `pageHeader` (anneau, titre, notes) reste au-dessus, intact.
-      .pageReveal()
+    // Posé sur la LIGNE et non sur un `Group` englobant : un modificateur sur le `ForEach` d'un
+    // `LazyVStack` risque de lui faire évaluer d'un coup toutes ses rangées — la lenteur qu'on
+    // vient justement de retirer. `pageHeader` (anneau, titre, notes) reste au-dessus, intact.
   }
 
   /// En-tête de section ou tâche : deux rendus distincts, même enveloppe drag/drop (posée par
@@ -1626,245 +1429,6 @@ private struct ListPageView: View {
   }
 }
 
-/// Barre d'outils flottante du bas, commune à TOUTES les pages (liste, projet, pomodoro, vues à
-/// venir) : même capsule Liquid Glass partout. `onNewTask`/`onInsertHeader` sont optionnels — une
-/// page projet ou une vue stub n'ont pas de bloc de tâches unique où insérer directement ; le
-/// bouton correspondant disparaît alors plutôt que de faire semblant.
-struct BottomToolbar: View {
-  var onNewTask: (() -> Void)?
-  var onInsertHeader: (() -> Void)?
-  var onSearch: () -> Void
-
-  var body: some View {
-    buttonGroup {
-      if let onNewTask {
-        toolbarButton(
-          "Nouvelle tâche", shortcut: "⌘N",
-          description: "Le raccourci clavier crée la tâche et ouvre directement son édition.",
-          action: onNewTask
-        ) {
-          Image(systemName: "plus").font(.app(16)).foregroundStyle(.secondary)
-        }
-        groupDivider
-      }
-      if let onInsertHeader {
-        toolbarButton(
-          "Insérer une en-tête", shortcut: "⌘⇧N",
-          description: "Couleur attribuée au hasard, modifiable depuis son menu.",
-          action: onInsertHeader
-        ) { headerGlyph }
-        groupDivider
-      }
-      toolbarButton("Recherche", action: onSearch) {
-        Image(systemName: "magnifyingglass").font(.app(16)).foregroundStyle(.secondary)
-      }
-    }
-    // Capsule flottante centrée : elle garde sa largeur intrinsèque, le frame full-width la centre.
-    .frame(maxWidth: .infinity, alignment: .center)
-    .padding(.bottom, 16)
-    // `.overlayPreferenceValue` rend la bulle dans une couche à PART, au-dessus de tout ce bloc —
-    // et surtout HORS du `.glassEffect`/`.background` de `buttonGroup` : celui-ci compose son
-    // contenu dans une texture bornée à la Capsule, donc une bulle en overlay LOCAL d'un bouton
-    // (essayé d'abord) se faisait rogner par ce bord dès qu'elle dépassait vers le haut.
-    .overlayPreferenceValue(ToolbarTooltipKey.self) { request in
-      if let request { ToolbarTooltipOverlay(request: request) }
-    }
-  }
-
-  /// « Button group » flottant : une capsule unique posée au-dessus du contenu, toutes les actions
-  /// regroupées dedans, séparées par des traits internes. Rendu Liquid Glass natif via `.glassEffect`
-  /// (bouts arrondis + réfraction + ombre portée fournis par le système), `.interactive()` fait réagir
-  /// le verre au survol/press. Repli material + ombre sous macOS 26 (Package.swift cible .v14, donc
-  /// le `#available` est obligatoire — le compilateur refuse l'API sinon).
-  @ViewBuilder
-  private func buttonGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-    let base = HStack(spacing: 3) { content() }
-      .padding(.horizontal, 7)
-      .padding(.vertical, 6)
-    if #available(macOS 26, *) {
-      base.glassEffect(.regular.interactive(), in: Capsule())
-    } else {
-      base
-        .background(.regularMaterial, in: Capsule())
-        .overlay { Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
-    }
-  }
-
-  private var groupDivider: some View {
-    Divider().frame(height: 20)
-  }
-
-  private func toolbarButton<Icon: View>(
-    _ help: String, shortcut: String? = nil, description: String? = nil,
-    action: @escaping () -> Void, @ViewBuilder icon: @escaping () -> Icon
-  ) -> some View {
-    ToolbarButton(
-      help: help, shortcut: shortcut, description: description, action: action, icon: icon)
-  }
-
-  /// Lettre « T » dans un carré à bordure fine : remplace l'icône générique pour signifier
-  /// « insérer un intertitre texte ». `Color.primary` pour le trait ET la lettre — s'inverse tout
-  /// seul entre light et dark mode, pas de couleur figée à adapter à la main.
-  private var headerGlyph: some View {
-    Text("T")
-      .font(.app(12, weight: .bold, design: .rounded))
-      .foregroundStyle(.primary)
-      .frame(width: 19, height: 19)
-      .overlay {
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-          .strokeBorder(Color.primary, lineWidth: 1.2)
-      }
-  }
-}
-
-/// Un bouton de la toolbar : fond arrondi + léger agrandissement au survol, et curseur en main
-/// (même geste que la sidebar). État `hovering` propre à CHAQUE bouton — c'est pour ça que c'est
-/// une vue à part (une méthode ne peut pas porter de `@State`), sinon tous les boutons du groupe
-/// auraient partagé un seul et même survol.
-private struct ToolbarButton<Icon: View>: View {
-  var help: String
-  /// Non nil ⇒ bulle façon Reminders.app (titre + raccourci + description) au survol, à la place
-  /// du tooltip système `.help` — ce style précis (gras, badge aligné, texte secondaire) n'est pas
-  /// exposé par l'API AppKit publique, cf. `RichTooltip`.
-  var shortcut: String? = nil
-  var description: String? = nil
-  var action: () -> Void
-  @ViewBuilder var icon: () -> Icon
-
-  @State private var hovering = false
-  @State private var showTooltip = false
-
-  var body: some View {
-    let button = Button(action: action) {
-      icon()
-        .frame(width: 41, height: 33)
-        .contentShape(Rectangle())
-        // Capsule, pas un rectangle arrondi : le fond de survol doit reprendre le langage très
-        // arrondi de la pilule qui l'englobe (`buttonGroup`), pas une forme plus carrée qui jure
-        // avec elle.
-        .background(hovering ? Color.primary.opacity(0.09) : .clear, in: Capsule())
-        .scaleEffect(hovering ? 1.08 : 1)
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(help)
-    .animation(.easeOut(duration: 0.15), value: hovering)
-    .onHover { inside in
-      hovering = inside
-      inside ? NSCursor.pointingHand.set() : NSCursor.arrow.set()
-      guard shortcut != nil else { return }
-      if inside {
-        // Même délai qu'un tooltip système avant apparition ; `hovering` revérifié à l'échéance
-        // au cas où la souris serait déjà repartie entre-temps.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-          if hovering {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { showTooltip = true }
-          }
-        }
-      } else {
-        withAnimation(.easeOut(duration: 0.1)) { showTooltip = false }
-      }
-    }
-
-    if let shortcut {
-      button.anchorPreference(key: ToolbarTooltipKey.self, value: .bounds) { anchor in
-        showTooltip
-          ? ToolbarTooltipRequest(
-            title: help, shortcut: shortcut, description: description ?? "", anchor: anchor)
-          : nil
-      }
-    } else {
-      button.help(help)
-    }
-  }
-}
-
-/// Contenu + ancre (position du bouton survolé) transmis par `ToolbarButton` à `BottomToolbar`,
-/// qui rend la bulle hors du groupe de boutons — cf. commentaire sur `.overlayPreferenceValue`.
-private struct ToolbarTooltipRequest {
-  var title: String
-  var shortcut: String
-  var description: String
-  var anchor: Anchor<CGRect>
-}
-
-private struct ToolbarTooltipKey: PreferenceKey {
-  static let defaultValue: ToolbarTooltipRequest? = nil
-  static func reduce(value: inout ToolbarTooltipRequest?, nextValue: () -> ToolbarTooltipRequest?) {
-    if let next = nextValue() { value = next }
-  }
-}
-
-/// Convertit l'ancre du bouton en position réelle (le `GeometryReader` fournit l'espace de coords
-/// de `BottomToolbar`), puis pose la bulle juste au-dessus, centrée sur le bouton. `measuredHeight`
-/// affiné au premier layout (`onAppear`/`onChange` sur sa propre taille) : sans ça, centrer la bulle
-/// par rapport à SA PROPRE hauteur avant de la connaître la ferait d'abord apparaître mal calée.
-private struct ToolbarTooltipOverlay: View {
-  var request: ToolbarTooltipRequest
-  @State private var measuredHeight: CGFloat = 70
-
-  var body: some View {
-    GeometryReader { proxy in
-      let anchor = proxy[request.anchor]
-      RichTooltip(
-        title: request.title, shortcut: request.shortcut, description: request.description
-      )
-      .background {
-        GeometryReader { size in
-          Color.clear
-            .onAppear { measuredHeight = size.size.height }
-            .onChange(of: size.size.height) { _, new in measuredHeight = new }
-        }
-      }
-      .position(x: anchor.midX, y: anchor.minY - 14 - measuredHeight / 2)
-      .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
-    }
-  }
-}
-
-/// Bulle d'aide façon Reminders.app : titre en gras, raccourci aligné à droite sur la même ligne,
-/// description secondaire en dessous. PAS le tooltip système (`.help`, texte plat sans mise en
-/// forme ni badge) — cette mise en page précise n'est pas exposée par l'API AppKit publique, donc
-/// reconstruite à la main. Décor seulement : aucune interaction, jamais de premier plan aux clics.
-private struct RichTooltip: View {
-  var title: String
-  var shortcut: String
-  var description: String
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Text(title).font(.app(13, weight: .semibold))
-        Spacer(minLength: 8)
-        Text(shortcut)
-          .font(.app(12))
-          .foregroundStyle(.secondary)
-      }
-      if !description.isEmpty {
-        Text(description)
-          .font(.app(12))
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .padding(10)
-    .frame(width: 220, alignment: .leading)
-    // Matériau et PAS un gris figé (#F5F6F7 auparavant) : en sombre, ce fond clair restait clair
-    // sous un texte `.primary` devenu blanc — bulle illisible. `.regularMaterial` est déjà la
-    // surface flottante de l'app (cf. la carte de `QuickFindPanel`) et suit les deux apparences.
-    .background(
-      .regularMaterial,
-      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-    )
-    .overlay {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-    }
-    .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
-    .allowsHitTesting(false)
-  }
-}
-
 /// Page d'un projet : ses to-do lists dépliées. Chaque liste montre son titre (cliquable pour
 /// l'ouvrir en édition) puis ses tâches en LECTURE (case à cocher + titre) — un survol du projet
 /// sans avoir à ouvrir chaque liste. L'édition d'une tâche reste sur la page de sa liste.
@@ -1925,10 +1489,9 @@ private struct ProjectPageView: View {
         // Par rangée : une `List` est paresseuse elle aussi (même précaution que
         // `ListPageView.draggableRow`). Le bloc anneau + titre + notes au-dessus reste hors du
         // fondu.
-        .pageReveal()
 
         ForEach(list.orderedTasks) { task in
-          taskRow(task).listRowSeparator(.hidden).pageReveal()
+          taskRow(task).listRowSeparator(.hidden)
         }
 
         if list.tasks.isEmpty {
@@ -1938,7 +1501,6 @@ private struct ProjectPageView: View {
             .padding(.leading, 26)
             .listRowSeparator(.hidden)
             .selectionDisabled()
-            .pageReveal()
         }
       }
 
@@ -3105,248 +2667,6 @@ struct TaskCheckbox: View {
   }
 }
 
-/// Curseur « main » fiable sur une zone précise, via les cursor rects AppKit natifs — cf. le
-/// commentaire sur `TaskCheckbox`. `resetCursorRects()` est appelé par AppKit lui-même à chaque
-/// invalidation de layout, pas par un `.onHover` concurrent d'une vue englobante.
-private struct PointingHandCursorArea: NSViewRepresentable {
-  final class CursorView: NSView {
-    override func resetCursorRects() {
-      super.resetCursorRects()
-      addCursorRect(bounds, cursor: .pointingHand)
-    }
-  }
-
-  func makeNSView(context: Context) -> NSView { CursorView() }
-  func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-/// Clic droit sur une tâche → bascule en édition, EN PLUS du menu contextuel natif (`taskMenu`).
-/// SwiftUI ne notifie pas l'ouverture d'un `.contextMenu` (pas de hook « avant présentation ») ;
-/// une première tentative interceptait l'événement AppKit directement sur la ligne, mais son
-/// propre hit-test empêchait alors la sélection ET le menu de se déclencher. On observe donc le
-/// clic droit à CÔTÉ, via un moniteur NSEvent (même mécanisme que `DeleteKeyMonitor`) qui ne
-/// consomme JAMAIS l'événement (toujours `return event`) et retrouve la ligne visée par géométrie,
-/// dans le même espace de coordonnées (`Self.dragSpace`) que `rowFrames` — sans jamais toucher au
-/// menu natif, qui continue de s'afficher par son propre mécanisme, intact.
-private struct RightClickObserver: NSViewRepresentable {
-  var onRightClick: (CGPoint) -> Void
-
-  func makeCoordinator() -> Coordinator { Coordinator(onRightClick: onRightClick) }
-
-  func makeNSView(context: Context) -> NSView {
-    let view = HitTestView()
-    context.coordinator.view = view
-    context.coordinator.install()
-    return view
-  }
-
-  func updateNSView(_ nsView: NSView, context: Context) {
-    context.coordinator.onRightClick = onRightClick
-  }
-
-  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-    coordinator.uninstall()
-  }
-
-  /// Origine haut-gauche, comme tous les espaces de coordonnées SwiftUI (dont `Self.dragSpace`) :
-  /// sans ce `isFlipped`, la conversion depuis `event.locationInWindow` (origine bas-gauche AppKit)
-  /// donnerait un point inversé en Y par rapport à `rowFrames`.
-  final class HitTestView: NSView {
-    override var isFlipped: Bool { true }
-  }
-
-  final class Coordinator {
-    var onRightClick: (CGPoint) -> Void
-    weak var view: NSView?
-    private var monitor: Any?
-
-    init(onRightClick: @escaping (CGPoint) -> Void) { self.onRightClick = onRightClick }
-
-    func install() {
-      guard monitor == nil else { return }
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
-        guard let self, let view = self.view, event.window == view.window else { return event }
-        let point = view.convert(event.locationInWindow, from: nil)
-        if view.bounds.contains(point) { self.onRightClick(point) }
-        return event
-      }
-    }
-
-    func uninstall() {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
-    }
-  }
-}
-
-/// Clic gauche N'IMPORTE OÙ dans la fenêtre → `ListPageView` décide (via `dismissSelectionIfOutside`)
-/// si ça retombe sur une ligne ou pas. Un `.background` posé sur le CONTENU du ScrollView (essayé
-/// d'abord) ne couvre que sa largeur RENDUE — pas les marges (`gutter`), pas la zone au-dessus de
-/// la page, et jamais la sidebar (hors de cet arbre de vues). Même mécanisme que
-/// `RightClickObserver` : un moniteur NSEvent voit TOUT clic de la fenêtre, ne le consomme JAMAIS
-/// (toujours `return event`, aucun risque de voler un clic destiné à un contrôle), et le convertit
-/// dans le même repère (`Self.dragSpace`) que `rowFrames` pour la comparaison géométrique.
-private struct LeftClickOutsideObserver: NSViewRepresentable {
-  var onClick: (CGPoint) -> Void
-
-  func makeCoordinator() -> Coordinator { Coordinator(onClick: onClick) }
-
-  func makeNSView(context: Context) -> NSView {
-    let view = HitTestView()
-    context.coordinator.view = view
-    context.coordinator.install()
-    return view
-  }
-
-  func updateNSView(_ nsView: NSView, context: Context) {
-    context.coordinator.onClick = onClick
-  }
-
-  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-    coordinator.uninstall()
-  }
-
-  /// Origine haut-gauche, comme `Self.dragSpace` : cf. `RightClickObserver.HitTestView`.
-  final class HitTestView: NSView {
-    override var isFlipped: Bool { true }
-  }
-
-  final class Coordinator {
-    var onClick: (CGPoint) -> Void
-    weak var view: NSView?
-    private var monitor: Any?
-
-    init(onClick: @escaping (CGPoint) -> Void) { self.onClick = onClick }
-
-    func install() {
-      guard monitor == nil else { return }
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-        guard let self, let view = self.view, event.window == view.window else { return event }
-        self.onClick(view.convert(event.locationInWindow, from: nil))
-        return event
-      }
-    }
-
-    func uninstall() {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
-    }
-  }
-}
-
-/// Surveille ⌫ (retour arrière, keyCode 51) au niveau de la fenêtre, hors du système de focus
-/// SwiftUI : `.keyboardShortcut`/`.onKeyPress` sans modificateur n'atteignent leur gestionnaire que
-/// s'il existe DÉJÀ un premier répondeur AppKit dans la fenêtre — une ligne juste sélectionnée
-/// (tap, aucun champ focalisé) n'en établit aucun. Un moniteur local d'événements voit la touche
-/// AVANT sa distribution normale, quel que soit le premier répondeur : ni la sélection d'une ligne
-/// ni son absence n'entrent en jeu. Il se retire lui-même dès qu'un VRAI champ de texte a le focus
-/// (même check `NSText` que `SidebarView.editableTitle`) pour ne jamais lui voler la frappe.
-private struct DeleteKeyMonitor: NSViewRepresentable {
-  var isActive: () -> Bool
-  var action: () -> Void
-
-  func makeCoordinator() -> Coordinator { Coordinator(isActive: isActive, action: action) }
-
-  func makeNSView(context: Context) -> NSView {
-    context.coordinator.install()
-    return NSView(frame: .zero)
-  }
-
-  func updateNSView(_ nsView: NSView, context: Context) {
-    context.coordinator.isActive = isActive
-    context.coordinator.action = action
-  }
-
-  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-    coordinator.uninstall()
-  }
-
-  final class Coordinator {
-    var isActive: () -> Bool
-    var action: () -> Void
-    private var monitor: Any?
-
-    init(isActive: @escaping () -> Bool, action: @escaping () -> Void) {
-      self.isActive = isActive
-      self.action = action
-    }
-
-    func install() {
-      guard monitor == nil else { return }
-      let ignoredMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-        guard let self, event.keyCode == 51,
-          event.modifierFlags.intersection(ignoredMods).isEmpty, self.isActive()
-        else { return event }
-        // Un vrai champ de texte a le focus (renommage, notes, « Nouvelle tâche »…) : on le
-        // laisse gérer sa propre frappe, ⌫ ne doit jamais lui échapper.
-        if NSApp.keyWindow?.firstResponder is NSText { return event }
-        self.action()
-        return nil
-      }
-    }
-
-    func uninstall() {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
-    }
-  }
-}
-
-/// Raccourci clavier sur `keyCode` + un jeu EXACT de modificateurs, câblé en direct sur NSEvent
-/// (même mécanisme que `DeleteKeyMonitor` ci-dessus) — pour ⌘N/⌘⇧N : deux `.keyboardShortcut` sur
-/// la même lettre avec des modificateurs différents se marchent dessus sous SwiftUI (⌘⇧N avalé
-/// par le gestionnaire ⌘N), ce moniteur compare les modificateurs à l'égalité et évite le conflit.
-private struct KeyCommandMonitor: NSViewRepresentable {
-  var keyCode: UInt16
-  var modifiers: NSEvent.ModifierFlags
-  var action: () -> Void
-
-  func makeCoordinator() -> Coordinator { Coordinator(modifiers: modifiers, action: action) }
-
-  func makeNSView(context: Context) -> NSView {
-    context.coordinator.install(keyCode: keyCode)
-    return NSView(frame: .zero)
-  }
-
-  func updateNSView(_ nsView: NSView, context: Context) {
-    context.coordinator.modifiers = modifiers
-    context.coordinator.action = action
-  }
-
-  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-    coordinator.uninstall()
-  }
-
-  final class Coordinator {
-    var modifiers: NSEvent.ModifierFlags
-    var action: () -> Void
-    private var monitor: Any?
-
-    init(modifiers: NSEvent.ModifierFlags, action: @escaping () -> Void) {
-      self.modifiers = modifiers
-      self.action = action
-    }
-
-    func install(keyCode: UInt16) {
-      guard monitor == nil else { return }
-      let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-        guard let self, event.keyCode == keyCode,
-          event.modifierFlags.intersection(relevantMods) == self.modifiers
-        else { return event }
-        self.action()
-        return nil
-      }
-    }
-
-    func uninstall() {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
-    }
-  }
-}
-
 /// Le chemin du check, en proportions de son cadre (dessiné du bras court vers le bras long, sens
 /// dans lequel `.trim` le trace). Aucun SF Symbol ne sait se *tracer* — d'où le Path maison.
 private struct Checkmark: Shape {
@@ -3407,11 +2727,12 @@ private struct RowFrameKey: PreferenceKey {
   }
 }
 
+@MainActor
 private func comingSoon(_ title: String, searchPresented: Binding<Bool>) -> some View {
   VStack(alignment: .leading, spacing: 8) {
     // Le titre de l'onglet reste hors du fondu, comme partout ailleurs.
     Text(title).font(.app(.title).bold())
-    Text("À rebrancher.").foregroundStyle(.tertiary).pageReveal()
+    Text("À rebrancher.").foregroundStyle(.tertiary)
   }
   .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   .padding(.top, 30)

@@ -83,6 +83,10 @@ struct RichTextEditor: NSViewRepresentable {
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+  /// Isolé au fil principal comme tout AppKit : ses méthodes ne sont appelées que par NSTextView,
+  /// qui n'existe que là. L'annotation n'ajoute aucune contrainte à l'exécution — elle ÉCRIT celle
+  /// que le code tenait déjà de fait, pour que le compilateur puisse la vérifier.
+  @MainActor
   final class Coordinator: NSObject, NSTextViewDelegate {
     var parent: RichTextEditor
     /// Dernière valeur poussée dans `parent.data`, par nous-même ou vue de l'extérieur — distingue

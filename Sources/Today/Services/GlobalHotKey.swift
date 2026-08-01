@@ -9,6 +9,11 @@ import Carbon.HIToolbox
 /// changement de signature) ET ne consomme pas l'événement — la combinaison partirait aussi à l'app
 /// de premier plan, qui la recevrait en double. L'API Carbon n'a ni l'un ni l'autre défaut, et reste
 /// le seul chemin public pour un hot key global ; ce n'est pas un vestige déprécié.
+/// Isolé au fil principal. Ce n'est pas une précaution ajoutée après coup : le gestionnaire Carbon
+/// est appelé PAR la boucle d'exécution principale (cf. `installHandler`), et c'est précisément ce
+/// qui autorise ses actions à toucher l'UI sans saut de file. L'annotation rend cette hypothèse
+/// vérifiable au lieu de la laisser en commentaire.
+@MainActor
 final class GlobalHotKey {
   static let shared = GlobalHotKey()
 

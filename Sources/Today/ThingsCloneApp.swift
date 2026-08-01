@@ -82,7 +82,9 @@ struct TodayApp: App {
   /// SEUL endroit qui sait ouvrir un store de cette app, et c'est ce qui donne sa valeur à
   /// `SchemaCompatibilityTests` : le test emprunte ce chemin-ci, pas une reconstitution qui
   /// pourrait diverger en silence le jour où le schéma ou le plan change.
-  static func openStore(_ configuration: ModelConfiguration) throws -> ModelContainer {
+  /// `nonisolated` : construire un `ModelContainer` ne touche à rien d'isolé, et l'appelant est le
+  /// `container` statique ci-dessous — évalué paresseusement, hors de tout acteur.
+  nonisolated static func openStore(_ configuration: ModelConfiguration) throws -> ModelContainer {
     try ModelContainer(
       for: Schema(versionedSchema: CurrentSchema.self),
       migrationPlan: TodayMigrationPlan.self,
@@ -101,6 +103,10 @@ struct TodayApp: App {
   static let container: ModelContainer = {
     let schema = Schema(versionedSchema: CurrentSchema.self)
     let configuration = ModelConfiguration(schema: schema)
+    // AVANT toute ouverture : si la forme des modèles a bougé depuis la dernière fois, on met une
+    // copie de côté pendant que la base est encore intacte. C'est la seule protection qui joue chez
+    // l'utilisateur — le test de compatibilité, lui, ne protège qu'au moment où l'on écrit le code.
+    StoreBackup.snapshotIfShapeChanged(of: configuration.url, schema: schema)
     func open() throws -> ModelContainer { try openStore(configuration) }
     let container: ModelContainer
     do {
@@ -215,6 +221,7 @@ private struct MenuBarTimerLabel: View {
 }
 
 /// Rend le temps restant dans une image dont la largeur ne dépend pas des chiffres affichés.
+@MainActor
 enum MenuBarTimerImage {
   // Chiffres tabulaires : les glyphes 0-9 ont tous la même chasse, donc la largeur mesurée ne
   // dépend que du nombre de caractères — constante à format constant, sans gabarit à maintenir.

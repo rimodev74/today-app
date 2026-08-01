@@ -108,7 +108,6 @@ struct TodayPageView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
-        // `header` (le titre de l'onglet) reste HORS du fondu, cf. `PageReveal`.
         header
 
         Group {
@@ -125,7 +124,6 @@ struct TodayPageView: View {
 
           undatedSection
         }
-        .pageReveal()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)

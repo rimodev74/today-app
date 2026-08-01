@@ -107,7 +107,6 @@ struct AllTasksPageView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
-        // `header` (le titre de l'onglet) reste HORS du fondu, cf. `PageReveal`.
         header
 
         Group {
@@ -116,7 +115,6 @@ struct AllTasksPageView: View {
           inboxRows
           ForEach(sections) { sectionView($0) }
         }
-        .pageReveal()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)

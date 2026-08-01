@@ -2,7 +2,7 @@
 
 Clone natif macOS de Things (Cultured Code). Scope, décisions et découpage : `ROADMAP.md`.
 SwiftPM (pas de `.xcodeproj`), SwiftUI + SwiftData, ~11 200 lignes dans `Sources/Today/`
-(+ ~1 460 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
+(+ ~1 620 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
 de `ThingsCloneApp.swift`.
 
 ## Lancer
@@ -10,7 +10,7 @@ de `ThingsCloneApp.swift`.
 ```bash
 ./run.sh          # build → bundle .app → open. Le seul moyen correct de lancer l'app.
 swift build       # compilation seule (~0,2 s incrémental)
-swift test        # 110 tests, en mémoire ou sur un store temporaire — jamais la vraie base
+swift test        # 116 tests, en mémoire ou sur un store temporaire — jamais la vraie base
 ```
 
 **Jamais `swift run`.** L'exécutable nu n'est pas un bundle : macOS ne lui applique pas la
@@ -22,7 +22,7 @@ code qu'on vient d'écrire. C'était LE plantage fantôme de la phase de dev.
 
 ## Architecture — ce qui porte le reste
 
-Quatre pièces tiennent des invariants que rien d'autre ne garantit. Les modifier demande de lire
+Cinq pièces tiennent des invariants que rien d'autre ne garantit. Les modifier demande de lire
 leur en-tête AVANT d'écrire.
 
 | Pièce | Rôle | Ce qu'elle a remplacé |
@@ -30,6 +30,7 @@ leur en-tête AVANT d'écrire.
 | `Models/Reorder.swift` | l'arithmétique du glissement : repli, écartement, trou, ordre obtenu | la page de liste et la sidebar recalculaient la même chose chacune de son côté, sans le savoir |
 | `Models/TaskFocus.swift` | quelle ligne est sélectionnée, laquelle est en édition | trois pages pilotaient deux `@State` nus avec les mêmes cinq transitions recopiées |
 | `Models/TodaySchema.swift` + `Tests/TodayTests/SchemaV1Snapshot.swift` | la forme des données, écrite deux fois et confrontée à chaque `swift test` | rien — un `@Model` cassé vidait sa colonne en silence (cf. Pièges) |
+| `Services/StoreBackup.swift` | copie la base AVANT de l'ouvrir, quand la forme des modèles a changé | rien ne protégeait la vraie base à l'exécution |
 | `TodayApp.openStore` | l'unique façon d'ouvrir un store | deux chemins d'ouverture, dont un que les tests ne couvraient pas |
 
 Les pages de tâches (`ListPageView`, `TodayPageView`, `AllTasksPageView`) partagent en plus
@@ -48,8 +49,11 @@ Les pages de tâches (`ListPageView`, `TodayPageView`, `AllTasksPageView`) parta
   VIVANTES et son numéro de version ne bouge pas tout seul. Un ajout est absorbé sans rien faire ;
   un renommage, une suppression ou un changement de type laisse `swift build` passer, laisse le
   store s'ouvrir SANS erreur, et perd la donnée — mesuré, pas supposé. Ni quarantaine ni alerte.
-  Le seul garde-fou est `SchemaCompatibilityTests` : **rouge ⇒ ne pas lancer l'app**, et suivre les
-  cinq points en tête de `TodaySchema.swift`.
+  Deux protections, à deux moments différents : `SchemaCompatibilityTests` attrape le changement AU
+  MOMENT OÙ ON L'ÉCRIT (**rouge ⇒ ne pas lancer l'app**, suivre les cinq points en tête de
+  `TodaySchema.swift`) ; `StoreBackup` copie la vraie base AVANT de l'ouvrir dès que la forme a
+  bougé, dans `~/Library/Application Support/Today-Backups/` (3 copies gardées, journal SQLite
+  compris). Restaurer = recopier les trois fichiers par-dessus `default.store`, app fermée.
 - **EventKit rend des optionnels implicites.** `EKEvent.startDate`, `EKCalendarItem.calendar`,
   `EKCalendar.cgColor`, `.title` sont `null_unspecified` : les lire sans garde plante sur un
   calendrier d'abonnement mal formé. Filtrer À L'ENTRÉE, dans `RemindersService`, jamais chez chaque
@@ -130,8 +134,8 @@ Dette connue, par ordre de coût :
 1. `TaskListView.swift` fait encore ~3 400 lignes. Ce n'est pas sa taille le problème, mais ce
    qu'elle mélange : `TaskRow`, `HeaderRow`, la barre d'outils et les quatre `NSViewRepresentable`
    en sortiraient sans rien casser.
-2. `Package.swift` est en `swift-tools-version: 5.10` — mode langage Swift 5, concurrence stricte
-   NON vérifiée. Les `@MainActor` sont tenus à la main (cf. le rappel Carbon de `GlobalHotKey`, qui
-   appelle du code isolé depuis une classe qui ne l'est pas). Ça marche ; rien ne le garantit.
-3. `StoreQuarantine` est un filet de secours, pas une sauvegarde : rien ne copie la base avant une
-   migration.
+2. Le mode langage reste Swift 5. La concurrence stricte est en revanche VÉRIFIÉE (réglage dans
+   `Package.swift`) et il ne subsiste que 37 diagnostics, tous le même : `SortDescriptor(\Model.x)`
+   veut un chemin de clé `Sendable`, qu'un `@Model` SwiftData ne peut pas être. Trou d'Apple, pas
+   dette du projet. **Ce réglage est un cliquet** : tout diagnostic qui n'est PAS un chemin de clé
+   est une régression d'isolation à corriger sur-le-champ.

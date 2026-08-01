@@ -4,6 +4,9 @@ import SwiftUI
 /// Fenêtre standard OPAQUE (coins + ombre natifs) en style toolbar unifiée + contenu plein cadre.
 /// C'est la toolbar qui déclenche le gros rayon « moderne » ; la sidebar custom se fond derrière.
 struct WindowConfigurator: NSViewRepresentable {
+  /// Isolé au fil principal comme le reste d'AppKit : ses rappels ne partent que de la boucle
+  /// d'événements. L'annotation écrit une contrainte déjà vraie, elle n'en ajoute aucune.
+  @MainActor
   final class Coordinator {
     var observer: NSObjectProtocol?
   }
@@ -35,7 +38,11 @@ struct WindowConfigurator: NSViewRepresentable {
       coordinator.observer = NotificationCenter.default.addObserver(
         forName: NSWindow.didUpdateNotification, object: window, queue: .main
       ) { _ in
-        if !window.title.isEmpty { window.title = "" }
+        // `queue: .main` garantit le fil, mais la fermeture est `@Sendable` et le compilateur ne
+        // peut pas le déduire de là. On l'affirme à l'endroit exact où c'est vrai.
+        MainActor.assumeIsolated {
+          if !window.title.isEmpty { window.title = "" }
+        }
       }
     }
     return view
