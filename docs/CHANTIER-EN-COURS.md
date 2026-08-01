@@ -3,8 +3,8 @@
 **Lire `CLAUDE.md` d'abord** (architecture, pièges, conventions). Ce fichier-ci ne dit que ce qui
 reste à faire et *pourquoi* — il ne répète pas ce qui y est déjà écrit.
 
-Repères au moment d'écrire : commit `b0f1e28`, **122 tests verts**, cliquet de concurrence à **37**
-(tous des chemins de clé SwiftData, cf. `Package.swift`), `TaskListView.swift` à 2 763 lignes.
+Repères au moment d'écrire : commit `fefb9f4`, **125 tests verts**, cliquet de concurrence **inchangé**
+(que des chemins de clé SwiftData, cf. `Package.swift`), `TaskListView.swift` à 2 764 lignes.
 
 ---
 
@@ -40,41 +40,26 @@ Leur donner le socle demande d'abord de leur donner une sélection.
 
 ---
 
-## ① Le défaut de conception à corriger EN PREMIER
+## ① Le défaut de conception — FAIT (`fefb9f4`)
 
-`TaskPageBase` (dans `Views/TaskList/TaskPageChrome.swift`) demande à chaque page de lui
-**redécrire à la main** l'ordre de ses lignes, via une closure `rows` :
+`TaskPageBase` demandait à chaque page de lui **redécrire à la main** l'ordre de ses lignes, via une
+closure `rows` que rien ne reliait au `body` — ni le compilateur, ni un test. L'erreur avait déjà été
+commise (la boîte de réception de « Tâches » oubliée) et son symptôme est « la touche ne marche
+pas » : rien à l'écran, aucun test rouge.
 
-```swift
-.taskPageBase(
-  focus: $focus,
-  rows: { inboxTasks + sections.filter(isExpanded).flatMap(\.tasks) },  // ← doit refléter le body
-  delete: delete
-)
-```
+**Ce qui a été fait : une page ne décrit plus un ORDRE, elle déclare ses PANS.** `TaskPageBlock`
+(`Models/TaskPageRows.swift`) = des lignes + « visibles ? ». La page passe les MÊMES valeurs que son
+`body` parcourt ; l'aplatissement (sauter les pans repliés) n'est écrit qu'une fois, dans le socle,
+et il est testé (`TaskPageRowsTests`).
 
-**Rien ne garantit que cette description corresponde au `body`.** Ni le compilateur, ni un test.
-L'erreur a déjà été commise une fois (la boîte de réception de « Tâches » était oubliée), et le
-symptôme est « la touche ne marche pas » — sans rien de visible à l'écran, sans test rouge.
+« Tâches » va plus loin : son `body` rend maintenant `ForEach(displayedSections)`, une seule
+énumération. La boîte de réception y est une section **sans bandeau** (`TaskSection.header == nil`)
+au lieu d'un rendu à part — c'est-à-dire que l'oubli d'origine n'est plus exprimable.
 
-C'est une couture molle dans un composant partagé : sa justesse dépend de la vigilance de
-l'appelant. Exactement ce que le projet refuse.
+### Ce que ça ne donne PAS
 
-### La correction, qui règle aussi ② et ③
-
-**Que les lignes se déclarent elles-mêmes en se rendant.** Chaque `TaskRow` publie son identité ET
-son cadre par une `PreferenceKey` ; la page les reçoit dans l'ordre du rendu.
-
-Conséquences en cascade :
-
-- l'ordre ne peut plus diverger du `body` — il en *est* dérivé ; la closure `rows` disparaît ;
-- **on obtient les cadres des lignes**, qui sont précisément ce qui manque au clic dans le vide et au
-  glisser (cf. ②) ;
-- une page devient interrogeable (« quelles lignes présentes-tu, dans quel ordre ? »), donc
-  **testable** (cf. ③).
-
-Le mécanisme existe déjà dans le projet : `RowFrameKey` + `.coordinateSpace(name:)` dans
-`ListPageView`. Il s'agit de le généraliser, pas de l'inventer.
+**Pas les cadres des lignes.** ② reste entier : le clic dans le vide et le glisser demandent de
+savoir OÙ chaque ligne est, et ça, aucune valeur ne le sait — seule la mesure le sait.
 
 ---
 
@@ -117,7 +102,8 @@ qui arrive** sur la page.
 
 ## ③ Aucun test ne couvre une vue
 
-122 tests, tous sur des modèles et services. **Zéro sur une page.** Une page peut perdre ⌫ sans
+125 tests, tous sur des modèles et services. **Zéro sur une page** — `TaskPageRowsTests` couvre la
+RÈGLE d'aplatissement, pas ce qu'une page en fait. Une page peut perdre ⌫ sans
 qu'aucun test ne rougisse — c'est arrivé, et c'est ce qui a imposé plusieurs allers-retours de
 vérification manuelle avec l'utilisateur.
 
@@ -146,6 +132,14 @@ lignes cette page présente-t-elle, dans quel ordre, après tel filtre ?*
 - **Faire taire les 37 diagnostics de chemins de clé** en marquant les `@Model` `@unchecked Sendable`.
   Ce serait un mensonge (ce sont des classes mutables) et le rafistolage que le projet refuse. Trou
   entre SwiftData et Swift 6, à laisser tel quel.
+- **Faire publier aux lignes leur identité par `PreferenceKey`, et en dériver l'ordre du clavier.**
+  C'était la correction prévue pour ① — elle est FAUSSE sur `ListPageView`, la seule page où tout
+  marche : elle est bâtie sur `LazyVStack`, donc les rangées hors écran ne sont pas construites et ne
+  publient rien. L'ordre obtenu s'arrête au viewport : ⌫ et ↑/↓ cesseraient d'atteindre les lignes
+  non défilées, sur une liste un peu longue, sans que rien ne le montre. Une préférence mesure ce qui
+  est RENDU ; l'ordre du clavier est ce qui est AFFICHÉ. Ce n'est pas la même question — d'où
+  `TaskPageBlock`, qui est une valeur, pas une mesure. Les cadres, eux, restent bien du ressort d'une
+  préférence (②) : eux ne concernent que le visible, c'est leur définition.
 - **Le curseur « main » sur toute la ligne.** Sur macOS, la main signale un bouton ou un lien, jamais
   une ligne sélectionnable (Finder, Mail, Rappels gardent la flèche). Le comportement actuel — main
   sur la case à cocher seulement — est **correct**. Si un repère de survol manque, la bonne réponse
@@ -184,12 +178,15 @@ lignes cette page présente-t-elle, dans quel ordre, après tel filtre ?*
 
 ## Ordre recommandé
 
-1. Vérifier **⌘Z** (5 min, côté utilisateur). Il conditionne la prudence de la suite.
-2. **①** les lignes se déclarent en se rendant → supprime la closure `rows`, fournit les cadres.
-3. **②** clic dans le vide, puis `smartOrder`, puis le glisser.
-4. Sélection sur **« À venir »** et **« Archives »** — le tableau du haut devient vrai.
-5. **③** les premiers tests de page.
+1. **À VÉRIFIER À LA MAIN, tout de suite** (l'app est lancée sur le build courant) :
+   - **⌘Z** après un ⌫ — le filet est posé (`ThingsCloneApp.openStore`) mais n'a jamais été prouvé ;
+   - **⌫ et ↑/↓ sur « Tâches »** (le ⚠ du tableau) — le rendu de la page a changé, le symptôme aussi
+     peut-être. Si ça marche toujours mal : **diagnostiquer**, la lecture du code n'a rien donné
+     (`delete` et le câblage de `focus` y sont identiques à ceux d'« Aujourd'hui », qui marche).
+2. **②** mesure des cadres sur les pages intelligentes → clic dans le vide, puis `smartOrder`, puis
+   le glisser. C'est là que `RowFrameKey` sert.
+3. Sélection sur **« À venir »** et **« Archives »** — le tableau du haut devient vrai.
+4. **③** les premiers tests de page.
 
-**1 à 3 forment un bloc indivisible.** Ils ont été découpés en tranches une fois : chaque tranche
-livrée seule était invérifiable, et il a fallu trois allers-retours pour rien. Les faire d'une traite,
-en montrant chaque étape.
+**Le 2 est indivisible.** Il a été découpé en tranches une fois : chaque tranche livrée seule était
+invérifiable, et il a fallu trois allers-retours pour rien.
