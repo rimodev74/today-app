@@ -66,8 +66,10 @@ struct AllTasksPageView: View {
 
     var result = [
       TaskSection(
-        id: "today", title: SmartList.today.label, systemImage: SmartList.today.systemImage,
-        tint: SmartList.today.color, defaultExpanded: true,
+        id: "today",
+        header: .init(
+          title: SmartList.today.label, systemImage: SmartList.today.systemImage,
+          tint: SmartList.today.color, defaultExpanded: true),
         // Même règle que la page « Aujourd'hui » : cochées comprises jusqu'au lendemain.
         tasks: SmartList.today.sort(SmartList.today.scoped(allTasks)))
     ]
@@ -77,8 +79,10 @@ struct AllTasksPageView: View {
       guard !tasks.isEmpty else { continue }
       result.append(
         TaskSection(
-          id: "project-\(project.persistentModelID)", title: label(project.title),
-          systemImage: "folder", tint: nil, defaultExpanded: false, tasks: tasks))
+          id: "project-\(project.persistentModelID)",
+          header: .init(
+            title: label(project.title), systemImage: "folder", tint: nil, defaultExpanded: false),
+          tasks: tasks))
     }
 
     // Les listes d'un projet sont déjà dedans (`Project.allTasks`) ; seules les listes libres
@@ -88,8 +92,11 @@ struct AllTasksPageView: View {
       guard !tasks.isEmpty else { continue }
       result.append(
         TaskSection(
-          id: "list-\(list.persistentModelID)", title: label(list.title),
-          systemImage: "list.bullet", tint: nil, defaultExpanded: false, tasks: tasks))
+          id: "list-\(list.persistentModelID)",
+          header: .init(
+            title: label(list.title), systemImage: "list.bullet", tint: nil,
+            defaultExpanded: false),
+          tasks: tasks))
     }
     return result
   }
@@ -109,12 +116,10 @@ struct AllTasksPageView: View {
       VStack(alignment: .leading, spacing: 0) {
         header
 
-        Group {
-          // Le non-classé ouvre la page SANS en-tête ni dépliant : c'est le flux d'arrivée, il se
-          // lit d'emblée. Tout le reste est rangé quelque part, donc repliable derrière un titre.
-          inboxRows
-          ForEach(sections) { sectionView($0) }
-        }
+        // UNE seule énumération, celle que le socle clavier reçoit aussi (cf. `displayedSections`).
+        // La boîte de réception a longtemps été rendue à part, et c'est exactement comme ça qu'elle
+        // a fini par manquer à l'ordre du clavier sans que rien ne le montre.
+        ForEach(displayedSections) { sectionView($0) }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
@@ -124,15 +129,12 @@ struct AllTasksPageView: View {
       .contentShape(Rectangle())
       .onTapGesture { dismissEditing() }
     }
-    // Le socle commun des pages de tâches : ⌫ et ↑/↓.
-    //
-    // `rows` doit suivre le rendu du `body` À L'IDENTIQUE, dans le même ORDRE : la boîte de
-    // réception d'abord (elle ouvre la page, sans dépliant), puis les sections. L'oublier ne se voit
-    // pas à l'écran — ⌫ et les flèches cessent simplement d'atteindre les lignes manquantes, ce qui
-    // se lit comme « la touche ne marche pas ».
+    // Le socle commun des pages de tâches : ⌫ et ↑/↓. Les mêmes sections que le `body` rend.
     .taskPageBase(
       focus: $focus,
-      rows: { inboxTasks + sections.filter(isExpanded).flatMap(\.tasks) },
+      blocks: {
+        displayedSections.map { TaskPageBlock(tasks: $0.tasks, isExpanded: isExpanded($0)) }
+      },
       delete: delete
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -157,55 +159,71 @@ struct AllTasksPageView: View {
 
   // MARK: Sections
 
-  private var inboxRows: some View {
+  /// Tout ce que la page affiche, dans l'ordre. La boîte de réception est une section comme les
+  /// autres — simplement sans bandeau (cf. `TaskSection.header`), parce qu'elle ouvre la page et
+  /// n'a rien à déplier.
+  private var displayedSections: [TaskSection] {
+    [TaskSection(id: "inbox", header: nil, tasks: inboxTasks)] + sections
+  }
+
+  /// Un seul rendu pour toutes les sections — y compris « Aujourd'hui », qui s'ouvre par défaut
+  /// mais se replie comme les autres si l'on ne veut voir que ses projets.
+  @ViewBuilder private func sectionView(_ section: TaskSection) -> some View {
+    if let header = section.header {
+      DisclosureGroup(isExpanded: expansion(of: section, header: header)) {
+        rows(of: section)
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: header.systemImage)
+            .font(.app(11))
+            // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
+            // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
+            .foregroundStyle(header.tint ?? Color.secondary)
+          Text(header.title)
+          Text("\(section.tasks.count)")
+            .foregroundStyle(.tertiary)
+        }
+        .font(.app(.subheadline).weight(.semibold))
+        .foregroundStyle(.secondary)
+      }
+      .padding(.top, 14)
+    } else {
+      VStack(alignment: .leading, spacing: 0) {
+        rows(of: section)
+        // Le champ « Nouvelle tâche » appartient au pan à nu : c'est le non-classé, et la seule
+        // section où l'on crée (une tâche notée ici n'a ni projet ni date — la définition de
+        // l'Inbox).
+        newTaskRow
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private func rows(of section: TaskSection) -> some View {
     VStack(alignment: .leading, spacing: 0) {
-      ForEach(inboxTasks) { taskRow(for: $0, isToday: false) }
-      newTaskRow
+      ForEach(section.tasks) { task in
+        taskRow(for: task, isToday: section.id == "today")
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  /// `DisclosureGroup` pour toutes les sections, même « Aujourd'hui » qui s'ouvre par défaut : un
-  /// seul rendu, et le jour se replie aussi si l'on ne veut voir que ses projets.
-  @ViewBuilder private func sectionView(_ section: TaskSection) -> some View {
-    DisclosureGroup(isExpanded: expansion(of: section)) {
-      VStack(alignment: .leading, spacing: 0) {
-        ForEach(section.tasks) { task in
-          taskRow(for: task, isToday: section.id == "today")
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    } label: {
-      HStack(spacing: 6) {
-        Image(systemName: section.systemImage)
-          .font(.app(11))
-          // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
-          // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
-          .foregroundStyle(section.tint ?? Color.secondary)
-        Text(section.title)
-        Text("\(section.tasks.count)")
-          .foregroundStyle(.tertiary)
-      }
-      .font(.app(.subheadline).weight(.semibold))
-      .foregroundStyle(.secondary)
-    }
-    .padding(.top, 14)
-  }
-
-  /// `toggled` retient l'ÉCART au défaut, pas l'état : `contains` ⇔ « replié si le défaut est
-  /// ouvert, ouvert sinon ». Une `Set` d'ouvertes aurait demandé de l'amorcer au premier rendu.
-  /// Une section est-elle dépliée ? `toggled` ne retient que les écarts au défaut, d'où le XOR.
-  /// Lu par le `DisclosureGroup` ET par le socle (les flèches ne parcourent que le visible) : la
-  /// règle vit donc à un seul endroit.
+  /// Une section est-elle dépliée ? `toggled` retient l'ÉCART au défaut et pas l'état — une `Set`
+  /// des ouvertes aurait demandé de l'amorcer au premier rendu —, d'où le XOR. Sans bandeau, il n'y
+  /// a rien à replier.
+  ///
+  /// Lu par le `DisclosureGroup` ET par le socle clavier (les flèches ne parcourent que le
+  /// visible) : la règle vit à un seul endroit.
   private func isExpanded(_ section: TaskSection) -> Bool {
-    toggled.contains(section.id) != section.defaultExpanded
+    guard let header = section.header else { return true }
+    return toggled.contains(section.id) != header.defaultExpanded
   }
 
-  private func expansion(of section: TaskSection) -> Binding<Bool> {
+  private func expansion(of section: TaskSection, header: TaskSection.Header) -> Binding<Bool> {
     Binding(
       get: { isExpanded(section) },
       set: { open in
-        if open == section.defaultExpanded {
+        if open == header.defaultExpanded {
           toggled.remove(section.id)
         } else {
           toggled.insert(section.id)
@@ -337,10 +355,17 @@ struct AllTasksPageView: View {
 /// type pour les quatre — ils ne diffèrent que par leur titre, leur icône et leur repli par défaut.
 private struct TaskSection: Identifiable {
   let id: String
-  let title: String
-  let systemImage: String
-  /// Teinte de l'icône, `nil` = gris comme le reste du bandeau.
-  let tint: Color?
-  let defaultExpanded: Bool
+  /// `nil` = section à NU : ni bandeau ni dépliant, ses lignes ouvrent la page. C'est la boîte de
+  /// réception — le flux d'arrivée se lit d'emblée, le reste est rangé quelque part, donc repliable
+  /// derrière un titre.
+  let header: Header?
   let tasks: [TaskItem]
+
+  struct Header {
+    let title: String
+    let systemImage: String
+    /// Teinte de l'icône, `nil` = gris comme le reste du bandeau.
+    let tint: Color?
+    let defaultExpanded: Bool
+  }
 }

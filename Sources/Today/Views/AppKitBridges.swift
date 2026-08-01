@@ -160,13 +160,20 @@ struct LeftClickOutsideObserver: NSViewRepresentable {
 /// Il se retire de lui-même dès qu'un VRAI champ de texte a le focus (même contrôle `NSText` que
 /// `SidebarView.editableTitle`) : ⌫ et les flèches y ont un tout autre sens, et ne doivent jamais
 /// lui être volées.
+///
+/// Les rappels rendent « ai-je agi ? », et l'événement n'est consommé QUE dans ce cas. Un moniteur
+/// local avale la touche pour toute la fenêtre : la retenir sans rien en faire (aucune sélection,
+/// bord de liste atteint) la vole à qui aurait pu s'en servir — le défilement d'une ↓, la touche
+/// répétée d'un futur gestionnaire — et le symptôme se lit comme « le clavier est mort sur cette
+/// page ».
 struct TaskKeyMonitor: NSViewRepresentable {
   /// La page est-elle en état de consommer ces touches ? Faux dès qu'une carte d'édition est
   /// ouverte : les flèches appartiennent alors au texte.
   var isActive: () -> Bool
-  var onDelete: () -> Void
+  /// Rendent `true` si la touche a produit un effet ; elle n'est consommée qu'alors.
+  var onDelete: () -> Bool
   /// -1 vers le haut, +1 vers le bas.
-  var onMove: (Int) -> Void
+  var onMove: (Int) -> Bool
 
   func makeCoordinator() -> Coordinator {
     Coordinator(isActive: isActive, onDelete: onDelete, onMove: onMove)
@@ -192,13 +199,13 @@ struct TaskKeyMonitor: NSViewRepresentable {
   @MainActor
   final class Coordinator {
     var isActive: () -> Bool
-    var onDelete: () -> Void
-    var onMove: (Int) -> Void
+    var onDelete: () -> Bool
+    var onMove: (Int) -> Bool
     private var monitor: Any?
 
     init(
-      isActive: @escaping () -> Bool, onDelete: @escaping () -> Void,
-      onMove: @escaping (Int) -> Void
+      isActive: @escaping () -> Bool, onDelete: @escaping () -> Bool,
+      onMove: @escaping (Int) -> Bool
     ) {
       self.isActive = isActive
       self.onDelete = onDelete
@@ -214,13 +221,14 @@ struct TaskKeyMonitor: NSViewRepresentable {
         else { return event }
         if NSApp.keyWindow?.firstResponder is NSText { return event }
 
+        let handled: Bool
         switch Int(event.keyCode) {
-        case 51: self.onDelete()
-        case 126: self.onMove(-1)
-        case 125: self.onMove(1)
+        case 51: handled = self.onDelete()
+        case 126: handled = self.onMove(-1)
+        case 125: handled = self.onMove(1)
         default: return event
         }
-        return nil  // consommée : elle ne doit pas remonter plus loin
+        return handled ? nil : event  // rendue intacte si elle n'a rien fait
       }
     }
 

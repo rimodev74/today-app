@@ -147,10 +147,13 @@ extension View {
 /// façon besoin : ce n'est pas un contournement à inventer, c'est la même brique.
 struct TaskPageBase: ViewModifier {
   @Binding var focus: TaskFocus
-  /// L'ordre AFFICHÉ de la page — celui que suivent ↑ et ↓, donc celui que voit l'œil, pas celui
-  /// du modèle.
-  let rows: () -> [TaskItem]
+  /// Les pans que la page AFFICHE, dans l'ordre où elle les rend — pas un ordre de lignes recopié
+  /// à la main (cf. `TaskPageBlock`, qui dit pourquoi la nuance a coûté cher). L'aplatissement est
+  /// à nous : une page ne peut plus oublier de sauter une section repliée.
+  let blocks: () -> [TaskPageBlock]
   let delete: (TaskItem) -> Void
+
+  private var rows: [TaskItem] { blocks().displayedRows }
 
   func body(content: Content) -> some View {
     content
@@ -158,11 +161,18 @@ struct TaskPageBase: ViewModifier {
         TaskKeyMonitor(
           isActive: { focus.editing == nil },
           onDelete: {
-            guard let target = rows().first(where: { focus.isSelected($0) }) else { return }
+            guard let target = rows.first(where: { focus.isSelected($0) }) else { return false }
             delete(target)
+            return true
           },
           onMove: { offset in
-            withAnimation(taskSelectFade) { focus.moveSelection(by: offset, in: rows()) }
+            // `TaskFocus` est une VALEUR `Equatable` : comparer l'avant et l'après dit si la touche
+            // a servi, sans faire rendre un résultat aux méthodes mutantes (elles n'en rendent
+            // aucun, à dessein — cf. son en-tête). Au bord de la liste, ↓ ne bouge pas, l'événement
+            // repart donc intact et le ScrollView peut en faire son affaire.
+            let before = focus
+            withAnimation(taskSelectFade) { focus.moveSelection(by: offset, in: rows) }
+            return focus != before
           }
         )
       )
@@ -172,9 +182,9 @@ struct TaskPageBase: ViewModifier {
 extension View {
   func taskPageBase(
     focus: Binding<TaskFocus>,
-    rows: @escaping () -> [TaskItem],
+    blocks: @escaping () -> [TaskPageBlock],
     delete: @escaping (TaskItem) -> Void
   ) -> some View {
-    modifier(TaskPageBase(focus: focus, rows: rows, delete: delete))
+    modifier(TaskPageBase(focus: focus, blocks: blocks, delete: delete))
   }
 }

@@ -78,6 +78,15 @@ struct TodayPageView: View {
     return order.map { (name: $0, tasks: buckets[$0] ?? []) }
   }
 
+  /// Ce que la page affiche, dans l'ordre : le jour d'abord, puis la réserve, groupe par groupe.
+  /// Les MÊMES valeurs que le `body` parcourt (`tasks`, `undatedGroups`) — c'est tout l'intérêt :
+  /// il n'y a plus d'ordre recopié à la main à tenir en accord avec le rendu (cf. `TaskPageBlock`).
+  /// Le repli de la réserve se déclare ici et s'applique dans le socle, pas dans chaque page.
+  private var displayedBlocks: [TaskPageBlock] {
+    [.visible(tasks)]
+      + undatedGroups.map { TaskPageBlock(tasks: $0.tasks, isExpanded: undatedExpanded) }
+  }
+
   /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, que le ticker
   /// rafraîchit : une fenêtre laissée ouverte toute la nuit date bien du bon jour au matin.
   private var startOfToday: Date { Calendar.current.startOfDay(for: now) }
@@ -134,14 +143,8 @@ struct TodayPageView: View {
       .contentShape(Rectangle())
       .onTapGesture { dismissEditing() }
     }
-    // Le socle commun des pages de tâches : ⌫ et ↑/↓. `rows` suit ce que l'ŒIL
-    // voit — la réserve repliée n'en fait donc pas partie, les flèches ne peuvent pas emmener la
-    // sélection sur une ligne invisible.
-    .taskPageBase(
-      focus: $focus,
-      rows: { tasks + (undatedExpanded ? undatedGroups.flatMap(\.tasks) : []) },
-      delete: delete
-    )
+    // Le socle commun des pages de tâches : ⌫ et ↑/↓.
+    .taskPageBase(focus: $focus, blocks: { displayedBlocks }, delete: delete)
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: { draftFocused = true }, onInsertHeader: nil,

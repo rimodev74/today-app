@@ -254,13 +254,14 @@ private struct ListPageView: View {
       KeyCommandMonitor(keyCode: 45, modifiers: [.command], action: createTaskInEditMode)
       KeyCommandMonitor(keyCode: 45, modifiers: [.command, .shift], action: insertHeader)
     }
-    // Retour arrière (⌫) sur la sélection courante (tâche OU en-tête, hors édition) : la supprime.
-    // Le socle commun des pages de tâches : ⌫ sur la sélection, ↑/↓ pour la déplacer, clic dans le
-    // vide pour la relâcher. `rows` suit l'ordre AFFICHÉ (les archivées n'y sont pas), donc celui
-    // que l'œil parcourt — pas l'ordre du modèle.
+    // Le socle commun des pages de tâches : ⌫ sur la sélection, ↑/↓ pour la déplacer. Un seul pan,
+    // toujours visible : cette page n'a pas de section repliable, mais elle passe par les mêmes
+    // `TaskPageBlock` que les autres — une page ne choisit pas sa façon de déclarer ses lignes.
+    // `blocks` est déjà ce que le `body` parcourt, en-têtes de section comprises (`items`), donc
+    // l'ordre AFFICHÉ (les archivées n'y sont pas) et non celui du modèle.
     .taskPageBase(
       focus: $focus,
-      rows: { blocks.flatMap(\.items) },
+      blocks: { [.visible(blocks.flatMap(\.items))] },
       delete: requestDelete
     )
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
