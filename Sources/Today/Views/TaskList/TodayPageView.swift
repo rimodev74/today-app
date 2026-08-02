@@ -133,13 +133,13 @@ struct TodayPageView: View {
           .allowsHitTesting(false)
       }
     }
-    // Les mêmes cadres que le socle consomme pour le clic dans le vide, ici pour savoir où la
-    // ligne tirée peut se poser. `measured` les GÈLE pendant le glissement — voir son en-tête,
-    // c'est ce qui évite la boucle décalage → cadre → décalage.
-    .onPreferenceChange(TaskRowFrameKey.self) { frames in reorder.measured(frames) }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓.
+    // Le socle porte AUSSI les cadres des lignes : une seule mesure pour le clic dans le vide et
+    // pour le glissement, gelée pendant un geste. Sans ce `reorder:`, la page mesure dans le vide —
+    // le socle range les cadres chez lui et le glissement n'en voit aucun.
     .taskPageBase(
-      focus: $focus, blocks: { page.blocks(undatedExpanded: undatedExpanded) }, delete: delete
+      focus: $focus, blocks: { page.blocks(undatedExpanded: undatedExpanded) }, delete: delete,
+      reorder: $reorder
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(

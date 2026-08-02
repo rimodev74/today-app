@@ -1,4 +1,4 @@
-import CoreGraphics
+import Foundation
 import SwiftData
 
 /// Le glissement en cours sur une page de tâches : où sont les lignes, laquelle est empoignée, de

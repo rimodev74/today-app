@@ -239,8 +239,23 @@ struct TaskPageBase: ViewModifier {
   let blocks: () -> [TaskPageBlock]
   let delete: (TaskItem) -> Void
 
-  /// Renseigné par les lignes qui appellent `measureTaskRow`, dans le repère `taskPageSpace`.
-  @State private var rowFrames: [PersistentIdentifier: CGRect] = [:]
+  /// Le glissement de la page, quand elle en accepte un. Il porte AUSSI les cadres des lignes :
+  /// une seule mesure pour les deux usages (savoir si un clic est tombé à côté, savoir où une ligne
+  /// tirée peut se poser).
+  ///
+  /// Deux stockages séparés ont coûté cher : celui-ci gèle ses cadres pendant un geste, l'autre non.
+  /// Or `frame(in:)` inclut le `.offset` des lignes tirées — le second se réécrivait donc à chaque
+  /// image, ce qui relançait un rendu, qui redéplaçait les lignes, qui réécrivait les cadres. La
+  /// boucle exacte que `ListPageView` documente depuis toujours, et le glisser saccadé qu'on a mis
+  /// deux fois sur le dos du reste.
+  var reorder: Binding<TaskPageReorder>?
+  /// Le repli de secours pour une page SANS glissement (« À venir », « Archives », une liste) : elle
+  /// n'a pas de `TaskPageReorder` à elle, mais elle a droit au clic dans le vide.
+  @State private var ownFrames: [PersistentIdentifier: CGRect] = [:]
+
+  private var rowFrames: [PersistentIdentifier: CGRect] {
+    reorder?.wrappedValue.frames ?? ownFrames
+  }
 
   private var rows: [TaskItem] { blocks().displayedRows }
 
@@ -269,7 +284,16 @@ struct TaskPageBase: ViewModifier {
       // repère du CONTENU (invariant au défilement, cf. `ListPageView.dragSpace`) et convertir le
       // point du clic.
       .coordinateSpace(name: taskPageSpace)
-      .onPreferenceChange(TaskRowFrameKey.self) { frames in rowFrames = frames }
+      .onPreferenceChange(TaskRowFrameKey.self) { frames in
+        guard let reorder else {
+          ownFrames = frames
+          return
+        }
+        // GEL. Pas seulement « on ignore la valeur » : on n'ÉCRIT pas. Écrire une valeur identique
+        // dans un `@State` invalide quand même la vue, et c'est l'invalidation qui boucle.
+        guard !reorder.wrappedValue.isDragging else { return }
+        reorder.wrappedValue.measured(frames)
+      }
       .background(LeftClickOutsideObserver(onClick: releaseSelectionIfOutside))
       // Une ligne qui apparaît ou disparaît SANS que ce soit nous qui l'ayons décidé. C'est le cas
       // de ⌘Z : l'annulation part du menu *Édition*, traverse la chaîne des répondeurs et arrive
@@ -315,8 +339,9 @@ extension View {
   func taskPageBase(
     focus: Binding<TaskFocus>,
     blocks: @escaping () -> [TaskPageBlock],
-    delete: @escaping (TaskItem) -> Void
+    delete: @escaping (TaskItem) -> Void,
+    reorder: Binding<TaskPageReorder>? = nil
   ) -> some View {
-    modifier(TaskPageBase(focus: focus, blocks: blocks, delete: delete))
+    modifier(TaskPageBase(focus: focus, blocks: blocks, delete: delete, reorder: reorder))
   }
 }
