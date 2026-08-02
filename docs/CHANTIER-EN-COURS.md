@@ -3,7 +3,7 @@
 **Lire `CLAUDE.md` d'abord** (architecture, pièges, conventions). Ce fichier-ci ne dit que ce qui
 reste à faire et *pourquoi* — il ne répète pas ce qui y est déjà écrit.
 
-Repères au moment d'écrire : commit `27eb929`, **140 tests verts**, cliquet de concurrence **inchangé**
+Repères au moment d'écrire : commit `c37ba8a`, **159 tests verts**, cliquet de concurrence **inchangé**
 (que des chemins de clé SwiftData, cf. `Package.swift`), `TaskListView.swift` à 2 764 lignes.
 
 ---
@@ -26,17 +26,18 @@ chantier.
 | Page | ⌫ | ↑ ↓ | clic dans le vide | glisser |
 |---|:--:|:--:|:--:|:--:|
 | Page d'une liste (`ListPageView`) | ✅ | ✅ | ✅ | ✅ |
-| Aujourd'hui (`TodayPageView`) | ✅ | ✅ | ✅ | ⛔ |
-| Tâches (`AllTasksPageView`) | ✅ | ✅ | ✅ | ⛔ |
-| À venir (`UpcomingPageView`) | ✅ | ✅ | ✅ | ⛔ |
-| Archives (`ArchivePageView`) | ✅ | ✅ | ✅ | ⛔ |
+| Aujourd'hui (`TodayPageView`) | ✅ | ✅ | ✅ | ✅ |
+| Tâches (`AllTasksPageView`) | ✅ | ✅ | ✅ | ✅ |
+| À venir (`UpcomingPageView`) | ✅ | ✅ | ✅ | — |
+| Archives (`ArchivePageView`) | ✅ | ✅ | ✅ | — |
 
 Toutes les pages passent par le MÊME socle (`TaskPageBase`) : elles déclarent leurs pans, il leur
 rend le clavier et le clic dans le vide. Une sixième page se construira avec, sans une ligne de
 plus.
 
-⛔ = **retiré après essai, en attente d'un refacto.** Ce n'était pas un réglage à trouver : voir
-« déjà essayé et rejeté ».
+« — » = pas de glissement, et c'est un choix : « À venir » est un aperçu par date (l'ordre y est la
+date), « Archives » un journal (l'ordre y est la date de complétion). Rien à réordonner à la main.
+Le jour où une page en veut, elle se branche : `reorder:` + `taskRowDragLayer` + `taskReorderPlaceholder`.
 
 Tout le tableau a été vérifié à la main dans l'app, dans les deux thèmes — pas seulement au
 compilateur. ⌘Z compris.
@@ -66,31 +67,31 @@ savoir OÙ chaque ligne est, et ça, aucune valeur ne le sait — seule la mesur
 
 ---
 
-## ② Clic dans le vide — FAIT (`2dff9ba`). Glisser — RETIRÉ.
+## ② Clic dans le vide et glisser — FAITS
 
 Les lignes publient leur cadre (`TaskRowFrameKey`, repère `taskPageSpace`) et le socle compare le
-point de chaque clic de la fenêtre. C'est la brique de `ListPageView` généralisée, pas une invention.
-Une page qui ne publie pas ses cadres laisse le socle **inerte** — pas de sélection relâchée à
-l'aveugle faute de savoir où sont les lignes.
+point de chaque clic de la fenêtre. C'est la brique de `ListPageView` généralisée.
 
-Le glisser, lui, a été écrit puis retiré (`6ad6b41`). Ce qu'il faut en retenir est dans la section
-« déjà essayé et rejeté ».
+Le glisser a demandé quatre corrections, toutes dans des pièges que le projet connaissait déjà :
 
-### La cause de la saccade est levée (`27eb929`)
+1. **la séquence des lignes doit être figée** à l'empoignade (une vue intelligente la recalcule à
+   chaque rendu) ;
+2. **les cadres aussi**, et il ne suffit pas d'ignorer la nouvelle mesure : il ne faut pas
+   l'ÉCRIRE. Un `@State` réécrit à l'identique invalide quand même la vue, et c'est l'invalidation
+   qui boucle. Deux stockages de cadres coexistaient, un seul gelait — d'où la saccade ;
+3. **la translation se lit dans un repère FIXE** (`taskPageSpace`), jamais dans le repère local :
+   celui-ci est celui de la rangée, que le geste déplace. Mesurer un déplacement dans un repère que
+   ce déplacement bouge fait trembler la ligne, et c'était LA cause du « ingérable » ;
+4. **l'ordre écrit et le retour des décalages à zéro tiennent dans UNE transaction.** Séparés, la
+   rangée saute à sa nouvelle place pendant que son décalage s'anime depuis l'ancienne : elle part
+   à l'opposé avant de revenir.
 
-`TodayPage` et `AllTasksPage` (dans `Models/`) disent quelles lignes la page montre et dans quel
-ordre, à partir des tâches qu'on leur donne. La vue en construit **une par rendu** et la distribue,
-au lieu de refiltrer et retrier toute la base à chaque lecture.
+Tout ça vit dans `TaskPageChrome` et `TaskPageReorder`, pas dans les pages : `taskRowDragLayer`,
+`taskReorderPlaceholder`, `track`, `dropTaskDrag`, `taskDrop`. Une page qui glisse ne redécrit rien.
 
-Le glisser redevient donc écrivable. Il manque encore, et c'est tout :
-
-1. **figer la séquence pendant le geste** — la page garde l'instantané pris à l'empoignade et ne le
-   reconstruit qu'au relâchement. `TaskPageReorder` gèle déjà les CADRES de la même façon, pour la
-   même raison ;
-2. **stocker l'ordre** — `TaskItem.smartOrder`, écrit puis retiré avec le glisser. À reprendre tel
-   quel dans l'historique (`cbdb06c`) : l'ajout était additif, le tri écrit et testé.
-
-Le geste lui-même est dans `47dfdd5`, réutilisable sans modification.
+Ce qui reste à la page, et à elle seule, c'est ce qu'elle ÉCRIT au relâchement — un rang sur
+« Aujourd'hui », un rang plus un rattachement sur « Tâches » (`AllTasksPage.applyDrop`). C'est la
+même frontière que celle posée en tête de `Reorder.swift`.
 
 ---
 
@@ -154,7 +155,7 @@ la vue (`agenda`, `archiveMonths`). Même mouvement à faire, plus petit.
 
 ## Invariants à ne pas casser
 
-- **`swift test` : 140 tests, tous verts.**
+- **`swift test` : 159 tests, tous verts.**
 - **Cliquet de concurrence : exactement 37 diagnostics, tous « does not conform to Sendable » sur des
   chemins de clé.** Tout diagnostic d'une AUTRE nature est une régression d'isolation à corriger
   sur-le-champ, pas à ajouter au décompte.
@@ -184,9 +185,7 @@ la vue (`agenda`, `archiveMonths`). Même mouvement à faire, plus petit.
 
 ## Ordre recommandé
 
-1. **Remettre le glisser** sur « Aujourd'hui » puis « Tâches » : figer la séquence pendant le geste,
-   reprendre `smartOrder` et le geste de `47dfdd5`. La cause de la saccade est levée, plus rien ne
-   bloque.
-2. **Sortir le regroupement de « À venir » et « Archives »** de leurs vues, comme les deux autres —
-   et leurs tests viennent avec.
-3. Le reste est dans « Reporté délibérément » : rien qui presse.
+1. **Sortir le regroupement de « À venir » et « Archives »** de leurs vues, comme les deux autres
+   (`agenda`, `archiveMonths`) — et leurs tests viennent avec. C'est le dernier endroit où une page
+   calcule dans son `body`.
+2. Le reste est dans « Reporté délibérément » : rien qui presse.
