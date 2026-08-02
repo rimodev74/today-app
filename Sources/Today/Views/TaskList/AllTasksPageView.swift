@@ -41,6 +41,9 @@ struct AllTasksPageView: View {
   /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
   /// à faire si retrouver ses dépliants au relancement manque vraiment.
   @State private var toggled: Set<String> = []
+  /// Où commence et finit chaque section à l'écran. Sert UNIQUEMENT au relâchement, pour désigner
+  /// une section vide — une section qui porte des lignes se lit par sa voisine, sans géométrie.
+  @State private var sectionBands: [String: CGRect] = [:]
 
   var body: some View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `sections`
@@ -58,7 +61,12 @@ struct AllTasksPageView: View {
         // UNE seule énumération, celle que le socle clavier reçoit aussi. La boîte de réception a
         // longtemps été rendue à part, et c'est exactement comme ça qu'elle a fini par manquer à
         // l'ordre du clavier sans que rien ne le montre.
-        ForEach(page.sections) { sectionView($0, rows: rows, offsets: offsets) }
+        ForEach(page.sections) { section in
+          sectionView(section, rows: rows, offsets: offsets)
+            // Ce qui rend une section VIDE désignable : sans sa bande, un dépôt dessus se rabat
+            // sur la section du dessus (cf. `AllTasksPage.emptySection`).
+            .measureSectionBand(section.id)
+        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
@@ -67,13 +75,16 @@ struct AllTasksPageView: View {
     // Le socle commun des pages de tâches : ⌫ et ↑/↓. Les mêmes sections que le `body` rend.
     // Le trou d'insertion : même brique que « Aujourd'hui », même courbe.
     .taskReorderPlaceholder(reorder)
+    .onPreferenceChange(SectionBandKey.self) { sectionBands = $0 }
     // Le socle commun des pages de tâches : ⌫, ↑/↓, clic dans le vide, et les cadres des lignes que
     // le glissement lui emprunte. Les mêmes sections que le `body` rend.
     .taskPageBase(
       focus: $focus,
       blocks: { page.blocks(isExpanded: isExpanded) },
       delete: delete,
-      reorder: $reorder
+      reorder: $reorder,
+      // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
+      newTask: createTaskInEditMode
     )
     .onChange(of: page.sections.count) { _, _ in
       // Une section qui apparaît ou disparaît sous le geste (la dernière tâche d'un projet vient
@@ -235,8 +246,15 @@ struct AllTasksPageView: View {
     // au relâchement, et la faire descendre jusqu'à chaque ligne pour ce seul usage encombrerait
     // toute la chaîne.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
+    // Lu AVANT `dropTaskDrag`, qui prend `reorder` en `inout` : le relire depuis la closure serait
+    // un accès exclusif interdit, et l'état est de toute façon désarmé à ce moment-là.
+    let landing = reorder.draggedCenterY.flatMap {
+      page.emptySection(at: $0, bands: sectionBands)
+    }
     dropTaskDrag(&reorder) { ordered in
-      page.applyDrop(of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()))
+      page.applyDrop(
+        of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()),
+        landing: landing)
       try? modelContext.save()
     }
   }
@@ -310,6 +328,30 @@ struct AllTasksPageView: View {
     // Mêmes paddings qu'une `TaskRow` au repos : la rangée de création garde le rythme des tâches.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+  }
+
+  /// ⌘N : la tâche est créée VIDE et s'ouvre AUSSITÔT en édition — carte complète, avec notes,
+  /// sous-tâches, date et priorité. C'est le geste de `ListPageView.createTaskInEditMode`, et il
+  /// vaut désormais sur toutes les pages qui savent créer : le même raccourci ne peut pas donner
+  /// deux résultats selon l'onglet.
+  ///
+  /// À ne pas confondre avec le ⊕ de la barre du bas (et le clic dans le champ « Nouvelle tâche »),
+  /// qui posent seulement le focus sur ce champ : là on tape un titre et on valide, sans ouvrir la
+  /// carte. Les deux chemins coexistent volontairement — l'un pour noter vite, l'autre pour
+  /// détailler tout de suite.
+  private func createTaskInEditMode() {
+    // Dans la boîte de réception : une tâche notée ici n'a ni projet ni date, comme celle du champ
+    // du bas. C'est la seule section de cette page qui crée.
+    guard let inbox = inboxLists.first else { return }
+    let task = TaskItem(title: "", list: inbox)
+    task.sortIndex = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
+    withAnimation(taskInsert) { modelContext.insertAndSave(task) }
+    let id = task.persistentModelID
+    // Au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues avant que le focus
+    // puisse s'y poser. Même raison, et même remède, que sur une page de liste.
+    DispatchQueue.main.async {
+      withAnimation(taskFlow) { focus.edit(id: id) }
+    }
   }
 
   private func createTask() {

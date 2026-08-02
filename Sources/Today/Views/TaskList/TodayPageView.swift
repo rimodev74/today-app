@@ -124,7 +124,9 @@ struct TodayPageView: View {
     // le socle range les cadres chez lui et le glissement n'en voit aucun.
     .taskPageBase(
       focus: $focus, blocks: { page.blocks(undatedExpanded: undatedExpanded) }, delete: delete,
-      reorder: $reorder
+      reorder: $reorder,
+      // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
+      newTask: createTaskInEditMode
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
@@ -346,6 +348,28 @@ struct TodayPageView: View {
     // création garde exactement le rythme des tâches — même règle que `ListPageView.draftRow`.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+  }
+
+  /// ⌘N : la tâche est créée VIDE et s'ouvre AUSSITÔT en édition — carte complète, avec notes,
+  /// sous-tâches, date et priorité. C'est le geste de `ListPageView.createTaskInEditMode`, et il
+  /// vaut désormais sur toutes les pages qui savent créer : le même raccourci ne peut pas donner
+  /// deux résultats selon l'onglet.
+  ///
+  /// À ne pas confondre avec le ⊕ de la barre du bas (et le clic dans le champ « Nouvelle tâche »),
+  /// qui posent seulement le focus sur ce champ : là on tape un titre et on valide, sans ouvrir la
+  /// carte. Les deux chemins coexistent volontairement — l'un pour noter vite, l'autre pour
+  /// détailler tout de suite.
+  private func createTaskInEditMode() {
+    // Datée d'aujourd'hui d'office, exactement comme une tâche notée dans le champ du bas : c'est
+    // ce qui fait la page.
+    let task = TaskItem(title: "", when: startOfToday, list: inboxLists.first)
+    withAnimation(taskInsert) { modelContext.insertAndSave(task) }
+    let id = task.persistentModelID
+    // Au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues avant que le focus
+    // puisse s'y poser. Même raison, et même remède, que sur une page de liste.
+    DispatchQueue.main.async {
+      withAnimation(taskFlow) { focus.edit(id: id) }
+    }
   }
 
   private func createTask() {

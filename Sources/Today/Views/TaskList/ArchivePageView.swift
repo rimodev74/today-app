@@ -52,8 +52,10 @@ struct ArchivePageView: View {
       focus: $focus,
       blocks: { page.blocks },
       delete: delete,
-      // Pas de réordonnancement ici : la page se prononce, elle ne peut pas l'oublier.
-      reorder: nil
+      // Pas de réordonnancement ici, et rien à créer : la page se prononce sur les deux, elle ne
+      // peut pas les oublier. ⌘N ne fait donc RIEN sur les archives — on n'y ajoute pas de tâche.
+      reorder: nil,
+      newTask: nil
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(

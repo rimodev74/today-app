@@ -85,6 +85,34 @@ final class TaskItem {
 
   var project: Project? { list?.project }
 
+  /// Une tâche qui ne porte RIEN : refermer son édition la supprime plutôt que de laisser une
+  /// ligne « Sans titre » derrière soi (cf. `TaskPageBase`).
+  ///
+  /// ⌘N crée la tâche AVANT qu'on ait tapé quoi que ce soit — c'est ce qui permet d'ouvrir la carte
+  /// d'édition tout de suite. Le prix, c'est qu'un ⌘N suivi d'Échap laissait un déchet en base, sur
+  /// les trois pages qui savent créer.
+  ///
+  /// **`when` n'entre PAS dans le compte, et c'est délibéré.** Une page peut dater une tâche
+  /// d'office à sa création : « Aujourd'hui » le fait, sans quoi la tâche neuve ne s'afficherait
+  /// même pas sur la page qui vient de la créer. Une date posée par la PAGE ne prouve donc rien sur
+  /// ce que l'utilisateur a saisi, et le modèle ne sait pas distinguer les deux. Conséquence
+  /// assumée : une tâche à laquelle on n'aurait donné qu'une date, sans titre ni rien d'autre,
+  /// disparaît aussi — elle ne portait de toute façon aucune information lisible.
+  ///
+  /// Tout le RESTE compte, y compris ce qui ne se voit pas sur la ligne au repos (notes, rappel
+  /// Apple) : ce sont des choses que seul l'utilisateur a pu poser.
+  var isBlank: Bool {
+    !isHeader
+      && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && notes.isEmpty
+      && subtasks.isEmpty
+      && deadline == nil
+      && priorityRaw == 0
+      && estimateMinutes == 0
+      && reminderIdentifier == nil
+      && !isCompleted
+  }
+
   func toggleCompletion() {
     isCompleted.toggle()
     completedAt = isCompleted ? Date() : nil
@@ -93,7 +121,7 @@ final class TaskItem {
   /// Ordre manuel des sous-tâches ; `createdAt` départage les ex æquo (même pattern que
   /// `TodoList.orderedTasks`).
   var orderedSubtasks: [Subtask] {
-    subtasks.sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
+    sortedByKey(subtasks, key: { ($0.sortIndex, $0.createdAt) }, areInIncreasingOrder: <)
   }
 
   /// Copie complète de la tâche, posée dans `list` — contenu, réglages et checklist.

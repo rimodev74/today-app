@@ -204,7 +204,32 @@ struct TaskRowFrameKey: PreferenceKey {
   }
 }
 
+/// La bande verticale d'une SECTION, publiée par celle-ci et reçue par la page.
+///
+/// Séparée des cadres de lignes, et ce n'est pas un second stockage de ceux-ci (cf. le piège
+/// documenté) : elle ne nourrit AUCUN calcul de décalage, elle ne sert qu'au relâchement, pour
+/// répondre à la seule question que les lignes ne peuvent pas trancher — « sur quelle section VIDE
+/// vient-on de lâcher ? ». Elle est aussi stable pendant un geste : les décalages sont appliqués
+/// aux rangées, à l'intérieur, et un `.offset` d'enfant ne déplace pas le cadre de son parent.
+struct SectionBandKey: PreferenceKey {
+  static let defaultValue: [String: CGRect] = [:]
+  static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+    value.merge(nextValue()) { _, new in new }
+  }
+}
+
 extension View {
+  /// À poser sur chaque SECTION d'une page qui en a. Sans elle, une section vide est indésignable :
+  /// elle n'a aucune ligne à interroger, donc un dépôt dessus se rabat sur la section du dessus.
+  func measureSectionBand(_ id: String) -> some View {
+    background {
+      GeometryReader { proxy in
+        Color.clear.preference(
+          key: SectionBandKey.self, value: [id: proxy.frame(in: .named(taskPageSpace))])
+      }
+    }
+  }
+
   /// À poser sur CHAQUE ligne d'une page qui utilise `taskPageBase`. Sans elle, la page garde son
   /// clavier mais reste aveugle : le clic dans le vide ne peut pas savoir qu'il est dans le vide.
   func measureTaskRow(_ task: TaskItem) -> some View {
@@ -320,6 +345,17 @@ struct TaskPageBase: ViewModifier {
   /// page doit se prononcer — c'est la même règle que la closure `rows` d'avant, dont l'oubli
   /// silencieux est à l'origine de tout ce chantier.
   var reorder: Binding<TaskPageReorder>?
+
+  /// ⌘N sur cette page, ou `nil` si elle ne sait pas créer de tâche (« À venir », « Archives »).
+  ///
+  /// **Sans valeur par défaut, pour la même raison que `reorder`** : l'omission compilerait sans un
+  /// mot et rendrait la touche muette sur une page qui, elle, sait créer. Les pages se prononcent.
+  ///
+  /// `nil` ne veut pas dire « laisse passer la touche » : ⌘N ne doit RIEN faire là où il n'y a rien
+  /// à créer. Ce qu'il faisait avant — ouvrir un onglet — venait du *Nouvelle fenêtre* d'office de
+  /// `WindowGroup`, retiré dans `TodayApp.commands`. Une page sans création n'a donc rien à porter.
+  let newTask: (() -> Void)?
+
   /// Le repli de secours pour une page SANS glissement (« À venir », « Archives », une liste) : elle
   /// n'a pas de `TaskPageReorder` à elle, mais elle a droit au clic dans le vide.
   @State private var ownFrames: [PersistentIdentifier: CGRect] = [:]
@@ -366,6 +402,31 @@ struct TaskPageBase: ViewModifier {
         reorder.wrappedValue.measured(frames)
       }
       .background(LeftClickOutsideObserver(onClick: releaseSelectionIfOutside))
+      // Une tâche restée VIDE quand son édition se referme s'en va (cf. `TaskItem.isBlank`).
+      //
+      // Posé sur la SORTIE d'édition, et pas dans les `endEditing` des pages : elles ne sont qu'un
+      // des chemins. Échap et le clic dans le vide appellent `focus.dismiss()` directement, et
+      // cliquer une autre ligne bascule l'édition sans passer par elles non plus. Trois façons de
+      // laisser un déchet, dont deux qu'un correctif posé sur `endEditing` aurait manquées.
+      //
+      // On regarde ce qui n'est PLUS édité (`previous`) : la tâche existe encore à cet instant,
+      // c'est justement ce qui permet de la lire avant de trancher.
+      .onChange(of: focus.editing) { previous, _ in
+        guard let previous,
+          let abandoned = rows.first(where: { $0.persistentModelID == previous }),
+          abandoned.isBlank
+        else { return }
+        delete(abandoned)
+      }
+      // ⌘N. Moniteur NSEvent et pas un bouton caché + `.keyboardShortcut` : c'est le mécanisme que
+      // `ListPageView` utilisait déjà, précisément parce que deux raccourcis sur la même lettre
+      // (⌘N et ⌘⇧N) se marchent dessus sous SwiftUI — ce moniteur compare les modificateurs à
+      // l'égalité. Il vit ici pour que les cinq pages en héritent, au lieu d'une seule.
+      .background {
+        if let newTask {
+          KeyCommandMonitor(keyCode: 45, modifiers: [.command], action: newTask)
+        }
+      }
       // Une ligne qui apparaît ou disparaît SANS que ce soit nous qui l'ayons décidé. C'est le cas
       // de ⌘Z : l'annulation part du menu *Édition*, traverse la chaîne des répondeurs et arrive
       // dans SwiftData sans passer par une seule de nos méthodes — donc sans le `withAnimation`
@@ -411,8 +472,11 @@ extension View {
     focus: Binding<TaskFocus>,
     blocks: @escaping () -> [TaskPageBlock],
     delete: @escaping (TaskItem) -> Void,
-    reorder: Binding<TaskPageReorder>?
+    reorder: Binding<TaskPageReorder>?,
+    newTask: (() -> Void)?
   ) -> some View {
-    modifier(TaskPageBase(focus: focus, blocks: blocks, delete: delete, reorder: reorder))
+    modifier(
+      TaskPageBase(
+        focus: focus, blocks: blocks, delete: delete, reorder: reorder, newTask: newTask))
   }
 }

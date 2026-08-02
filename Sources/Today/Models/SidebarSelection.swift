@@ -116,26 +116,32 @@ extension SmartList {
   /// bousculer un ordre choisi.
   func sort(_ tasks: [TaskItem]) -> [TaskItem] {
     if self == .archive {
-      return tasks.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+      return sortedByKey(
+        tasks, key: { $0.completedAt ?? .distantPast }, areInIncreasingOrder: >)
     }
     // Réglage « Descendre en bas de la liste », lu UNE fois. Dans le comparateur, c'était une
     // interrogation des défauts par COMPARAISON — n log n accès pour une valeur qui ne bouge pas
     // pendant un tri.
     let autoSortCompleted = TodoList.autoSortCompletedEnabled
-    return tasks.sorted { a, b in
-      // Il prime sur l'ordre manuel lui-même — une tâche cochée descend, où qu'on l'ait posée.
-      // Sans `sortIndex` à réécrire ici (cf. `TodoList.moveToEndOfSection`), la règle s'applique
-      // en première clé de tri.
-      if autoSortCompleted, a.isCompleted != b.isCompleted { return b.isCompleted }
-      // 0 = jamais posée à la main, donc après toutes celles qui l'ont été.
-      let ra = a.smartOrder == 0 ? Int.max : a.smartOrder
-      let rb = b.smartOrder == 0 ? Int.max : b.smartOrder
-      if ra != rb { return ra < rb }
-      if a.priorityRaw != b.priorityRaw { return a.priorityRaw > b.priorityRaw }
-      let da = a.when ?? .distantFuture
-      let db = b.when ?? .distantFuture
-      if da != db { return da < db }
-      return a.createdAt < b.createdAt
-    }
+    // Les cinq clés, lues une fois par tâche (cf. `sortedByKey` : ×7 mesuré). Elles sont rangées
+    // dans l'ordre de priorité de la règle, et TOURNÉES pour que le `<` naturel du tuple dise
+    // exactement ce que disaient les `if` d'avant :
+    // 1. cochée en dernier — `false` (0) avant `true` (1), et seulement si le réglage est actif ;
+    // 2. ordre manuel — 0 = jamais posée à la main, donc après toutes celles qui l'ont été ;
+    // 3. priorité DÉCROISSANTE, d'où le signe moins ;
+    // 4. date planifiée, la plus proche d'abord, non datée à la fin ;
+    // 5. création — départage les ex æquo, et rend l'ordre totalement déterminé.
+    return sortedByKey(
+      tasks,
+      key: { task -> (Int, Int, Int, Date, Date) in
+        (
+          autoSortCompleted && task.isCompleted ? 1 : 0,
+          task.smartOrder == 0 ? Int.max : task.smartOrder,
+          -task.priorityRaw,
+          task.when ?? .distantFuture,
+          task.createdAt
+        )
+      },
+      areInIncreasingOrder: <)
   }
 }

@@ -246,12 +246,15 @@ private struct ListPageView: View {
           .hidden()
       }
     }
-    // ⌘N / ⌘⇧N : PAS de bouton caché + `.keyboardShortcut` (essayé d'abord) — deux raccourcis sur
-    // la même lettre avec des modificateurs différents se marchent dessus sous SwiftUI, ⌘⇧N étant
-    // avalé par le gestionnaire ⌘N. Même moniteur NSEvent que `DeleteKeyMonitor` ci-dessous, qui
-    // contourne déjà cette même classe de problème de routage clavier.
+    // ⌘⇧N : PAS de bouton caché + `.keyboardShortcut` (essayé d'abord) — deux raccourcis sur la
+    // même lettre avec des modificateurs différents se marchent dessus sous SwiftUI, ⌘⇧N étant
+    // avalé par le gestionnaire ⌘N. Ce moniteur compare les modificateurs à l'égalité.
+    //
+    // ⌘N n'est PLUS ici : il était posé sur cette page et sur elle seule, ce qui laissait les
+    // quatre autres à découvert — la touche y retombait sur le *Nouvelle fenêtre* de `WindowGroup`
+    // et ouvrait un onglet. Il vit maintenant dans le socle (`TaskPageBase.newTask`). Les en-têtes
+    // de section, elles, n'existent que sur cette page : ⌘⇧N reste donc à sa charge.
     .background {
-      KeyCommandMonitor(keyCode: 45, modifiers: [.command], action: createTaskInEditMode)
       KeyCommandMonitor(keyCode: 45, modifiers: [.command, .shift], action: insertHeader)
     }
     // Le socle commun des pages de tâches : ⌫ sur la sélection, ↑/↓ pour la déplacer. Un seul pan,
@@ -265,7 +268,8 @@ private struct ListPageView: View {
       delete: requestDelete,
       // Cette page a son PROPRE moteur de glissement (en-têtes, blocs, champs) : le socle n'a rien
       // à réordonner ici.
-      reorder: nil
+      reorder: nil,
+      newTask: createTaskInEditMode
     )
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
     // supprime directement. Les tâches, elles, ne sont PAS supprimées — l'en-tête retirée, elles
@@ -393,8 +397,10 @@ private struct ListPageView: View {
   /// Les archivées de CETTE liste, la plus récemment cochée en tête — même tri que la vue
   /// « Archives » globale, qui les montre toutes listes confondues.
   private var archivedTasks: [TaskItem] {
-    list.orderedTasks.filter(isArchived)
-      .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+    sortedByKey(
+      list.orderedTasks.filter(isArchived),
+      key: { $0.completedAt ?? .distantPast },
+      areInIncreasingOrder: >)
   }
 
   /// Cocher en mode « après 1,5 s » : programme le redessin qui fera sortir la ligne. Ailleurs, le

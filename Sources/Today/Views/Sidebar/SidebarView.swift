@@ -791,7 +791,7 @@ struct SidebarView: View {
   /// `projects` ne se re-trie qu'au tour de boucle suivant — ce délai décollait le réordonnancement
   /// de la retombée des offsets au drop (trou transitoire).
   private var sortedProjects: [Project] {
-    projects.sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
+    sortedByKey(projects, key: { ($0.sortIndex, $0.createdAt) }, areInIncreasingOrder: <)
   }
 
   /// Ordre visuel des lignes déplaçables (et de la rangée « + »), de haut en bas. Base de tout le

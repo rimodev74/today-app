@@ -45,6 +45,16 @@ struct TaskPageReorder {
   /// écrit dépend d'OÙ cette tâche-là a atterri, pas seulement de l'ordre obtenu.
   var draggedTask: TaskItem? { rows.first { $0.persistentModelID == dragging } }
 
+  /// Où en est le CENTRE de la ligne tirée, dans le repère des cadres. `nil` hors glissement.
+  ///
+  /// C'est le point qu'une page compare aux bandes de ses sections pour savoir sur QUOI on lâche —
+  /// la seule question à laquelle l'ordre des lignes ne répond pas, quand la section visée est vide.
+  /// Le calcul est déjà celui de `layout()`, sorti ici pour ne pas être réécrit à l'identique.
+  var draggedCenterY: CGFloat? {
+    guard let dragging, let frame = frames[dragging] else { return nil }
+    return frame.midY + translation.height
+  }
+
   /// Nouvelle mesure des lignes — **ignorée pendant un glissement**.
   ///
   /// Le gel n'est pas une optimisation. `frame(in:)` inclut le `.offset` appliqué aux lignes

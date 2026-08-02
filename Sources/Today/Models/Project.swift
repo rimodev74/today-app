@@ -22,7 +22,7 @@ final class Project {
   }
 
   var orderedLists: [TodoList] {
-    lists.sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
+    sortedByKey(lists, key: { ($0.sortIndex, $0.createdAt) }, areInIncreasingOrder: <)
   }
 
   var allTasks: [TaskItem] { lists.flatMap(\.tasks) }

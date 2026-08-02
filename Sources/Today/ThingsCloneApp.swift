@@ -181,6 +181,17 @@ struct TodayApp: App {
     // Le second groupe ajoute Cmd+K : panneau natif AppKit pour ajouter/modifier/retirer un lien
     // sur la sélection courante (même mécanisme que Mail/Notes/TextEdit).
     .commands {
+      // ⌘N N'OUVRE PAS DE FENÊTRE. `WindowGroup` installe d'office un *Fichier ▸ Nouvelle fenêtre*
+      // sur ⌘N, et comme macOS regroupe les fenêtres en onglets, la frappe ouvrait un ONGLET —
+      // sur « Tâches », « Aujourd'hui » et la page d'un projet, c'est-à-dire partout où aucune page
+      // ne réclamait la touche pour elle. Une page de liste, elle, avait son propre moniteur ⌘N et
+      // masquait le problème : le même raccourci faisait donc deux choses selon l'onglet.
+      //
+      // Retiré ICI, une fois, plutôt que neutralisé page par page : une page qui ne sait pas créer
+      // de tâche (« À venir », « Archives », un projet, le Pomodoro) doit voir ⌘N ne RIEN faire,
+      // pas ouvrir une fenêtre dont cette app n'a aucun usage — elle n'a qu'un seul document.
+      // Celles qui savent créer se branchent sur `TaskPageBase.newTask`.
+      CommandGroup(replacing: .newItem) {}
       TextFormattingCommands()
       CommandGroup(after: .textEditing) {
         Button("Ajouter un lien…") {

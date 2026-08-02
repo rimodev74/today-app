@@ -225,4 +225,94 @@ final class AllTasksPageTests: XCTestCase {
 
     XCTAssertEqual(pain.list?.title, "Tâches", "posée en tête, elle rejoint la boîte de réception")
   }
+
+  // MARK: Déposer dans une section VIDE
+
+  /// LE bug : « Aujourd'hui » vide, on y lâche une tâche — elle partait dans « Non classé » et
+  /// perdait sa date, parce que la lecture par la voisine trouvait la section du DESSUS. Mesuré
+  /// avant correction, ce test l'aurait attrapé.
+  func testDropSurAujourdhuiVide_dateLaTache() throws {
+    let ctx = try makeContext()
+    let inbox = TodoList(title: "Tâches")
+    inbox.isInbox = true
+    ctx.insert(inbox)
+    let notee = TaskItem(title: "notée", list: inbox)
+    ctx.insert(notee)
+    let projet = Project(title: "Maison")
+    ctx.insert(projet)
+    let courses = TodoList(title: "Courses", project: projet)
+    ctx.insert(courses)
+    let pain = TaskItem(title: "pain", list: courses)
+    ctx.insert(pain)
+
+    let page = try build(ctx)
+    let vide = try XCTUnwrap(page.sections.first { $0.kind == .today })
+    XCTAssertTrue(vide.tasks.isEmpty, "le scénario exige une section « Aujourd'hui » VIDE")
+
+    // Lâchée dans la bande d'« Aujourd'hui » : y = 50, la bande va de 40 à 60.
+    let landing = page.emptySection(
+      at: 50, bands: [vide.id: CGRect(x: 0, y: 40, width: 100, height: 20)])
+    page.applyDrop(of: pain, in: [notee, pain], today: today(), landing: landing)
+
+    XCTAssertEqual(pain.when, today(), "la tâche doit être datée d'aujourd'hui")
+    XCTAssertEqual(
+      pain.list?.title, "Courses", "elle ne change pas de liste : « Aujourd'hui » DATE")
+  }
+
+  /// Une section vide qui rattache : on y lâche, la tâche change de liste.
+  func testDropSurUneListeVide_rattacheALaListe() throws {
+    let ctx = try makeContext()
+    let inbox = TodoList(title: "Tâches")
+    inbox.isInbox = true
+    ctx.insert(inbox)
+    let notee = TaskItem(title: "notée", list: inbox)
+    ctx.insert(notee)
+    let libre = TodoList(title: "Courses")
+    ctx.insert(libre)
+
+    let page = try build(ctx)
+    // Une section fabriquée à la main : une liste VIDE n'est pas rendue par la page (cf. `build`),
+    // mais la règle de dépôt, elle, doit savoir la traiter le jour où elle le sera.
+    let vide = AllTasksPage.Section(
+      id: "list-vide", kind: .list(libre), title: "Courses", tasks: [],
+      defaultExpanded: false, dropList: libre)
+
+    page.applyDrop(of: notee, in: [notee], today: today(), landing: vide)
+
+    XCTAssertEqual(notee.list?.title, "Courses")
+  }
+
+  /// Hors de toute bande vide, rien ne change : la lecture par la voisine reste la règle, et elle
+  /// est plus précise (elle dit DANS QUELLE liste d'un projet la tâche a atterri).
+  func testHorsDuneSectionVide_aucuneSectionNestDesignee() throws {
+    let ctx = try makeContext()
+    let inbox = TodoList(title: "Tâches")
+    inbox.isInbox = true
+    ctx.insert(inbox)
+    ctx.insert(TaskItem(title: "notée", list: inbox))
+
+    let page = try build(ctx)
+    let vide = try XCTUnwrap(page.sections.first { $0.kind == .today })
+    let bands = [vide.id: CGRect(x: 0, y: 40, width: 100, height: 20)]
+
+    XCTAssertNil(page.emptySection(at: 10, bands: bands), "au-dessus de la bande")
+    XCTAssertNil(page.emptySection(at: 90, bands: bands), "en dessous de la bande")
+  }
+
+  /// Une section qui PORTE des lignes n'est jamais désignée par la géométrie, même si le point
+  /// tombe dedans : sa voisine répond mieux.
+  func testUneSectionPleineNestJamaisDesigneeParLaGeometrie() throws {
+    let ctx = try makeContext()
+    let inbox = TodoList(title: "Tâches")
+    inbox.isInbox = true
+    ctx.insert(inbox)
+    ctx.insert(TaskItem(title: "notée", list: inbox))
+
+    let page = try build(ctx)
+    let pleine = try XCTUnwrap(page.sections.first { $0.kind == .inbox })
+    XCTAssertFalse(pleine.tasks.isEmpty)
+
+    XCTAssertNil(
+      page.emptySection(at: 50, bands: [pleine.id: CGRect(x: 0, y: 0, width: 100, height: 100)]))
+  }
 }

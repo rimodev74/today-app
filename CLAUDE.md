@@ -27,6 +27,7 @@ leur en-tête AVANT d'écrire.
 
 | Pièce | Rôle | Ce qu'elle a remplacé |
 |---|---|---|
+| `Models/SortedByKey.swift` | trier des `@Model` en ne lisant les clés qu'UNE fois par élément | des comparateurs qui relisaient leurs clés à CHAQUE comparaison — ×7 à ×10 sur tous les tris de l'app |
 | `Models/Reorder.swift` | l'arithmétique du glissement : repli, écartement, trou, ordre obtenu | la page de liste et la sidebar recalculaient la même chose chacune de son côté, sans le savoir |
 | `Models/TaskFocus.swift` | quelle ligne est sélectionnée, laquelle est en édition | trois pages pilotaient deux `@State` nus avec les mêmes cinq transitions recopiées |
 | `Models/TaskPageRows.swift` (`TaskPageBlock`) | ce qu'une page affiche : des pans de lignes, visibles ou repliés | chaque page REDÉCRIVAIT l'ordre de ses lignes dans une closure, que rien ne reliait à son `body` — une page l'a écrit faux, et le symptôme était « la touche ne marche pas » |
@@ -48,7 +49,8 @@ Les CINQ pages (`ListPageView`, `TodayPageView`, `AllTasksPageView`, `UpcomingPa
    double, AppKit retient le tap simple le temps de la fenêtre de double-clic ;
 2. `.measureTaskRow(task)` sur chaque ligne — sans ça la page reste aveugle : le clic dans le vide
    ne peut pas savoir qu'il est dans le vide, et rien ne peut se glisser ;
-3. `.taskPageBase(focus:blocks:delete:reorder:)`, en déclarant ses pans dans l'ordre du rendu ;
+3. `.taskPageBase(focus:blocks:delete:reorder:newTask:)`, en déclarant ses pans dans l'ordre du
+   rendu. `reorder` ET `newTask` sont sans valeur par défaut : la page se prononce, `nil` compris ;
 4. pour glisser, en plus : un `@State TaskPageReorder`, `.taskRowDragLayer` sur les lignes,
    `.taskReorderPlaceholder` sur la page, `reorder.track(…)` à l'empoignade et `dropTaskDrag(…)`
    au relâchement.
@@ -110,6 +112,21 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
      sur l'autre au relâchement produit le même symptôme que le point 4, pour une autre raison : le
      `ForEach` réordonne ses identités au moment où les décalages retombent. Rien n'écrit pendant un
      geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie.
+- **Une section VIDE ne se lit pas par sa voisine.** Sur « Tâches », le dépôt déduit la section
+  d'accueil de la ligne VOISINE — la seule lecture qui marche pour les quatre sortes de sections
+  d'un coup. Une section vide n'en a aucune : une tâche lâchée sur un « Aujourd'hui » vide partait
+  dans « Non classé » et perdait sa date, EN SILENCE (mesuré, pas supposé). D'où `SectionBandKey` +
+  `AllTasksPage.emptySection(at:bands:)`, qui désignent la section par sa GÉOMÉTRIE — et seulement
+  quand elle est vide, la voisine restant plus précise ailleurs (dans un projet à plusieurs listes,
+  elle dit laquelle). Ce n'est PAS un second stockage de cadres : il ne nourrit aucun décalage, il
+  ne sert qu'au relâchement.
+- **Lire une propriété d'un `@Model` n'est PAS un accès mémoire.** Ça traverse la machinerie
+  SwiftData (`_$backingData`). Conséquence non évidente : un comparateur ordinaire relit ses clés à
+  chaque comparaison, soit n·log n fois — ~4 400 accès pour trier 86 tâches sur cinq clés, et le tri
+  coûtait dix fois le filtrage alors qu'il fait moins de travail. D'où `sortedByKey`, qui décore
+  avant de trier. **Tout nouveau tri sur un `@Model` passe par lui**, jamais par `.sorted { }`
+  directement. Corollaire à ne pas sur-appliquer : sur des types de valeur (dates, chaînes,
+  `EKEvent`), la décoration est une allocation pour rien.
 - **`cp -r` DÉTRUIT un framework versionné.** Sparkle n'est qu'une arborescence de liens
   symboliques (`Sparkle` → `Versions/Current/Sparkle`) ; `cp -r` les SUIT et copie les cibles —
   mesuré : 3,0 Mo deviennent 8,9 Mo, chaque binaire en double, et le bundle n'a plus la forme d'un
@@ -161,7 +178,12 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
   PAS de valeur par défaut : les cinq pages se prononcent, `nil` compris. Quand il en avait une,
   l'oubli compilait sans un mot et le glissement ne recevait aucun cadre — exactement le même
   défaut que la closure `rows` qu'il a remplacée. Une valeur par défaut se justifie quand
-  l'omission est un CHOIX raisonnable ; pas quand elle produit une page à moitié branchée.
+  l'omission est un CHOIX raisonnable ; pas quand elle produit une page à moitié branchée. Le
+  même défaut s'est reproduit avec ⌘N : posé sur la page d'une liste et sur elle seule, il laissait
+  les quatre autres retomber sur le *Nouvelle fenêtre* d'office de `WindowGroup` — la touche
+  ouvrait un ONGLET sur « Tâches », « Aujourd'hui » et un projet. Deux corrections, à deux niveaux :
+  `CommandGroup(replacing: .newItem) {}` retire la commande système une fois pour toutes, et
+  `TaskPageBase.newTask` porte la création, sans défaut lui non plus.
 - **En français.** Identifiants en anglais, commentaires et documentation en français.
 - `// ponytail:` marque une simplification délibérée et son plafond.
 - Pas de trailer `Co-Authored-By` ni de mention d'outil dans les commits.
@@ -234,14 +256,14 @@ en le maintenant, une fois en le débranchant.
 
 Dette connue, par ordre de coût :
 
-1. **On ne peut pas déposer une tâche dans un dépliant VIDE de « Tâches ».** La section d'accueil se
-   lit sur la ligne voisine (seule lecture qui marche pour les quatre sortes de sections) ; sans
-   voisine, rien à lire. Le jour où ça manque : donner un cadre au bandeau lui-même et viser dessus.
+1. **Le champ « Nouvelle tâche » et ⌘N ne créent pas la même chose**, et c'est voulu : le champ note
+   vite (on tape un titre, on valide), ⌘N crée une tâche VIDE ouverte en édition (notes,
+   sous-tâches, date, priorité). Une tâche restée entièrement vide est supprimée à la fermeture de
+   son édition (cf. `TaskItem.isBlank`) — sans ça, ⌘N puis Échap laissait un « Sans titre » en base.
 2. **Toutes les `@Query` lisent la table entière** puis filtrent et trient en mémoire. Mesuré à 87
-   tâches : sans objet. C'est le plafond à connaître, pas à corriger — passer en `#Predicate` le
-   jour où la base se comptera en milliers. Le TRI, lui, restera cher quoi qu'il arrive : chaque
-   lecture de propriété d'un `@Model` passe par SwiftData et pas par un champ mémoire (mesuré :
-   2,4 ms pour trier 86 tâches, contre 0,24 ms pour les filtrer).
+   tâches : sans objet (le rendu d'« Aujourd'hui » coûte 0,46 ms de filtre + tri, 11,7 ms à 2 000
+   tâches). C'est le plafond à connaître, pas à corriger — passer en `#Predicate` le jour où la
+   base se comptera en milliers.
 3. Le mode langage reste Swift 5. La concurrence stricte est en revanche VÉRIFIÉE (réglage dans
    `Package.swift`) et tous les diagnostics restants sont le même : `SortDescriptor(\Model.x)` veut
    un chemin de clé `Sendable`, qu'un `@Model` SwiftData ne peut pas être. Trou d'Apple, pas dette

@@ -34,7 +34,7 @@ final class TodoList {
   /// Ordre manuel. `createdAt` départage les ex æquo (deux tâches créées avant
   /// tout réordonnancement partagent sortIndex 0) pour que l'ordre reste stable.
   var orderedTasks: [TaskItem] {
-    tasks.sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
+    sortedByKey(tasks, key: { ($0.sortIndex, $0.createdAt) }, areInIncreasingOrder: <)
   }
 
   /// Les en-têtes ne sont pas des tâches : elles ne comptent pas dans la progression.
