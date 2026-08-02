@@ -52,7 +52,9 @@ struct ArchivePageView: View {
     .taskPageBase(
       focus: $focus,
       blocks: { archiveMonths(archived).map { .visible($0.tasks) } },
-      delete: delete
+      delete: delete,
+      // Pas de réordonnancement ici : la page se prononce, elle ne peut pas l'oublier.
+      reorder: nil
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(

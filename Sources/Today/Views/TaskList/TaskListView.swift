@@ -262,7 +262,10 @@ private struct ListPageView: View {
     .taskPageBase(
       focus: $focus,
       blocks: { [.visible(blocks.flatMap(\.items))] },
-      delete: requestDelete
+      delete: requestDelete,
+      // Cette page a son PROPRE moteur de glissement (en-têtes, blocs, champs) : le socle n'a rien
+      // à réordonner ici.
+      reorder: nil
     )
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
     // supprime directement. Les tâches, elles, ne sont PAS supprimées — l'en-tête retirée, elles

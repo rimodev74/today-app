@@ -65,6 +65,10 @@ let taskSelectFade = Animation.easeOut(duration: 0.05)
 /// insertions/suppressions — la transition des rangées n'y répond donc jamais.
 /// Interne pour la même raison que `gutter` : `ArchivePageView` anime ses sorties de ligne avec.
 let taskInsert = Animation.spring(response: 0.32, dampingFraction: 0.62)
+/// Le repos d'un réordonnancement : écartement des voisines pendant le geste, et retour des
+/// décalages à zéro au relâchement. Une seule valeur pour les deux, et pour toutes les pages —
+/// deux courbes différentes se verraient au passage d'un onglet à l'autre.
+let taskDrop = Animation.snappy(duration: 0.22)
 
 /// Sélection au mouseDOWN + édition au clic sur une ligne DÉJÀ sélectionnée, en UN SEUL geste —
 /// pour les pages sans réordonnancement (« Tâches », « Aujourd'hui »).
@@ -214,6 +218,61 @@ extension View {
   }
 }
 
+// MARK: - Le glissement, vu de la page
+
+extension View {
+  /// Ce qu'une rangée porte pendant un glissement : elle suit le curseur si c'est elle qu'on tire,
+  /// elle s'écarte sinon.
+  ///
+  /// Écrit ici et pas dans chaque page. Les quatre modificateurs vont ensemble et leur ORDRE
+  /// compte : le plan et l'ombre isolent la ligne tirée du reste, et l'animation ne doit surtout
+  /// pas s'appliquer à elle — une ligne qui « rattrape » le curseur avec 0,22 s de retard donne
+  /// l'impression que le geste patine.
+  func taskRowDragLayer(_ reorder: TaskPageReorder, task: TaskItem, offset: CGSize) -> some View {
+    let lifted = reorder.isDragging(task)
+    return
+      self
+      .offset(offset)
+      .zIndex(lifted ? 1 : 0)
+      .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 10 : 0, y: lifted ? 5 : 0)
+      .animation(lifted ? nil : taskDrop, value: offset)
+  }
+
+  /// Le trou d'insertion, DERRIÈRE la page : il n'est donc visible que dans le vide ouvert par
+  /// l'écartement des voisines. Sans lui, aucun repère de dépôt — et l'écartement silencieux se
+  /// lit comme une saccade.
+  func taskReorderPlaceholder(_ reorder: TaskPageReorder) -> some View {
+    background(alignment: .topLeading) {
+      if let hole = reorder.placeholder() {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(Color.primary.opacity(0.06))
+          .frame(width: hole.width, height: hole.height)
+          .offset(x: hole.minX, y: hole.minY)
+          .allowsHitTesting(false)
+      }
+    }
+  }
+}
+
+/// Le relâchement, écrit une fois pour toutes les pages. Deux règles y sont enfermées, et chacune
+/// s'est déjà payée à l'écran :
+///
+/// - **lire le plan AVANT de désarmer** — il se déduit de l'état du geste, qui n'existe plus après ;
+/// - **une SEULE transaction** pour l'ordre écrit et les décalages remis à zéro. Séparés, ils se
+///   contredisent : la rangée saute à sa nouvelle place instantanément pendant que son décalage
+///   revient à zéro en s'animant depuis l'ancienne, donc elle s'élance à l'opposé avant de revenir.
+///
+/// `write` reçoit l'ordre obtenu ; ce qu'on en persiste appartient à la page (renuméroter un rang,
+/// et sur « Tâches » rattacher la tâche à la liste où elle a atterri).
+@MainActor
+func dropTaskDrag(_ reorder: inout TaskPageReorder, write: ([TaskItem]) -> Void) {
+  let ordered = reorder.dropped()
+  withAnimation(taskDrop) {
+    if let ordered { write(ordered) }
+    reorder.end()
+  }
+}
+
 // MARK: - Le socle commun d'une page de tâches
 
 /// Ce que TOUTE page de tâches doit savoir faire, posé une fois.
@@ -256,6 +315,10 @@ struct TaskPageBase: ViewModifier {
   /// image, ce qui relançait un rendu, qui redéplaçait les lignes, qui réécrivait les cadres. La
   /// boucle exacte que `ListPageView` documente depuis toujours, et le glisser saccadé qu'on a mis
   /// deux fois sur le dos du reste.
+  /// `nil` = cette page ne se réordonne pas. **Sans valeur par défaut, et c'est délibéré** :
+  /// l'oubli de ce branchement compilait sans un mot et le glissement ne recevait aucun cadre. Une
+  /// page doit se prononcer — c'est la même règle que la closure `rows` d'avant, dont l'oubli
+  /// silencieux est à l'origine de tout ce chantier.
   var reorder: Binding<TaskPageReorder>?
   /// Le repli de secours pour une page SANS glissement (« À venir », « Archives », une liste) : elle
   /// n'a pas de `TaskPageReorder` à elle, mais elle a droit au clic dans le vide.
@@ -348,7 +411,7 @@ extension View {
     focus: Binding<TaskFocus>,
     blocks: @escaping () -> [TaskPageBlock],
     delete: @escaping (TaskItem) -> Void,
-    reorder: Binding<TaskPageReorder>? = nil
+    reorder: Binding<TaskPageReorder>?
   ) -> some View {
     modifier(TaskPageBase(focus: focus, blocks: blocks, delete: delete, reorder: reorder))
   }

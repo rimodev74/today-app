@@ -38,6 +38,9 @@ struct TaskPageReorder {
 
   var isDragging: Bool { dragging != nil }
   func isDragging(_ task: TaskItem) -> Bool { dragging == task.persistentModelID }
+  /// La tâche empoignée, tant que le geste dure. Une page en a besoin au relâchement : ce qu'elle
+  /// écrit dépend d'OÙ cette tâche-là a atterri, pas seulement de l'ordre obtenu.
+  var draggedTask: TaskItem? { rows.first { $0.persistentModelID == dragging } }
 
   /// Nouvelle mesure des lignes — **ignorée pendant un glissement**.
   ///
@@ -49,6 +52,16 @@ struct TaskPageReorder {
   mutating func measured(_ new: [PersistentIdentifier: CGRect]) {
     guard dragging == nil else { return }
     frames = new
+  }
+
+  /// **Le seul point d'entrée d'un glissement.** Empoigne au premier mouvement, puis suit.
+  ///
+  /// Les pages appelaient `begin` puis `drag` chacune de leur côté, avec le même `if` en tête.
+  /// Deux lignes recopiées, c'est déjà deux occasions de diverger — et l'ordre des deux appels
+  /// n'est pas anodin : empoigner APRÈS avoir suivi perdrait la première translation.
+  mutating func track(_ task: TaskItem, by translation: CGSize, in rows: [TaskItem]) {
+    if !isDragging { begin(task, in: rows) }
+    drag(translation)
   }
 
   mutating func begin(_ task: TaskItem, in rows: [TaskItem]) {

@@ -121,18 +121,9 @@ struct TodayPageView: View {
       .padding(.horizontal, gutter)
       .padding(.top, 30)
     }
-    // Le trou d'insertion, DERRIÈRE la page : il n'est donc visible que dans le vide ouvert par
-    // l'écartement des voisines. Même repère que les cadres (`taskPageSpace`, celui du ScrollView),
-    // sinon il se dessinerait décalé du défilement.
-    .background(alignment: .topLeading) {
-      if let hole = reorder.placeholder() {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Color.primary.opacity(0.06))
-          .frame(width: hole.width, height: hole.height)
-          .offset(x: hole.minX, y: hole.minY)
-          .allowsHitTesting(false)
-      }
-    }
+    // Le trou d'insertion, la couche de glissement des rangées, la courbe : tout vient de
+    // `TaskPageChrome`. Une page qui glisse ne redécrit rien de ce qui se voit.
+    .taskReorderPlaceholder(reorder)
     // Le socle commun des pages de tâches : ⌫ et ↑/↓.
     // Le socle porte AUSSI les cadres des lignes : une seule mesure pour le clic dans le vide et
     // pour le glissement, gelée pendant un geste. Sans ce `reorder:`, la page mesure dans le vide —
@@ -225,10 +216,9 @@ struct TodayPageView: View {
     for task: TaskItem, showsParent: Bool = true, onSchedule: (() -> Void)? = nil,
     offset: CGSize = .zero, draggable: Bool = false, rows: [TaskItem] = []
   ) -> some View {
-    let lifted = reorder.isDragging(task)
     // Typés ici : un ternaire entre une closure et `nil` ne s'infère pas au milieu d'une chaîne de
     // modificateurs, et le compilateur n'en dit rien d'utile.
-    let onDrag: ((CGSize) -> Void)? = draggable ? { drag(task, by: $0, in: rows) } : nil
+    let onDrag: ((CGSize) -> Void)? = draggable ? { reorder.track(task, by: $0, in: rows) } : nil
     let onDrop: (() -> Void)? = draggable ? { dropDraggedTask() } : nil
     return TaskRow(
       task: task,
@@ -256,13 +246,9 @@ struct TodayPageView: View {
       onDrag: onDrag,
       onDrop: onDrop
     )
-    // La ligne tirée SUIT le curseur (aucune animation, elle lui colle) ; les voisines glissent
-    // pour ouvrir le trou. Rien n'est capturé en image : c'est la vraie rangée qui se déplace, donc
-    // rien ne disparaît ni ne réapparaît au relâchement.
-    .offset(offset)
-    .zIndex(lifted ? 1 : 0)
-    .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 10 : 0, y: lifted ? 5 : 0)
-    .animation(lifted ? nil : .snappy(duration: 0.22), value: offset)
+    // Rien n'est capturé en image : c'est la vraie rangée qui se déplace, donc rien ne disparaît
+    // ni ne réapparaît au relâchement.
+    .taskRowDragLayer(reorder, task: task, offset: offset)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
     // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches, et au glissement de
@@ -270,29 +256,13 @@ struct TodayPageView: View {
     .measureTaskRow(task)
   }
 
-  private func drag(_ task: TaskItem, by translation: CGSize, in rows: [TaskItem]) {
-    if !reorder.isDragging { reorder.begin(task, in: rows) }
-    reorder.drag(translation)
-  }
-
-  /// Relâchement : l'ordre affiché devient l'ordre écrit.
-  ///
-  /// **Une seule transaction pour les deux**, comme `ListPageView.endDrag`. Séparés, ils se
-  /// contredisent : l'ordre écrit déplace la rangée à sa nouvelle place INSTANTANÉMENT, pendant que
-  /// son décalage, lui, revient à zéro EN S'ANIMANT — depuis l'ancienne place. La rangée part donc
-  /// dans la mauvaise direction avant de revenir.
-  ///
-  /// Ensemble, il ne se passe rien à l'écran : pendant le glissement, chaque ligne était déjà à la
-  /// place qu'elle occupe maintenant. C'est cette continuité, pas la courbe, qui rend le dépôt net.
-  ///
-  /// Le plan se lit AVANT de désarmer : il dépend de l'état du geste.
+  /// Relâchement. La mécanique (lire le plan avant de désarmer, tout écrire en une transaction)
+  /// est dans `dropTaskDrag` ; ici il ne reste que ce qui appartient à cette page — le rang.
   private func dropDraggedTask() {
-    let ordered = reorder.dropped()
-    withAnimation(.snappy(duration: 0.22)) {
-      if let ordered { TaskItem.stampSmartOrder(ordered) }
-      reorder.end()
+    dropTaskDrag(&reorder) { ordered in
+      TaskItem.stampSmartOrder(ordered)
+      try? modelContext.save()
     }
-    try? modelContext.save()
   }
 
   private func parentLabel(of task: TaskItem) -> String? {

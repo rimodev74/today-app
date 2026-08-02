@@ -40,6 +40,46 @@ struct AllTasksPage {
     sections.map { TaskPageBlock(tasks: $0.tasks, isExpanded: isExpanded($0)) }
   }
 
+  /// La section qui contient cette tâche, s'il y en a une.
+  func section(containing task: TaskItem) -> Section? {
+    sections.first { $0.tasks.contains { $0.persistentModelID == task.persistentModelID } }
+  }
+
+  /// Ce qu'un dépôt doit ÉCRIRE pour que la tâche reste là où on vient de la lâcher.
+  ///
+  /// Une section de cette page n'est pas un rangement arbitraire : c'est ce que la tâche EST.
+  /// « Aujourd'hui » veut dire « datée du jour », un projet ou une liste veut dire « rattachée à ».
+  /// Déposer sans écrire ça, c'est voir la ligne remonter à sa place d'origine au rendu suivant —
+  /// le geste aurait l'air de ne pas marcher, alors qu'il aurait parfaitement marché.
+  ///
+  /// La section d'accueil se lit sur la VOISINE, pas sur une zone de dépôt : la ligne du dessus,
+  /// ou celle du dessous quand on se pose en tête de page. C'est la seule lecture qui marche pour
+  /// les quatre sortes de sections d'un coup — la boîte de réception, le jour, un projet, une liste.
+  ///
+  /// ponytail: on ne peut donc pas déposer dans une section VIDE (aucune voisine à interroger).
+  /// Le jour où ça manque, il faudra donner un cadre au bandeau lui-même et viser dessus.
+  func applyDrop(of task: TaskItem, in ordered: [TaskItem], today: Date) {
+    guard let index = ordered.firstIndex(where: { $0.persistentModelID == task.persistentModelID })
+    else { return }
+    let neighbour = ordered[..<index].last ?? ordered[(index + 1)...].first
+    guard let neighbour, let destination = section(containing: neighbour) else { return }
+
+    if destination.kind == .today {
+      task.when = today
+    } else {
+      task.list = neighbour.list
+      // Sortir du jour, sinon la tâche remonte aussitôt dans la section « Aujourd'hui » : celle-ci
+      // retire ses tâches de toutes les autres, et le dépôt n'aurait servi à rien.
+      if let when = task.when, Calendar.current.isDate(when, inSameDayAs: today) { task.when = nil }
+    }
+
+    // Le rang ne se réécrit que dans la section d'ACCUEIL, et sur ses membres à elle : renuméroter
+    // toute la page mélangerait des tâches qui ne se comparent jamais entre elles.
+    var members = Set(destination.tasks.map(\.persistentModelID))
+    members.insert(task.persistentModelID)
+    TaskItem.stampSmartOrder(ordered.filter { members.contains($0.persistentModelID) })
+  }
+
   static func build(tasks: [TaskItem], projects: [Project], lists: [TodoList]) -> AllTasksPage {
     // Ce que le jour montre déjà, retiré de tout ce qui s'affiche en dessous.
     let shown = Set(SmartList.today.scoped(tasks).map(\.persistentModelID))

@@ -32,6 +32,10 @@ struct AllTasksPageView: View {
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
   @State private var focus = TaskFocus()
+  /// Le glissement en cours. Ici il traverse les sections : lâcher une tâche dans un autre
+  /// dépliant la rattache à cette liste (cf. `AllTasksPage.applyDrop`). C'est la page fourre-tout,
+  /// on y range en déplaçant.
+  @State private var reorder = TaskPageReorder()
   /// Sections dont le repli DIFFÈRE de leur défaut (cf. `expansion(of:)`) — stocker l'écart plutôt
   /// que l'état permet à chaque section de garder son propre défaut sans initialisation.
   /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
@@ -42,6 +46,10 @@ struct AllTasksPageView: View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `sections`
     // refiltrait et retriait toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
+    // La séquence AFFICHÉE, toutes sections confondues : c'est elle que le glissement parcourt, et
+    // c'est pour ça qu'une tâche peut passer d'un dépliant à l'autre. Figée pendant le geste.
+    let rows = reorder.rows(live: page.blocks(isExpanded: isExpanded).displayedRows)
+    let offsets = reorder.offsets()
     return ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
@@ -49,18 +57,28 @@ struct AllTasksPageView: View {
         // UNE seule énumération, celle que le socle clavier reçoit aussi. La boîte de réception a
         // longtemps été rendue à part, et c'est exactement comme ça qu'elle a fini par manquer à
         // l'ordre du clavier sans que rien ne le montre.
-        ForEach(page.sections) { sectionView($0) }
+        ForEach(page.sections) { sectionView($0, rows: rows, offsets: offsets) }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, gutter)
       .padding(.top, 30)
     }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓. Les mêmes sections que le `body` rend.
+    // Le trou d'insertion : même brique que « Aujourd'hui », même courbe.
+    .taskReorderPlaceholder(reorder)
+    // Le socle commun des pages de tâches : ⌫, ↑/↓, clic dans le vide, et les cadres des lignes que
+    // le glissement lui emprunte. Les mêmes sections que le `body` rend.
     .taskPageBase(
       focus: $focus,
       blocks: { page.blocks(isExpanded: isExpanded) },
-      delete: delete
+      delete: delete,
+      reorder: $reorder
     )
+    .onChange(of: page.sections.count) { _, _ in
+      // Une section qui apparaît ou disparaît sous le geste (la dernière tâche d'un projet vient
+      // de le quitter) invaliderait la séquence figée : on désarme plutôt que de viser dans le vide.
+      if reorder.isDragging { reorder.end() }
+    }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: { draftFocused = true }, onInsertHeader: nil,
@@ -85,10 +103,12 @@ struct AllTasksPageView: View {
 
   /// Un seul rendu pour toutes les sections — y compris « Aujourd'hui », qui s'ouvre par défaut
   /// mais se replie comme les autres si l'on ne veut voir que ses projets.
-  @ViewBuilder private func sectionView(_ section: AllTasksPage.Section) -> some View {
+  @ViewBuilder private func sectionView(
+    _ section: AllTasksPage.Section, rows: [TaskItem], offsets: [PersistentIdentifier: CGSize]
+  ) -> some View {
     if section.hasHeader {
       DisclosureGroup(isExpanded: expansion(of: section)) {
-        rows(of: section)
+        rowsView(of: section, rows: rows, offsets: offsets)
       } label: {
         HStack(spacing: 6) {
           Image(systemName: symbol(of: section.kind))
@@ -106,7 +126,7 @@ struct AllTasksPageView: View {
       .padding(.top, 14)
     } else {
       VStack(alignment: .leading, spacing: 0) {
-        rows(of: section)
+        rowsView(of: section, rows: rows, offsets: offsets)
         // Le champ « Nouvelle tâche » appartient au pan à nu : c'est le non-classé, et la seule
         // section où l'on crée (une tâche notée ici n'a ni projet ni date — la définition de
         // l'Inbox).
@@ -116,10 +136,14 @@ struct AllTasksPageView: View {
     }
   }
 
-  private func rows(of section: AllTasksPage.Section) -> some View {
+  private func rowsView(
+    of section: AllTasksPage.Section, rows: [TaskItem], offsets: [PersistentIdentifier: CGSize]
+  ) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(section.tasks) { task in
-        taskRow(for: task, isToday: section.kind == .today)
+        taskRow(
+          for: task, isToday: section.kind == .today,
+          offset: offsets[task.persistentModelID] ?? .zero, rows: rows)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -169,7 +193,9 @@ struct AllTasksPageView: View {
   /// ⊕ (elles y sont déjà) mais le rattachement, puisque la section mélange les provenances.
   /// Ailleurs : la date compte, le rattachement est celui de la section, et le ⊕ au survol fait
   /// passer la tâche au jour même sans détour par « Quand… ».
-  private func taskRow(for task: TaskItem, isToday: Bool) -> some View {
+  private func taskRow(
+    for task: TaskItem, isToday: Bool, offset: CGSize = .zero, rows: [TaskItem] = []
+  ) -> some View {
     TaskRow(
       task: task,
       isSelected: focus.isSelected(task),
@@ -189,12 +215,29 @@ struct AllTasksPageView: View {
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
       onSelect: { select(task) },
-      onEdit: { beginEditing(task) }
+      onEdit: { beginEditing(task) },
+      onDrag: { reorder.track(task, by: $0, in: rows) },
+      onDrop: { dropDraggedTask() }
     )
+    .taskRowDragLayer(reorder, task: task, offset: offset)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
     // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches.
     .measureTaskRow(task)
+  }
+
+  /// Relâchement. La mécanique est partagée (`dropTaskDrag`) ; ce qui appartient à cette page,
+  /// c'est la règle de rattachement — une tâche lâchée dans un dépliant rejoint sa liste.
+  private func dropDraggedTask() {
+    guard let dragged = reorder.draggedTask else { return }
+    // Reconstruite ici plutôt que passée de rangée en rangée : ça n'arrive qu'une fois par geste,
+    // au relâchement, et la faire descendre jusqu'à chaque ligne pour ce seul usage encombrerait
+    // toute la chaîne.
+    let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
+    dropTaskDrag(&reorder) { ordered in
+      page.applyDrop(of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()))
+      try? modelContext.save()
+    }
   }
 
   private func parentLabel(of task: TaskItem) -> String? {

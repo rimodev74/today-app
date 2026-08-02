@@ -124,4 +124,105 @@ final class AllTasksPageTests: XCTestCase {
     XCTAssertEqual(tout, ["notée", "pain"])
     XCTAssertEqual(defaut, ["notée"], "« Courses » est replié par défaut")
   }
+
+  // MARK: Le dépôt d'un glissement
+
+  /// Lâcher une tâche dans un autre dépliant la RATTACHE à cette liste. Sans ça, elle remonterait
+  /// à sa place d'origine au rendu suivant : le geste aurait l'air de ne pas marcher.
+  func testDroppingIntoAnotherSectionReattachesTheTask() throws {
+    let ctx = try makeContext()
+    let courses = TodoList(title: "Courses")
+    let boulot = TodoList(title: "Boulot")
+    ctx.insert(courses)
+    ctx.insert(boulot)
+    let pain = TaskItem(title: "pain", list: courses)
+    ctx.insert(pain)
+    let devis = TaskItem(title: "devis", list: boulot)
+    ctx.insert(devis)
+
+    let page = try build(ctx)
+    // « pain » lâché juste sous « devis », donc dans la section « Boulot ».
+    page.applyDrop(of: pain, in: [devis, pain], today: today())
+
+    XCTAssertEqual(pain.list?.title, "Boulot")
+  }
+
+  /// Lâcher dans « Aujourd'hui » ne change pas la liste : cette section-là veut dire « datée du
+  /// jour », c'est la DATE qu'il faut écrire.
+  func testDroppingIntoTodaySetsTheDateAndKeepsTheList() throws {
+    let ctx = try makeContext()
+    let courses = TodoList(title: "Courses")
+    ctx.insert(courses)
+    let dujour = TaskItem(title: "du jour", when: today(), list: courses)
+    ctx.insert(dujour)
+    let pain = TaskItem(title: "pain", list: courses)
+    ctx.insert(pain)
+
+    let page = try build(ctx)
+    page.applyDrop(of: pain, in: [dujour, pain], today: today())
+
+    XCTAssertNotNil(pain.when)
+    XCTAssertEqual(pain.list?.title, "Courses", "la liste ne bouge pas : le jour est une date")
+  }
+
+  /// Sortir une tâche du jour vers un projet lui retire sa date. Sinon la section « Aujourd'hui »
+  /// la reprendrait aussitôt (elle retire ses tâches de toutes les autres) et le dépôt serait sans
+  /// effet visible.
+  func testLeavingTodayClearsTheDate() throws {
+    let ctx = try makeContext()
+    let courses = TodoList(title: "Courses")
+    ctx.insert(courses)
+    let pain = TaskItem(title: "pain", list: courses)
+    ctx.insert(pain)
+    let dujour = TaskItem(title: "du jour", when: today(), list: courses)
+    ctx.insert(dujour)
+
+    let page = try build(ctx)
+    page.applyDrop(of: dujour, in: [pain, dujour], today: today())
+
+    XCTAssertNil(dujour.when, "elle doit quitter le jour, sinon elle y remonte")
+  }
+
+  /// Le rang ne se réécrit QUE dans la section d'accueil : renuméroter toute la page mélangerait
+  /// des tâches qui ne se comparent jamais entre elles.
+  func testOnlyTheDestinationSectionIsRenumbered() throws {
+    let ctx = try makeContext()
+    let courses = TodoList(title: "Courses")
+    let boulot = TodoList(title: "Boulot")
+    ctx.insert(courses)
+    ctx.insert(boulot)
+    let pain = TaskItem(title: "pain", list: courses)
+    ctx.insert(pain)
+    let lait = TaskItem(title: "lait", list: courses)
+    ctx.insert(lait)
+    let devis = TaskItem(title: "devis", list: boulot)
+    ctx.insert(devis)
+
+    let page = try build(ctx)
+    page.applyDrop(of: pain, in: [devis, pain, lait], today: today())
+
+    XCTAssertNotEqual(pain.smartOrder, 0, "la déplacée reçoit un rang")
+    XCTAssertNotEqual(devis.smartOrder, 0, "sa nouvelle voisine aussi")
+    XCTAssertEqual(lait.smartOrder, 0, "une section qu'on n'a pas touchée ne bouge pas")
+  }
+
+  /// Déposer en tête de page : il n'y a pas de voisine au-dessus, c'est celle du dessous qui
+  /// désigne la section.
+  func testDroppingFirstReadsTheSectionBelow() throws {
+    let ctx = try makeContext()
+    let inbox = TodoList(title: "Tâches")
+    inbox.isInbox = true
+    ctx.insert(inbox)
+    let notee = TaskItem(title: "notée", list: inbox)
+    ctx.insert(notee)
+    let courses = TodoList(title: "Courses")
+    ctx.insert(courses)
+    let pain = TaskItem(title: "pain", list: courses)
+    ctx.insert(pain)
+
+    let page = try build(ctx)
+    page.applyDrop(of: pain, in: [pain, notee], today: today())
+
+    XCTAssertEqual(pain.list?.title, "Tâches", "posée en tête, elle rejoint la boîte de réception")
+  }
 }

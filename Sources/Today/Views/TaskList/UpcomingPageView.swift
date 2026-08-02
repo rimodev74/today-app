@@ -77,7 +77,7 @@ struct UpcomingPageView: View {
     // Le socle commun : ⌫, ↑/↓, clic dans le vide. Un pan par jour, dans l'ordre affiché — les
     // rappels et événements Apple n'en font pas partie, ils ne se sélectionnent pas (ils ne nous
     // appartiennent pas : ⌫ ne peut rien en faire).
-    .taskPageBase(focus: $focus, blocks: { agenda.taskBlocks }, delete: delete)
+    .taskPageBase(focus: $focus, blocks: { agenda.taskBlocks }, delete: delete, reorder: nil)
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
     }
