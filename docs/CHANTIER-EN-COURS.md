@@ -38,9 +38,8 @@ plus.
 ⛔ = **retiré après essai, en attente d'un refacto.** Ce n'était pas un réglage à trouver : voir
 « déjà essayé et rejeté ».
 
-Vérifié à la main dans l'app, pas seulement au compilateur : ⌫, ↑/↓ et ⌘Z sur les trois premières
-pages. **À venir » et « Archives » n'ont pas encore été essayées à la souris** — le socle y est
-câblé de la même façon, mais ça se regarde.
+Tout le tableau a été vérifié à la main dans l'app, dans les deux thèmes — pas seulement au
+compilateur. ⌘Z compris.
 
 ---
 
@@ -56,9 +55,9 @@ pas » : rien à l'écran, aucun test rouge.
 `body` parcourt ; l'aplatissement (sauter les pans repliés) n'est écrit qu'une fois, dans le socle,
 et il est testé (`TaskPageRowsTests`).
 
-« Tâches » va plus loin : son `body` rend maintenant `ForEach(displayedSections)`, une seule
-énumération. La boîte de réception y est une section **sans bandeau** (`TaskSection.header == nil`)
-au lieu d'un rendu à part — c'est-à-dire que l'oubli d'origine n'est plus exprimable.
+« Tâches » va plus loin : son `body` rend une seule énumération, `ForEach(page.sections)`. La boîte
+de réception y est une section **sans bandeau** (`AllTasksPage.Kind.inbox`) au lieu d'un rendu à
+part — c'est-à-dire que l'oubli d'origine n'est plus exprimable.
 
 ### Ce que ça ne donne PAS
 
