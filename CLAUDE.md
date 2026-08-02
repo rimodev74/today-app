@@ -1,20 +1,16 @@
 # Today
 
 Clone natif macOS de Things (Cultured Code). Scope, décisions et découpage : `ROADMAP.md`.
-SwiftPM (pas de `.xcodeproj`), SwiftUI + SwiftData, ~11 200 lignes dans `Sources/Today/`
-(+ ~1 620 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
+SwiftPM (pas de `.xcodeproj`), SwiftUI + SwiftData, ~12 200 lignes dans `Sources/Today/`
+(+ ~2 270 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
 de `ThingsCloneApp.swift`.
-
-> **Un chantier est en cours.** Avant de toucher aux pages de tâches (sélection, clavier, clic dans
-> le vide, glisser), lire `docs/CHANTIER-EN-COURS.md` : il dit ce qui reste, pourquoi, et surtout ce
-> qui a **déjà été essayé et rejeté** — deux approches y ont été refaites par oubli.
 
 ## Lancer
 
 ```bash
 ./run.sh          # build → bundle .app → open. Le seul moyen correct de lancer l'app.
 swift build       # compilation seule (~0,2 s incrémental)
-swift test        # 116 tests, en mémoire ou sur un store temporaire — jamais la vraie base
+swift test        # 159 tests, en mémoire ou sur un store temporaire — jamais la vraie base
 ```
 
 **Jamais `swift run`.** L'exécutable nu n'est pas un bundle : macOS ne lui applique pas la
@@ -26,20 +22,50 @@ code qu'on vient d'écrire. C'était LE plantage fantôme de la phase de dev.
 
 ## Architecture — ce qui porte le reste
 
-Cinq pièces tiennent des invariants que rien d'autre ne garantit. Les modifier demande de lire
+Ces pièces tiennent des invariants que rien d'autre ne garantit. Les modifier demande de lire
 leur en-tête AVANT d'écrire.
 
 | Pièce | Rôle | Ce qu'elle a remplacé |
 |---|---|---|
 | `Models/Reorder.swift` | l'arithmétique du glissement : repli, écartement, trou, ordre obtenu | la page de liste et la sidebar recalculaient la même chose chacune de son côté, sans le savoir |
 | `Models/TaskFocus.swift` | quelle ligne est sélectionnée, laquelle est en édition | trois pages pilotaient deux `@State` nus avec les mêmes cinq transitions recopiées |
+| `Models/TaskPageRows.swift` (`TaskPageBlock`) | ce qu'une page affiche : des pans de lignes, visibles ou repliés | chaque page REDÉCRIVAIT l'ordre de ses lignes dans une closure, que rien ne reliait à son `body` — une page l'a écrit faux, et le symptôme était « la touche ne marche pas » |
+| `Models/TaskPageReorder.swift` | l'état d'un glissement : cadres, séquence figée, décalages, ordre obtenu | rien — seule la page d'une liste savait glisser, avec son moteur à elle |
+| `Models/TodayPage.swift`, `Models/AllTasksPage.swift` | ce que ces deux pages présentent, à partir des tâches qu'on leur donne | des propriétés calculées DANS la vue : recalculées à chaque lecture (donc plusieurs fois par image) et invérifiables autrement qu'en cliquant |
+| `Views/TaskList/TaskPageChrome.swift` (`TaskPageBase`) | le socle de TOUTE page de tâches : ⌫, ↑/↓, clic dans le vide, cadres des lignes | chaque page recevait ses gestes au coup par coup — la même touche donnait un résultat différent d'un onglet à l'autre |
 | `Models/TodaySchema.swift` + `Tests/TodayTests/SchemaV1Snapshot.swift` | la forme des données, écrite deux fois et confrontée à chaque `swift test` | rien — un `@Model` cassé vidait sa colonne en silence (cf. Pièges) |
 | `Services/StoreBackup.swift` | copie la base AVANT de l'ouvrir, quand la forme des modèles a changé | rien ne protégeait la vraie base à l'exécution |
 | `TodayApp.openStore` | l'unique façon d'ouvrir un store | deux chemins d'ouverture, dont un que les tests ne couvraient pas |
 
-Les pages de tâches (`ListPageView`, `TodayPageView`, `AllTasksPageView`) partagent en plus
-`TaskRow`, `RowPressGesture`, les courbes `taskFlow`/`taskSelectFade`/`taskInsert` et les métriques
-`gutter`/`rowInset`. Une quatrième page se construit AVEC ces briques, jamais à côté d'elles.
+### Comment une page de tâches se construit
+
+Les CINQ pages (`ListPageView`, `TodayPageView`, `AllTasksPageView`, `UpcomingPageView`,
+`ArchivePageView`) passent par le même socle. Une sixième se branche dessus sans une ligne de plus :
+
+1. un `@State TaskFocus` pour la sélection, et `.rowPressGesture` sur chaque ligne — un geste
+   UNIQUE qui sélectionne, renomme et glisse (`ListPageView` a le sien, plus riche : il emmène
+   aussi les blocs d'en-tête). Surtout pas deux gestes séparés : dès qu'une vue porte un tap
+   double, AppKit retient le tap simple le temps de la fenêtre de double-clic ;
+2. `.measureTaskRow(task)` sur chaque ligne — sans ça la page reste aveugle : le clic dans le vide
+   ne peut pas savoir qu'il est dans le vide, et rien ne peut se glisser ;
+3. `.taskPageBase(focus:blocks:delete:reorder:)`, en déclarant ses pans dans l'ordre du rendu ;
+4. pour glisser, en plus : un `@State TaskPageReorder`, `.taskRowDragLayer` sur les lignes,
+   `.taskReorderPlaceholder` sur la page, `reorder.track(…)` à l'empoignade et `dropTaskDrag(…)`
+   au relâchement.
+
+Ce qui reste à la page, et à elle seule, c'est ce qu'elle ÉCRIT au relâchement — un rang sur
+« Aujourd'hui », un rang plus un rattachement sur « Tâches » (`AllTasksPage.applyDrop`). C'est la
+frontière posée en tête de `Reorder.swift` : l'arithmétique est commune, la règle métier ne l'est
+pas.
+
+**Deux axes d'ordre, et ils ne se mélangent pas.** `TaskItem.sortIndex` est attribué PAR LISTE :
+sur une vue qui mélange les provenances, deux tâches peuvent porter le même rang, elles ne sont pas
+comparables. D'où `TaskItem.smartOrder`, l'ordre manuel des vues intelligentes — **0 = jamais posée
+à la main**, ce qui laisse `SmartList.sort` PLACER ce qui arrive et garantit qu'une base d'avant
+garde exactement l'ordre qu'elle avait.
+
+Elles partagent aussi `TaskRow`, les courbes `taskFlow`/`taskSelectFade`/`taskInsert`/`taskDrop` et
+les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jamais à côté d'elles.
 
 ## Pièges de ce projet
 
@@ -66,6 +92,24 @@ Les pages de tâches (`ListPageView`, `TodayPageView`, `AllTasksPageView`) parta
   bugs de layout et d'interaction, invisibles au compilateur. Un changement d'UI se vérifie en
   lançant `./run.sh` et en regardant — **dans les deux thèmes** : les régressions de mode sombre
   sont la rechute la plus fréquente du projet (couleurs figées en dur, cf. Conventions).
+- **Un glisser qui saccade n'est presque jamais le calcul.** `Reorder.swift` est partagé et couvert
+  par 21 tests ; quand un glissement tremble, chercher plutôt dans cette liste — chaque ligne a
+  coûté un aller-retour de vérification manuelle :
+  1. **la translation se lit dans un repère FIXE** (`.named(taskPageSpace)`), jamais le repère
+     local, qui est celui de la rangée — c'est-à-dire celui que le geste déplace. Mesurer un
+     déplacement dans un repère que ce déplacement bouge fait trembler la ligne ;
+  2. **les cadres sont gelés à l'empoignade**, et il ne suffit pas d'ignorer la nouvelle mesure : il
+     ne faut pas l'ÉCRIRE. `frame(in:)` inclut le décalage des lignes tirées, et un `@State`
+     réécrit à l'identique invalide quand même la vue — c'est l'invalidation qui boucle ;
+  3. **un seul stockage de cadres par page.** Deux ont coexisté, un seul gelait : la boucle est
+     revenue par la porte de derrière ;
+  4. **l'ordre écrit et le retour des décalages à zéro tiennent dans UNE transaction** (cf.
+     `dropTaskDrag`). Séparés, la rangée saute à sa nouvelle place pendant que son décalage s'anime
+     depuis l'ancienne : elle part à l'opposé avant de revenir ;
+  5. **la page réaffiche sa séquence VIVANTE**, jamais la copie figée. Rendre l'une puis rebasculer
+     sur l'autre au relâchement produit le même symptôme que le point 4, pour une autre raison : le
+     `ForEach` réordonne ses identités au moment où les décalages retombent. Rien n'écrit pendant un
+     geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie.
 - **Un plantage sans message se lit dans le journal.** `CrashLog` installe un gestionnaire
   d'exceptions non rattrapées, parce que le rapport système garde la pile mais PAS la raison :
   `log show --last 1h --predicate 'process == "Today"' | grep PLANTAGE`.
@@ -81,7 +125,11 @@ Les pages de tâches (`ListPageView`, `TodayPageView`, `AllTasksPageView`) parta
   `@Query`, ils ne se vérifient qu'en cliquant, donc on ne les vérifie pas, donc on n'ose plus y
   toucher. Ils vont dans `Models/` — type de valeur, sans SwiftUI — avec leur fichier de tests. C'est
   le cas de `Reorder`, `TaskFocus`, `QuickEntry`, `DayCapacity`, `Dormancy`, `NoteList`,
-  `CompletedTaskRetention`. **Une vue orchestre et anime ; elle ne calcule pas.**
+  `CompletedTaskRetention`, `TaskPageBlock`, `TaskPageReorder`, `TodayPage`, `AllTasksPage`.
+  **Une vue orchestre et anime ; elle ne calcule pas.** Corollaire mesuré : une propriété calculée
+  d'une `View` repart de zéro à CHAQUE lecture et à chaque rendu — filtrer, trier et regrouper toute
+  la base plusieurs fois par image se paie cash dès qu'un geste continu s'y ajoute. Construire une
+  fois en tête de `body`, puis distribuer.
 - **Avant d'ajouter un `@State`, chercher le type qui porte déjà ce comportement.** Un second état
   pour une notion existante (sélection, édition, brouillon, glissement) est exactement la façon dont
   deux pages se mettent à diverger sans que personne ne le voie.
@@ -98,9 +146,39 @@ Les pages de tâches (`ListPageView`, `TodayPageView`, `AllTasksPageView`) parta
 - **Un nom qui ment coûte plus cher qu'un commentaire manquant.** Si la documentation d'un type
   existe pour démentir son propre nom, c'est le nom qu'il faut changer — cf. l'ancien `SchemaV1`,
   qui s'annonçait figé tout en pointant les modèles vivants, devenu `CurrentSchema`.
+- **Un réglage qui peut s'oublier en silence est un bug en attente.** `TaskPageBase.reorder` n'a
+  PAS de valeur par défaut : les cinq pages se prononcent, `nil` compris. Quand il en avait une,
+  l'oubli compilait sans un mot et le glissement ne recevait aucun cadre — exactement le même
+  défaut que la closure `rows` qu'il a remplacée. Une valeur par défaut se justifie quand
+  l'omission est un CHOIX raisonnable ; pas quand elle produit une page à moitié branchée.
 - **En français.** Identifiants en anglais, commentaires et documentation en français.
 - `// ponytail:` marque une simplification délibérée et son plafond.
 - Pas de trailer `Co-Authored-By` ni de mention d'outil dans les commits.
+
+## Déjà essayé et REJETÉ — ne pas refaire
+
+Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont été DEUX fois, par oubli.
+
+- **Un fond transparent (`.background { Color.clear … onTapGesture }`) pour attraper le clic dans le
+  vide.** Un `ScrollView` capte les clics de toute sa surface, et un fond de contenu ne couvre de
+  toute façon ni les marges (`gutter`) ni le vide sous la dernière ligne. La seule réponse qui
+  marche est celle du socle : moniteur `NSEvent` + cadres des lignes.
+- **Faire publier aux lignes leur identité par `PreferenceKey` pour en dériver l'ordre du clavier.**
+  Faux sur `ListPageView`, qui est en `LazyVStack` : les rangées hors écran ne sont pas construites
+  et ne publient rien, donc l'ordre s'arrête au viewport. Une préférence mesure ce qui est RENDU ;
+  l'ordre du clavier est ce qui est AFFICHÉ — d'où `TaskPageBlock`, qui est une valeur, pas une
+  mesure. Les cadres, eux, restent bien du ressort d'une préférence : ils ne concernent que le
+  visible, c'est leur définition.
+- **`LazyVStack` sur « Aujourd'hui »** pour ne construire que les lignes visibles. Mesuré : le
+  glisser en devient PIRE, pas meilleur (les rangées se créent et se détruisent au passage des
+  décalages). Cette page reste en `VStack`.
+- **Faire taire les diagnostics de chemins de clé** en marquant les `@Model` `@unchecked Sendable`.
+  Ce serait un mensonge (ce sont des classes mutables) et le rafistolage que le projet refuse. Trou
+  entre SwiftData et Swift 6, à laisser tel quel.
+- **Le curseur « main » sur toute la ligne.** Sur macOS, la main signale un bouton ou un lien, jamais
+  une ligne sélectionnable (Finder, Mail, Rappels gardent la flèche). Le comportement actuel — main
+  sur la case à cocher seulement — est correct. Si un repère de survol manque, la bonne réponse est
+  un fond de survol, pas un changement de curseur.
 
 ## Outils
 
@@ -125,6 +203,12 @@ Apple (lecture + report de complétion), recherche (`QuickFindPanel`), capsule d
 app, et les quatre pages intelligentes — **Tâches**, **Aujourd'hui**, **À venir**, **Archives** —
 toutes réelles.
 
+Les cinq pages se comportent pareil, et ça a été vérifié à la main, dans les deux thèmes :
+sélection au clic, ⌫, ↑/↓, clic dans le vide qui relâche, ⌘Z après une suppression. Le glisser
+existe sur une liste, un projet, « Aujourd'hui » et « Tâches » ; « À venir » et « Archives » n'en
+ont pas, et c'est un choix — elles sont ordonnées par une date, il n'y a pas d'ordre manuel à y
+mettre.
+
 Encore du décor — le vérifier avant de le présenter comme fini :
 
 - l'icône **tag** de la carte d'édition ne fait rien (le modèle ne porte pas de tags) ; les trois
@@ -135,11 +219,20 @@ Encore du décor — le vérifier avant de le présenter comme fini :
 
 Dette connue, par ordre de coût :
 
-1. `TaskListView.swift` fait encore ~3 400 lignes. Ce n'est pas sa taille le problème, mais ce
-   qu'elle mélange : `TaskRow`, `HeaderRow`, la barre d'outils et les quatre `NSViewRepresentable`
-   en sortiraient sans rien casser.
-2. Le mode langage reste Swift 5. La concurrence stricte est en revanche VÉRIFIÉE (réglage dans
-   `Package.swift`) et il ne subsiste que 37 diagnostics, tous le même : `SortDescriptor(\Model.x)`
-   veut un chemin de clé `Sendable`, qu'un `@Model` SwiftData ne peut pas être. Trou d'Apple, pas
-   dette du projet. **Ce réglage est un cliquet** : tout diagnostic qui n'est PAS un chemin de clé
-   est une régression d'isolation à corriger sur-le-champ.
+1. **`UpcomingPageView` et `ArchivePageView` calculent encore leur contenu dans leur `body`**
+   (`agenda`, `archiveMonths`). C'est le dernier endroit qui s'écarte de la règle, et le même
+   travail que `TodayPage`/`AllTasksPage` : sortir le calcul, ses tests viennent avec.
+2. `TaskListView.swift` fait encore ~2 770 lignes. Ce n'est pas sa taille le problème, mais ce
+   qu'elle mélange : `TaskRow`, `HeaderRow`, la barre d'outils et les `NSViewRepresentable` en
+   sortiraient sans rien casser. Attention : `Checkmark` et `NotesBox` devront passer de `private`
+   à interne.
+3. **On ne peut pas déposer une tâche dans un dépliant VIDE de « Tâches ».** La section d'accueil se
+   lit sur la ligne voisine (seule lecture qui marche pour les quatre sortes de sections) ; sans
+   voisine, rien à lire. Le jour où ça manque : donner un cadre au bandeau lui-même et viser dessus.
+4. Le mode langage reste Swift 5. La concurrence stricte est en revanche VÉRIFIÉE (réglage dans
+   `Package.swift`) et tous les diagnostics restants sont le même : `SortDescriptor(\Model.x)` veut
+   un chemin de clé `Sendable`, qu'un `@Model` SwiftData ne peut pas être. Trou d'Apple, pas dette
+   du projet. **Ce cliquet porte sur leur NATURE, pas sur leur nombre** — celui-ci dépend du mode de
+   compilation (~40 en release, qui compile en module entier, nettement plus en debug, qui répète la
+   même expansion de macro fichier par fichier). Tout diagnostic qui n'est PAS un chemin de clé est
+   une régression d'isolation à corriger sur-le-champ.
