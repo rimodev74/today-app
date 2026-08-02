@@ -268,13 +268,20 @@ struct TaskPageBase: ViewModifier {
             return true
           },
           onMove: { offset in
-            // `TaskFocus` est une VALEUR `Equatable` : comparer l'avant et l'après dit si la touche
-            // a servi, sans faire rendre un résultat aux méthodes mutantes (elles n'en rendent
-            // aucun, à dessein — cf. son en-tête). Au bord de la liste, ↓ ne bouge pas, l'événement
-            // repart donc intact et le ScrollView peut en faire son affaire.
-            let before = focus
-            withAnimation(taskSelectFade) { focus.moveSelection(by: offset, in: rows) }
-            return focus != before
+            // Le déplacement se calcule sur une COPIE, et on n'écrit que si elle a bougé. Écrire
+            // puis relire le `@Binding` pour savoir si ça a marché — ce que faisait la version
+            // précédente — dépendait du moment où SwiftUI applique l'écriture ; depuis un moniteur
+            // NSEvent, elle n'est pas forcément visible à la relecture qui suit. Résultat : la
+            // touche était rendue à la fenêtre au lieu d'agir, et il fallait insister.
+            var moved = focus
+            moved.moveSelection(by: offset, in: rows)
+            if moved != focus { withAnimation(taskSelectFade) { focus = moved } }
+
+            // Consommée dès qu'il y a des lignes à parcourir, MÊME si la sélection n'a pas bougé :
+            // au bord de la liste, ↑/↓ ne font rien et ne doivent rien faire d'autre — ni défiler,
+            // ni déplacer le focus AppKit. C'est le comportement du Finder et de Mail. Sans lignes,
+            // la touche repart intacte : la page n'a rien à en faire.
+            return !rows.isEmpty
           }
         )
       )
