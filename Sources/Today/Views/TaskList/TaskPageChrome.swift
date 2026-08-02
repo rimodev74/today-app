@@ -101,7 +101,15 @@ struct RowPressGesture: ViewModifier {
 
   func body(content: Content) -> some View {
     content.gesture(
-      DragGesture(minimumDistance: 0)
+      // Repère `taskPageSpace` et NON le repère local, qui est celui de la rangée — c'est-à-dire
+      // celui que le glissement est en train de déplacer. Mesurer un déplacement dans un repère que
+      // ce même déplacement bouge, c'est se mordre la queue : la rangée bouge, donc son repère
+      // bouge, donc la translation lue change, donc la rangée rebouge. À l'écran, ça tremble et on
+      // n'arrive plus à poser la ligne où on veut.
+      //
+      // `ListPageView` mesure depuis toujours dans son propre repère fixe (`dragSpace`), et c'est
+      // exactement pour ça que son glisser est net.
+      DragGesture(minimumDistance: 0, coordinateSpace: .named(taskPageSpace))
         .onChanged { value in
           if !pressing {
             pressing = true
