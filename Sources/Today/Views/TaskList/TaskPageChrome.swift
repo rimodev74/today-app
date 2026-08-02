@@ -80,25 +80,45 @@ struct RowPressGesture: ViewModifier {
   let isEditing: Bool
   var onSelect: () -> Void
   var onEdit: () -> Void
+  /// Glissement en cours, quand la page en accepte un. Reçoit la translation depuis l'empoignade.
+  var onDrag: ((CGSize) -> Void)?
+  /// Relâchement après un glissement. N'est PAS appelé pour un simple clic.
+  var onDrop: (() -> Void)?
+
+  /// Le seuil qui sépare un clic d'un glissement. Il servait déjà à décider si le relâchement
+  /// ouvre l'édition ; c'est le même, et c'est ce qui garantit qu'un geste ne peut pas être les
+  /// deux à la fois.
+  private static let threshold: CGFloat = 4
 
   /// Appui en cours (le premier `onChanged` est le mouseDown) et état de sélection d'AVANT cet
   /// appui : c'est lui qui décide si le relâchement ouvre l'édition (renommage façon Finder).
   @State private var pressing = false
   @State private var wasSelected = false
 
+  private func moved(_ translation: CGSize) -> Bool {
+    abs(translation.width) > Self.threshold || abs(translation.height) > Self.threshold
+  }
+
   func body(content: Content) -> some View {
     content.gesture(
       DragGesture(minimumDistance: 0)
-        .onChanged { _ in
-          guard !pressing else { return }
-          pressing = true
-          wasSelected = isSelected
-          if !isEditing && !isSelected { onSelect() }
+        .onChanged { value in
+          if !pressing {
+            pressing = true
+            wasSelected = isSelected
+            // Empoigner sélectionne, comme sur une page de liste : on voit ce qu'on déplace.
+            if !isEditing && !isSelected { onSelect() }
+          }
+          guard !isEditing, moved(value.translation) else { return }
+          onDrag?(value.translation)
         }
         .onEnded { value in
           pressing = false
-          let moved = abs(value.translation.width) > 4 || abs(value.translation.height) > 4
-          guard !moved, !isEditing, wasSelected else { return }
+          guard !moved(value.translation) else {
+            onDrop?()
+            return
+          }
+          guard !isEditing, wasSelected else { return }
           onEdit()
         },
       // En édition, les clics et les sélections de texte appartiennent au champ.
@@ -110,11 +130,14 @@ struct RowPressGesture: ViewModifier {
 extension View {
   func rowPressGesture(
     isSelected: Bool, isEditing: Bool, onSelect: @escaping () -> Void,
-    onEdit: @escaping () -> Void
+    onEdit: @escaping () -> Void,
+    onDrag: ((CGSize) -> Void)? = nil,
+    onDrop: (() -> Void)? = nil
   ) -> some View {
     modifier(
       RowPressGesture(
-        isSelected: isSelected, isEditing: isEditing, onSelect: onSelect, onEdit: onEdit))
+        isSelected: isSelected, isEditing: isEditing, onSelect: onSelect, onEdit: onEdit,
+        onDrag: onDrag, onDrop: onDrop))
   }
 }
 

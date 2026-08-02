@@ -79,17 +79,30 @@ extension SmartList {
     all.filter(scopeMatches)
   }
 
-  /// Ordre d'affichage. Ces vues n'ont pas d'ordre manuel : la priorité y sert de
-  /// tri (haute d'abord), puis la date, puis la création.
+  /// Ordre d'affichage.
+  ///
+  /// **L'ordre manuel gagne** : ce qu'on a placé à la main (`TaskItem.smartOrder`) passe avant tout
+  /// le reste. C'est le comportement de Things, et la raison d'être de la page « Aujourd'hui » —
+  /// on planifie sa journée en glissant, pas en ajustant des priorités jusqu'à ce que le tri
+  /// automatique tombe juste.
+  ///
+  /// Le tri automatique (priorité, puis date, puis création) ne disparaît pas : il PLACE ce qui
+  /// n'a jamais été touché à la main. Une tâche qui arrive sur la page porte `smartOrder == 0` et
+  /// se range donc après les placées, à l'endroit que la règle lui donne — pas au hasard, et sans
+  /// bousculer un ordre choisi.
   func sort(_ tasks: [TaskItem]) -> [TaskItem] {
     if self == .archive {
       return tasks.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
     }
     return tasks.sorted { a, b in
-      // Réglage « Descendre en bas de la liste » : ces vues n'ayant pas d'ordre manuel, il n'y a
-      // pas de `sortIndex` à réécrire (cf. `TodoList.moveToEndOfSection`) — la règle s'applique
-      // ici, en première clé de tri, pour que les cochées passent sous ce qui reste à faire.
+      // Réglage « Descendre en bas de la liste » : il prime sur l'ordre manuel lui-même — une tâche
+      // cochée descend, où qu'on l'ait posée. Sans `sortIndex` à réécrire ici (cf.
+      // `TodoList.moveToEndOfSection`), la règle s'applique en première clé de tri.
       if TodoList.autoSortCompletedEnabled, a.isCompleted != b.isCompleted { return b.isCompleted }
+      // 0 = jamais posée à la main, donc après toutes celles qui l'ont été.
+      let ra = a.smartOrder == 0 ? Int.max : a.smartOrder
+      let rb = b.smartOrder == 0 ? Int.max : b.smartOrder
+      if ra != rb { return ra < rb }
       if a.priorityRaw != b.priorityRaw { return a.priorityRaw > b.priorityRaw }
       let da = a.when ?? .distantFuture
       let db = b.when ?? .distantFuture

@@ -10,6 +10,18 @@ final class TaskItem {
   var isHeader: Bool = false
   var completedAt: Date?
   var sortIndex: Int = 0
+  /// Rang manuel sur les vues intelligentes. **0 = jamais posée à la main**, et c'est la valeur de
+  /// tout ce qui existe : l'ajout est absorbé par SwiftData sans rien migrer, et une base d'avant
+  /// garde exactement l'ordre qu'elle avait.
+  ///
+  /// `sortIndex` ne pouvait pas servir : il est attribué PAR LISTE (et le réordonnancement d'une
+  /// liste y réécrit 0…n). Sur « Aujourd'hui », les tâches viennent de listes différentes — deux
+  /// d'entre elles peuvent porter le même `sortIndex`, elles ne sont pas comparables. Il fallait
+  /// donc un second axe, celui des vues qui mélangent les provenances.
+  ///
+  /// Comparé par `SmartList.sort`, qui range les tâches placées à la main AVANT celles qui ne
+  /// l'ont jamais été — cf. son commentaire pour ce que ça veut dire d'une tâche qui arrive.
+  var smartOrder: Int = 0
   /// Jour planifié. `hasTime` dit si l'heure portée par cette date est significative
   /// (sans lui, impossible de distinguer « le 12 » de « le 12 à 00:00 »).
   var when: Date?
@@ -45,6 +57,16 @@ final class TaskItem {
     self.when = when
     self.list = list
     self.createdAt = Date()
+  }
+
+  /// Fige l'ordre manuel d'une séquence, telle qu'elle doit s'afficher : 1…n.
+  ///
+  /// Jamais 0 — c'est la valeur de « jamais posée à la main », et la rendre à une tâche qu'on vient
+  /// justement de poser la renverrait au tri automatique. Toute la séquence est réécrite, pas la
+  /// seule tâche déplacée : c'est ce qui donne à ses voisines des rangs comparables au sien (même
+  /// principe que la renumérotation 0…n d'une liste, cf. `TodoList`).
+  static func stampSmartOrder(_ tasks: [TaskItem]) {
+    for (index, task) in tasks.enumerated() { task.smartOrder = index + 1 }
   }
 
   // Stocké en Int : SwiftData persiste les propriétés stockées, pas les calculées.
