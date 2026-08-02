@@ -115,7 +115,10 @@ if gh release view "${TAG}" -R "${DIST_REPO}" &>/dev/null; then
 fi
 
 echo "→ Release ${TAG} (build ${BUILD})"
-./Scripts/make-dmg.sh release
+# Ce qu'on publie se compile ENTIÈREMENT, sans quoi le contrôle des avertissements de `make-app.sh`
+# ne verrait que les fichiers touchés depuis le dernier build — c'est-à-dire souvent rien. Vingt
+# secondes de plus, une fois par publication : le prix d'un contrôle qui veut dire quelque chose.
+FULL_WARNING_CHECK=1 ./Scripts/make-dmg.sh release
 
 echo "→ Signature du DMG…"
 # sign_update sort : sparkle:edSignature="…" length="…"

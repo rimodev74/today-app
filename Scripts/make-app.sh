@@ -19,8 +19,8 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.16"
-BUILD="15"
+SHORT_VERSION="0.17"
+BUILD="16"
 
 # Reconstruire par-dessus une instance EN COURS lui retire son Info.plist sous les pieds (le
 # `rm -rf` plus bas) : la moindre lecture CFBundle ensuite — AppKit en fait une à chaque réveil de
@@ -34,7 +34,64 @@ if pgrep -x "${TARGET}" >/dev/null 2>&1; then
 fi
 
 echo "→ Build ${TARGET} (${CONFIG})…"
-swift build -c "${CONFIG}" --product "${TARGET}"
+
+# Le build est CAPTURÉ, pas déversé à l'écran, et pour une raison qui n'est pas cosmétique.
+#
+# Il reste ~40 avertissements, tous le MÊME : `SortDescriptor(\Model.x)` et `#Predicate` veulent un
+# chemin de clé `Sendable`, qu'un `@Model` SwiftData ne peut pas être. C'est un trou entre SwiftData
+# et Swift 6 — le code d'Apple déclenche l'avertissement d'Apple, via ses propres macros — et le
+# taire d'un `@unchecked Sendable` serait un mensonge (ce sont des classes mutables).
+#
+# En release, chacun s'affiche avec toute son expansion de macro : plusieurs centaines de lignes,
+# dans lesquelles un avertissement NEUF passerait parfaitement inaperçu. Or c'est exactement lui
+# qu'on veut voir — le cliquet posé dans `Package.swift` porte sur leur NATURE, pas sur leur nombre
+# (celui-ci dépend du mode de compilation et de ce qui a été recompilé).
+#
+# D'où : on résume les connus, et on S'ARRÊTE sur tout ce qui n'en est pas.
+#
+# ATTENTION, et c'est le piège qui m'a eu en écrivant ce garde-fou : un build INCRÉMENTAL ne
+# réaffiche pas les avertissements des fichiers qu'il ne recompile pas. Mesuré ici même — 0
+# avertissement vu quand il n'y a rien à refaire, 42 après un `touch` de tout. Un contrôle posé sur
+# un build incrémental donne donc un feu vert sans avoir rien regardé, ce qui est pire que pas de
+# contrôle du tout. D'où les deux comportements ci-dessous : la publication force un build COMPLET,
+# et l'itération rapide dit franchement qu'elle ne peut pas conclure.
+BUILD_LOG=$(mktemp)
+trap 'rm -f "${BUILD_LOG}"' EXIT
+
+if [[ "${FULL_WARNING_CHECK:-}" == "1" ]]; then
+  echo "  (contrôle complet : recompilation de tout le module)"
+  find Sources -name '*.swift' -exec touch {} +
+fi
+
+if ! swift build -c "${CONFIG}" --product "${TARGET}" >"${BUILD_LOG}" 2>&1; then
+  cat "${BUILD_LOG}" >&2
+  echo "✗ La compilation a échoué." >&2
+  exit 1
+fi
+
+KNOWN=$(grep -c "warning:.*ReferenceWritableKeyPath" "${BUILD_LOG}" || true)
+UNKNOWN=$(grep "warning:" "${BUILD_LOG}" | grep -v "ReferenceWritableKeyPath" || true)
+
+if ! grep -q "Compiling" "${BUILD_LOG}"; then
+  # Rien recompilé : le journal est vide de tout diagnostic, y compris de ceux qui existent. Ne PAS
+  # afficher un ✓ ici — ce serait exactement le mensonge que ce contrôle est censé empêcher.
+  echo "  · Rien à recompiler — contrôle des avertissements non concluant."
+elif [[ -n "${UNKNOWN}" ]]; then
+  echo >&2
+  echo "✗ Avertissement d'une nature INCONNUE — ce n'est pas un chemin de clé :" >&2
+  echo "${UNKNOWN}" | sed 's/^/    /' >&2
+  echo >&2
+  echo "  Le cliquet du projet porte là-dessus : tout ce qui n'est pas" >&2
+  echo "  \`SortDescriptor(\\Model.x)\` / \`#Predicate\` est une vraie régression, à corriger" >&2
+  echo "  sur-le-champ et non à ajouter au décompte (cf. CLAUDE.md, dette n°3)." >&2
+  echo >&2
+  echo "  Pour publier quand même (nouvel Xcode, dépréciation externe…) :" >&2
+  echo "      ALLOW_NEW_WARNINGS=1 $0 $*" >&2
+  [[ "${ALLOW_NEW_WARNINGS:-}" == "1" ]] || exit 1
+  echo "  → ALLOW_NEW_WARNINGS=1 : on continue malgré tout." >&2
+else
+  echo "  ✓ ${KNOWN} avertissements, tous des chemins de clé (connu, cf. CLAUDE.md)"
+fi
 
 echo "→ Bundle ${APP}…"
 rm -rf "${APP}"

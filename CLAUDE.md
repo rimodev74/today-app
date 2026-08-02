@@ -221,9 +221,16 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
   fichier, son index met un moment à se rafraîchir et remonte des erreurs fantômes —
   **`swift build` fait foi, pas les diagnostics**.
 - **Un `swift build` incrémental ne montre pas les warnings des fichiers qu'il ne recompile pas.**
-  Un build à 0,2 s n'a rien vérifié du reste du module. Avant de dire qu'une modification est
-  propre : `find Sources Tests -name '*.swift' -exec touch {} +` puis `swift build && swift test`
-  — et `-c release`, qui compile en module entier et sort des diagnostics que le debug tait.
+  Un build à 0,2 s n'a rien vérifié du reste du module. Mesuré : **0 avertissement** quand il n'y a
+  rien à refaire, **40** après un `touch` de tout. Avant de dire qu'une modification est propre :
+  `find Sources Tests -name '*.swift' -exec touch {} +` puis `swift build && swift test` — et
+  `-c release`, qui compile en module entier et sort des diagnostics que le debug tait.
+
+  `make-app.sh` applique désormais ce constat plutôt que de le laisser à la mémoire de chacun : il
+  résume les avertissements connus en UNE ligne, **s'arrête net** sur tout ce qui n'est pas un
+  chemin de clé (échappatoire `ALLOW_NEW_WARNINGS=1`), et **refuse de conclure** quand rien n'a été
+  recompilé — un ✓ dans ce cas-là serait exactement le mensonge que le contrôle doit empêcher.
+  `release.sh` pose `FULL_WARNING_CHECK=1` : ce qu'on publie se compile entièrement.
 - Formatage : `xcrun swift-format -i -r Sources Tests` (pas de config, valeurs par défaut).
 - Publier : `./Scripts/quick.sh "message"` (bump + DMG signé + release + appcast + push).
 
