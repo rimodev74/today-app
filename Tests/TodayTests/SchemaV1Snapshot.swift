@@ -1,14 +1,7 @@
 import Foundation
 import SwiftData
 
-/// **PHOTO FIGÉE de la forme du store au 2 août 2026.** Ne se modifie que quand la forme DÉPLOYÉE
-/// change, et alors dans le même geste que les modèles vivants — jamais pour faire taire un test.
-///
-/// Une seule retouche depuis sa création : `TaskItem.smartOrder`, le 2 août 2026. Ajout PUR (champ
-/// à valeur par défaut), donc absorbé par SwiftData sans étape de migration : une base d'avant
-/// s'ouvre et gagne la colonne à 0, ce qui veut dire « jamais posée à la main » et rend exactement
-/// l'ordre qu'elle avait. `StoreBackup` a de toute façon copié la base au premier lancement de
-/// cette forme — c'est précisément le changement d'empreinte qui le déclenche.
+/// **PHOTO FIGÉE de la forme du store au 1er août 2026.** Ne se modifie JAMAIS.
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -68,7 +61,6 @@ enum SchemaV1Snapshot: VersionedSchema {
     var isHeader: Bool = false
     var completedAt: Date?
     var sortIndex: Int = 0
-    var smartOrder: Int = 0
     var when: Date?
     var hasTime: Bool = false
     var deadline: Date?

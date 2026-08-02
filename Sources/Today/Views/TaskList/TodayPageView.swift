@@ -14,12 +14,9 @@ import SwiftUI
 /// Une tâche créée ici est datée d'aujourd'hui d'office (cf. `createTask`) : c'est la raison
 /// d'être de la page — noter ce qu'on fait maintenant sans avoir à choisir un projet.
 ///
-/// Les tâches DU JOUR se réordonnent à la main (`TaskItem.smartOrder`) : c'est la raison d'être de
-/// la page — on planifie sa journée en glissant, pas en ajustant des priorités jusqu'à ce que le
-/// tri automatique tombe juste. La réserve, elle, garde son tri automatique : c'est un fourre-tout
-/// où l'on pioche, un ordre manuel n'y voudrait rien dire.
-///
-/// Le reste (édition, suppression, dates, durée, rappels, sous-tâches) vient de la `TaskRow` de
+/// ponytail: pas de réordonnancement manuel ni de drag, contrairement à une page de liste —
+/// l'ordre vient de `SmartList.sort` (priorité, puis date, puis création). Le reste (édition,
+/// suppression, dates, durée, rappels, sous-tâches) est là : la page rend la `TaskRow` de
 /// `TaskListView`, la même que les pages de liste.
 struct TodayPageView: View {
   @Binding var searchPresented: Bool
@@ -53,10 +50,6 @@ struct TodayPageView: View {
   /// consomme. Même type que les autres pages de tâches (cf. `TaskFocus`) : les transitions y sont
   /// écrites une fois, les courbes restent ici.
   @State private var focus = TaskFocus()
-  /// Le glissement en cours, et les positions de repos qui lui servent de repère. Seules les tâches
-  /// DU JOUR se réordonnent : la réserve reste triée automatiquement, c'est un fourre-tout où l'on
-  /// pioche, pas quelque chose qu'on met en ordre.
-  @State private var reorder = TaskPageReorder()
 
   /// `scoped` (et non `filter`) : les tâches cochées du jour restent affichées, barrées, jusqu'au
   /// lendemain. `sort` les descend en bas si le réglage « Descendre en bas de la liste » est actif.
@@ -122,10 +115,7 @@ struct TodayPageView: View {
   }
 
   var body: some View {
-    // Calculé UNE fois par rendu et distribué aux rangées : l'interroger par ligne referait le
-    // même balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
-    let offsets = reorder.offsets(in: tasks)
-    return ScrollView {
+    ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
 
@@ -136,7 +126,7 @@ struct TodayPageView: View {
           // le code (`capacityBar`, `capacity`, `planned`/`remaining`) reste intact pour la
           // rebrancher d'une ligne plutôt que de la reconstruire si elle revient.
           ForEach(tasks) { task in
-            taskRow(for: task, offset: offsets[task.persistentModelID] ?? .zero, draggable: true)
+            taskRow(for: task)
           }
           newTaskRow
           remindersSection
@@ -148,22 +138,6 @@ struct TodayPageView: View {
       .padding(.horizontal, gutter)
       .padding(.top, 30)
     }
-    // Le trou d'insertion, DERRIÈRE la page : il n'est donc visible que dans le vide ouvert par
-    // l'écartement des voisines. Même repère que les cadres (`taskPageSpace`, celui du ScrollView),
-    // sinon il se dessinerait décalé du défilement.
-    .background(alignment: .topLeading) {
-      if let hole = reorder.placeholder(in: tasks) {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Color.primary.opacity(0.06))
-          .frame(width: hole.width, height: hole.height)
-          .offset(x: hole.minX, y: hole.minY)
-          .allowsHitTesting(false)
-      }
-    }
-    // Les mêmes cadres que le socle consomme pour le clic dans le vide, ici pour savoir où la
-    // ligne tirée peut se poser. `measured` les GÈLE pendant le glissement — voir son en-tête,
-    // c'est ce qui évite la boucle décalage → cadre → décalage.
-    .onPreferenceChange(TaskRowFrameKey.self) { frames in reorder.measured(frames) }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓.
     .taskPageBase(focus: $focus, blocks: { displayedBlocks }, delete: delete)
     .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -246,16 +220,11 @@ struct TodayPageView: View {
 
   /// La MÊME `TaskRow` que dans une page de liste : édition, suppression, dates, durée, rappels et
   /// sous-tâches viennent avec, sans une ligne de plus ici.
+  @ViewBuilder
   private func taskRow(
-    for task: TaskItem, showsParent: Bool = true, onSchedule: (() -> Void)? = nil,
-    offset: CGSize = .zero, draggable: Bool = false
+    for task: TaskItem, showsParent: Bool = true, onSchedule: (() -> Void)? = nil
   ) -> some View {
-    let lifted = reorder.isDragging(task)
-    // Typés ici : un ternaire entre une closure et `nil` ne s'infère pas au milieu d'une chaîne de
-    // modificateurs, et le compilateur n'en dit rien d'utile.
-    let onDrag: ((CGSize) -> Void)? = draggable ? { drag(task, by: $0) } : nil
-    let onDrop: (() -> Void)? = draggable ? { dropDraggedTask() } : nil
-    return TaskRow(
+    TaskRow(
       task: task,
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
@@ -277,40 +246,12 @@ struct TodayPageView: View {
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
       onSelect: { select(task) },
-      onEdit: { beginEditing(task) },
-      onDrag: onDrag,
-      onDrop: onDrop
+      onEdit: { beginEditing(task) }
     )
-    // La ligne tirée SUIT le curseur (aucune animation, elle lui colle) ; les voisines glissent
-    // pour ouvrir le trou. Rien n'est capturé en image : c'est la vraie rangée qui se déplace, donc
-    // rien ne disparaît ni ne réapparaît au relâchement.
-    .offset(offset)
-    .zIndex(lifted ? 1 : 0)
-    .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 10 : 0, y: lifted ? 5 : 0)
-    .animation(lifted ? nil : .snappy(duration: 0.22), value: offset)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
-    // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches, et au glissement de
-    // savoir où la ligne peut se poser.
+    // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches.
     .measureTaskRow(task)
-  }
-
-  private func drag(_ task: TaskItem, by translation: CGSize) {
-    if !reorder.isDragging { reorder.begin(task) }
-    reorder.drag(translation)
-  }
-
-  /// Relâchement : l'ordre affiché devient l'ordre écrit.
-  ///
-  /// Aucune animation, et c'est le point : pendant le glissement, chaque ligne est DÉJÀ à la place
-  /// qu'elle occupera. Écrire l'ordre et remettre les décalages à zéro dans la même passe fait
-  /// coïncider l'affiché et le réel sans un seul saut — c'est cette continuité, pas une courbe, qui
-  /// rend le dépôt propre.
-  private func dropDraggedTask() {
-    defer { reorder.end() }
-    guard let ordered = reorder.dropped(in: tasks) else { return }
-    TaskItem.stampSmartOrder(ordered)
-    try? modelContext.save()
   }
 
   private func parentLabel(of task: TaskItem) -> String? {
