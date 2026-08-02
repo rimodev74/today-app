@@ -51,42 +51,6 @@ struct TodayPageView: View {
   /// écrites une fois, les courbes restent ici.
   @State private var focus = TaskFocus()
 
-  /// `scoped` (et non `filter`) : les tâches cochées du jour restent affichées, barrées, jusqu'au
-  /// lendemain. `sort` les descend en bas si le réglage « Descendre en bas de la liste » est actif.
-  private var tasks: [TaskItem] {
-    SmartList.today.sort(SmartList.today.scoped(allTasks))
-  }
-
-  /// La réserve : tout ce qui n'a pas de date, projets compris. Ces tâches n'apparaissaient
-  /// nulle part ailleurs (« Aujourd'hui » et « À venir » filtrent sur `when`, « Tâches » ne montre
-  /// que l'Inbox) — il fallait ouvrir chaque projet pour les retrouver.
-  private var undatedTasks: [TaskItem] {
-    SmartList.today.sort(allTasks.filter { !$0.isCompleted && !$0.isHeader && $0.when == nil })
-  }
-
-  /// Groupes dans l'ordre d'apparition de leur première tâche, donc dans l'ordre de
-  /// `SmartList.sort` : les projets qui portent les priorités hautes remontent d'eux-mêmes.
-  private var undatedGroups: [(name: String, tasks: [TaskItem])] {
-    var order: [String] = []
-    var buckets: [String: [TaskItem]] = [:]
-    for task in undatedTasks {
-      let title = task.project?.title ?? task.list?.title ?? ""
-      let key = title.isEmpty ? "Sans projet" : title
-      if buckets[key] == nil { order.append(key) }
-      buckets[key, default: []].append(task)
-    }
-    return order.map { (name: $0, tasks: buckets[$0] ?? []) }
-  }
-
-  /// Ce que la page affiche, dans l'ordre : le jour d'abord, puis la réserve, groupe par groupe.
-  /// Les MÊMES valeurs que le `body` parcourt (`tasks`, `undatedGroups`) — c'est tout l'intérêt :
-  /// il n'y a plus d'ordre recopié à la main à tenir en accord avec le rendu (cf. `TaskPageBlock`).
-  /// Le repli de la réserve se déclare ici et s'applique dans le socle, pas dans chaque page.
-  private var displayedBlocks: [TaskPageBlock] {
-    [.visible(tasks)]
-      + undatedGroups.map { TaskPageBlock(tasks: $0.tasks, isExpanded: undatedExpanded) }
-  }
-
   /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, que le ticker
   /// rafraîchit : une fenêtre laissée ouverte toute la nuit date bien du bon jour au matin.
   private var startOfToday: Date { Calendar.current.startOfDay(for: now) }
@@ -107,7 +71,7 @@ struct TodayPageView: View {
     reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
   }
 
-  private var capacity: DayCapacity {
+  private func capacity(of tasks: [TaskItem]) -> DayCapacity {
     // Sans les cochées : elles restent affichées mais ne pèsent plus sur le temps qui reste.
     DayCapacity(
       estimates: tasks.filter { !$0.isCompleted }.map(\.estimateMinutes), now: now,
@@ -115,7 +79,10 @@ struct TodayPageView: View {
   }
 
   var body: some View {
-    ScrollView {
+    // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `tasks` refiltrait
+    // et retriait toute la base — plusieurs fois par image.
+    let page = TodayPage.build(from: allTasks)
+    return ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
 
@@ -125,13 +92,13 @@ struct TodayPageView: View {
           // ponytail: barre de capacité masquée à la demande de Ryan (« je jugerai plus tard ») —
           // le code (`capacityBar`, `capacity`, `planned`/`remaining`) reste intact pour la
           // rebrancher d'une ligne plutôt que de la reconstruire si elle revient.
-          ForEach(tasks) { task in
+          ForEach(page.tasks) { task in
             taskRow(for: task)
           }
           newTaskRow
           remindersSection
 
-          undatedSection
+          undatedSection(page)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -139,7 +106,9 @@ struct TodayPageView: View {
       .padding(.top, 30)
     }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓.
-    .taskPageBase(focus: $focus, blocks: { displayedBlocks }, delete: delete)
+    .taskPageBase(
+      focus: $focus, blocks: { page.blocks(undatedExpanded: undatedExpanded) }, delete: delete
+    )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: { draftFocused = true }, onInsertHeader: nil,
@@ -180,8 +149,8 @@ struct TodayPageView: View {
 
   /// La barre de réalité. `ProgressView` linéaire plutôt qu'un tracé maison : teinte, hauteur et
   /// contraste suivent le système (et le mode sombre) sans une ligne de plus.
-  private var capacityBar: some View {
-    let capacity = capacity
+  private func capacityBar(of tasks: [TaskItem]) -> some View {
+    let capacity = capacity(of: tasks)
     return VStack(alignment: .leading, spacing: 6) {
       ProgressView(value: capacity.fill)
         .tint(capacity.isOverbooked ? .red : .accentColor)
@@ -310,13 +279,13 @@ struct TodayPageView: View {
   /// `DisclosureGroup` plutôt qu'un chevron maison : le triangle, son animation, le clic sur le
   /// libellé et l'accessibilité viennent avec, et l'indentation du contenu sépare visuellement la
   /// réserve de l'engagement du jour sans une ligne de mise en page.
-  @ViewBuilder private var undatedSection: some View {
-    if !undatedGroups.isEmpty {
+  @ViewBuilder private func undatedSection(_ page: TodayPage) -> some View {
+    if !page.undated.isEmpty {
       VStack(alignment: .leading, spacing: 0) {
         Divider().padding(.vertical, 10)
         DisclosureGroup(isExpanded: $undatedExpanded) {
           VStack(alignment: .leading, spacing: 0) {
-            ForEach(undatedGroups, id: \.name) { group in
+            ForEach(page.undated) { group in
               Text(group.name)
                 .font(.app(.callout).weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -337,7 +306,7 @@ struct TodayPageView: View {
             Image(systemName: "tray.full")
               .font(.app(11))
             Text("Tâches sans date")
-            Text("\(undatedTasks.count)")
+            Text("\(page.undatedCount)")
               .foregroundStyle(.tertiary)
           }
           .font(.app(.subheadline).weight(.semibold))
