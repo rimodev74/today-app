@@ -3,7 +3,7 @@
 **Lire `CLAUDE.md` d'abord** (architecture, pièges, conventions). Ce fichier-ci ne dit que ce qui
 reste à faire et *pourquoi* — il ne répète pas ce qui y est déjà écrit.
 
-Repères au moment d'écrire : commit `c37ba8a`, **159 tests verts**, cliquet de concurrence **inchangé**
+Repères au moment d'écrire : commit `899530b`, **159 tests verts**, cliquet de concurrence **inchangé**
 (que des chemins de clé SwiftData, cf. `Package.swift`), `TaskListView.swift` à 2 764 lignes.
 
 ---
@@ -84,7 +84,12 @@ Le glisser a demandé quatre corrections, toutes dans des pièges que le projet 
    ce déplacement bouge fait trembler la ligne, et c'était LA cause du « ingérable » ;
 4. **l'ordre écrit et le retour des décalages à zéro tiennent dans UNE transaction.** Séparés, la
    rangée saute à sa nouvelle place pendant que son décalage s'anime depuis l'ancienne : elle part
-   à l'opposé avant de revenir.
+   à l'opposé avant de revenir ;
+5. **la page RÉAFFICHE sa séquence vivante**, jamais la copie figée. Rendre celle-ci pendant le
+   geste puis rebasculer sur celle-là au relâchement produit le MÊME symptôme que le point 4, pour
+   une autre raison : le `ForEach` réordonne ses identités au moment où les décalages retombent.
+   Rien n'écrit pendant un geste, la séquence vivante ne bouge donc pas d'elle-même — la figer à
+   l'affichage ne protège de rien. Le calcul, lui, garde bien sa copie.
 
 Tout ça vit dans `TaskPageChrome` et `TaskPageReorder`, pas dans les pages : `taskRowDragLayer`,
 `taskReorderPlaceholder`, `track`, `dropTaskDrag`, `taskDrop`. Une page qui glisse ne redécrit rien.
