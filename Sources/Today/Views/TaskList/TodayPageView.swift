@@ -96,16 +96,8 @@ struct TodayPageView: View {
     // Calculés UNE fois et distribués aux rangées : les interroger par ligne referait le même
     // balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
     let offsets = reorder.offsets()
-    // `LazyVStack` et pas `VStack`, comme la page d'une liste : seules les rangées VISIBLES sont
-    // construites. C'était la dernière différence avec elle, et elle se payait à chaque image d'un
-    // glissement — la page reconstruisait toutes ses lignes, y compris la réserve dépliée et les
-    // sections Calendrier/Rappels, soixante fois par seconde.
-    //
-    // Contrepartie assumée, la même que là-bas : une rangée hors écran n'est pas rendue, donc ne
-    // publie pas son cadre. `ReorderTarget.byBoundary` sait déjà lire une séquence trouée (« ligne
-    // non mesurée : elle ne peut pas trancher »), et on ne dépose que ce qu'on voit.
     return ScrollView {
-      LazyVStack(alignment: .leading, spacing: 0) {
+      VStack(alignment: .leading, spacing: 0) {
         header
 
         Group {
