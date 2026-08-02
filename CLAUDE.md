@@ -1,8 +1,8 @@
 # Today
 
 Clone natif macOS de Things (Cultured Code). Scope, décisions et découpage : `ROADMAP.md`.
-SwiftPM (pas de `.xcodeproj`), SwiftUI + SwiftData, ~12 200 lignes dans `Sources/Today/`
-(+ ~2 270 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
+SwiftPM (pas de `.xcodeproj`), SwiftUI + SwiftData, ~12 400 lignes dans `Sources/Today/`
+(+ ~2 670 de tests). Le produit s'appelle **Today** ; « ThingsClone » ne survit que dans le nom
 de `ThingsCloneApp.swift`.
 
 ## Lancer
@@ -10,7 +10,7 @@ de `ThingsCloneApp.swift`.
 ```bash
 ./run.sh          # build → bundle .app → open. Le seul moyen correct de lancer l'app.
 swift build       # compilation seule (~0,2 s incrémental)
-swift test        # 159 tests, en mémoire ou sur un store temporaire — jamais la vraie base
+swift test        # 189 tests, en mémoire ou sur un store temporaire — jamais la vraie base
 ```
 
 **Jamais `swift run`.** L'exécutable nu n'est pas un bundle : macOS ne lui applique pas la
@@ -31,9 +31,9 @@ leur en-tête AVANT d'écrire.
 | `Models/TaskFocus.swift` | quelle ligne est sélectionnée, laquelle est en édition | trois pages pilotaient deux `@State` nus avec les mêmes cinq transitions recopiées |
 | `Models/TaskPageRows.swift` (`TaskPageBlock`) | ce qu'une page affiche : des pans de lignes, visibles ou repliés | chaque page REDÉCRIVAIT l'ordre de ses lignes dans une closure, que rien ne reliait à son `body` — une page l'a écrit faux, et le symptôme était « la touche ne marche pas » |
 | `Models/TaskPageReorder.swift` | l'état d'un glissement : cadres, séquence figée, décalages, ordre obtenu | rien — seule la page d'une liste savait glisser, avec son moteur à elle |
-| `Models/TodayPage.swift`, `Models/AllTasksPage.swift` | ce que ces deux pages présentent, à partir des tâches qu'on leur donne | des propriétés calculées DANS la vue : recalculées à chaque lecture (donc plusieurs fois par image) et invérifiables autrement qu'en cliquant |
+| `Models/TodayPage.swift`, `AllTasksPage`, `UpcomingPage`, `ArchivePage` | ce que chaque page intelligente présente, à partir des tâches qu'on lui donne | des propriétés calculées DANS la vue : recalculées à chaque lecture (donc plusieurs fois par image) et invérifiables autrement qu'en cliquant |
 | `Views/TaskList/TaskPageChrome.swift` (`TaskPageBase`) | le socle de TOUTE page de tâches : ⌫, ↑/↓, clic dans le vide, cadres des lignes | chaque page recevait ses gestes au coup par coup — la même touche donnait un résultat différent d'un onglet à l'autre |
-| `Models/TodaySchema.swift` + `Tests/TodayTests/SchemaV1Snapshot.swift` | la forme des données, écrite deux fois et confrontée à chaque `swift test` | rien — un `@Model` cassé vidait sa colonne en silence (cf. Pièges) |
+| `Models/TodaySchema.swift` (`CurrentSchema` + `SchemaV1`) + `Tests/TodayTests/DeployedSchemaSnapshot.swift` | la forme des données, écrite deux fois et confrontée à chaque `swift test` | rien — un `@Model` cassé vidait sa colonne en silence (cf. Pièges) |
 | `Services/StoreBackup.swift` | copie la base AVANT de l'ouvrir, quand la forme des modèles a changé | rien ne protégeait la vraie base à l'exécution |
 | `TodayApp.openStore` | l'unique façon d'ouvrir un store | deux chemins d'ouverture, dont un que les tests ne couvraient pas |
 
@@ -110,6 +110,17 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
      sur l'autre au relâchement produit le même symptôme que le point 4, pour une autre raison : le
      `ForEach` réordonne ses identités au moment où les décalages retombent. Rien n'écrit pendant un
      geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie.
+- **`cp -r` DÉTRUIT un framework versionné.** Sparkle n'est qu'une arborescence de liens
+  symboliques (`Sparkle` → `Versions/Current/Sparkle`) ; `cp -r` les SUIT et copie les cibles —
+  mesuré : 3,0 Mo deviennent 8,9 Mo, chaque binaire en double, et le bundle n'a plus la forme d'un
+  framework. Conséquence : `codesign --verify --deep --strict` sort en erreur (« bundle format is
+  ambiguous »), or c'est ce sceau que Sparkle compare entre l'app installée et celle qu'il télécharge
+  avant d'installer une mise à jour. `ditto` partout où l'on copie un bundle (cf. `make-app.sh`).
+- **La quarantaine se DIT à l'utilisateur.** `StoreQuarantine` écarte la base illisible et l'app
+  repart vide ; « ça se remarque » ne suffisait pas — rien ne disait que le travail était encore là,
+  à côté, sous un autre nom, et le vrai risque était de tout retaper par-dessus. Le rapport passe par
+  les défauts (`StoreQuarantine.reportKey`) parce que la quarantaine a lieu pendant la construction
+  du container, avant qu'aucune fenêtre n'existe ; `ContentView` le consomme et l'affiche une fois.
 - **Un plantage sans message se lit dans le journal.** `CrashLog` installe un gestionnaire
   d'exceptions non rattrapées, parce que le rapport système garde la pile mais PAS la raison :
   `log show --last 1h --predicate 'process == "Today"' | grep PLANTAGE`.
@@ -209,27 +220,29 @@ existe sur une liste, un projet, « Aujourd'hui » et « Tâches » ; « À veni
 ont pas, et c'est un choix — elles sont ordonnées par une date, il n'y a pas d'ordre manuel à y
 mettre.
 
-Encore du décor — le vérifier avant de le présenter comme fini :
+**Plus rien n'est du décor.** Les trois derniers faux-semblants ont été retirés le 2 août 2026, et
+le principe qui les a fait partir vaut pour la suite : *une fonctionnalité est branchée ou elle
+n'existe pas.* Du code en pause ment sur ce que l'app sait faire, et se paie deux fois — une fois
+en le maintenant, une fois en le débranchant.
 
-- l'icône **tag** de la carte d'édition ne fait rien (le modèle ne porte pas de tags) ; les trois
-  autres (date, checklist, priorité) sont branchées ;
-- `TaskItem.hasTime` est bien LU (par `UpcomingPageView`, pour l'heure affichée) mais rien ne le met
-  jamais à `true` : ni la saisie rapide ni les sélecteurs ne posent d'heure, seulement des jours ;
-- la barre de capacité d'« Aujourd'hui » est écrite mais masquée (`ponytail:` dans `TodayPageView`).
+- l'**icône tag**, décorative faute de modèle qui porte des tags → retirée ;
+- **`TaskItem.hasTime`**, jamais mis à vrai par aucun chemin (l'app ne pose que des JOURS), ce qui
+  rendait l'affichage d'heure d'« À venir » inatteignable → retiré du schéma (cf. `SchemaV1`) ;
+- la **barre de capacité** d'« Aujourd'hui », écrite, testée et masquée — avec son réglage
+  « Fin de journée » resté VISIBLE dans les Réglages, où il ne pilotait donc plus rien → supprimée,
+  avec `DayCapacity`. `Estimate` (la durée d'une tâche) reste : elle sert ailleurs.
 
 Dette connue, par ordre de coût :
 
-1. **`UpcomingPageView` et `ArchivePageView` calculent encore leur contenu dans leur `body`**
-   (`agenda`, `archiveMonths`). C'est le dernier endroit qui s'écarte de la règle, et le même
-   travail que `TodayPage`/`AllTasksPage` : sortir le calcul, ses tests viennent avec.
-2. `TaskListView.swift` fait encore ~2 770 lignes. Ce n'est pas sa taille le problème, mais ce
-   qu'elle mélange : `TaskRow`, `HeaderRow`, la barre d'outils et les `NSViewRepresentable` en
-   sortiraient sans rien casser. Attention : `Checkmark` et `NotesBox` devront passer de `private`
-   à interne.
-3. **On ne peut pas déposer une tâche dans un dépliant VIDE de « Tâches ».** La section d'accueil se
+1. **On ne peut pas déposer une tâche dans un dépliant VIDE de « Tâches ».** La section d'accueil se
    lit sur la ligne voisine (seule lecture qui marche pour les quatre sortes de sections) ; sans
    voisine, rien à lire. Le jour où ça manque : donner un cadre au bandeau lui-même et viser dessus.
-4. Le mode langage reste Swift 5. La concurrence stricte est en revanche VÉRIFIÉE (réglage dans
+2. **Toutes les `@Query` lisent la table entière** puis filtrent et trient en mémoire. Mesuré à 87
+   tâches : sans objet. C'est le plafond à connaître, pas à corriger — passer en `#Predicate` le
+   jour où la base se comptera en milliers. Le TRI, lui, restera cher quoi qu'il arrive : chaque
+   lecture de propriété d'un `@Model` passe par SwiftData et pas par un champ mémoire (mesuré :
+   2,4 ms pour trier 86 tâches, contre 0,24 ms pour les filtrer).
+3. Le mode langage reste Swift 5. La concurrence stricte est en revanche VÉRIFIÉE (réglage dans
    `Package.swift`) et tous les diagnostics restants sont le même : `SortDescriptor(\Model.x)` veut
    un chemin de clé `Sendable`, qu'un `@Model` SwiftData ne peut pas être. Trou d'Apple, pas dette
    du projet. **Ce cliquet porte sur leur NATURE, pas sur leur nombre** — celui-ci dépend du mode de

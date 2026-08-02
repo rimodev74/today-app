@@ -22,10 +22,12 @@ final class TaskItem {
   /// Comparé par `SmartList.sort`, qui range les tâches placées à la main AVANT celles qui ne
   /// l'ont jamais été — cf. son commentaire pour ce que ça veut dire d'une tâche qui arrive.
   var smartOrder: Int = 0
-  /// Jour planifié. `hasTime` dit si l'heure portée par cette date est significative
-  /// (sans lui, impossible de distinguer « le 12 » de « le 12 à 00:00 »).
+  /// JOUR planifié, jamais une heure : tout ce qui pose une date de l'app (saisie rapide,
+  /// sélecteurs, raccourcis) écrit un début de journée. Un champ `hasTime` a existé pour dire
+  /// « l'heure de cette date compte » ; rien ne l'a jamais mis à vrai, et son affichage sur
+  /// « À venir » était donc inatteignable — retiré au schéma 2.0.0. Le jour où l'app saura poser
+  /// une heure, il reviendra AVEC son sélecteur, pas avant.
   var when: Date?
-  var hasTime: Bool = false
   /// Échéance (deadline) — distincte de `when` (jour planifié). Affichée à droite de la ligne
   /// avec un drapeau, en rouge une fois atteinte ou dépassée.
   var deadline: Date?
@@ -107,7 +109,6 @@ final class TaskItem {
   /// partager ferait que cocher la copie cocherait l'originale).
   func copy(into list: TodoList?) -> TaskItem {
     let clone = TaskItem(title: title, notes: notes, when: when, isHeader: isHeader, list: list)
-    clone.hasTime = hasTime
     clone.deadline = deadline
     clone.estimateMinutes = estimateMinutes
     clone.sortIndex = sortIndex

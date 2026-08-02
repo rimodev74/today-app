@@ -23,12 +23,6 @@ struct UpcomingPageView: View {
   /// page est un aperçu par date, on y coche et on y supprime — renommer se fait dans la liste.
   @State private var focus = TaskFocus()
 
-  /// Horizon de chargement EventKit — au-delà, on arrête d'interroger Calendrier/Rappels.
-  /// ponytail: plafond simple ; à agrandir/paginer si quelqu'un plie réellement 6 mois à l'avance.
-  private static let horizonDays = 180
-  /// Largeur de la fenêtre « un jour par ligne, même vide » avant de passer aux bandeaux de mois.
-  private static let nearWindowDays = 7
-
   private var linkedReminderIdentifiers: Set<String> {
     Set(allTasks.compactMap(\.reminderIdentifier))
   }
@@ -43,13 +37,13 @@ struct UpcomingPageView: View {
     reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
   }
 
-  private var tomorrow: Date {
-    let calendar = Calendar.current
-    return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!
-  }
+  private var tomorrow: Date { DayBounds().startOfTomorrow }
 
   var body: some View {
-    let agenda = agenda
+    // Construit UNE fois par rendu, puis distribué — le calcul lui-même vit dans `UpcomingPage`,
+    // avec ses tests (cf. la règle « une vue orchestre et anime ; elle ne calcule pas »).
+    let agenda = UpcomingPage(
+      tasks: allTasks, events: events, reminders: unlinkedReminders)
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
@@ -105,7 +99,8 @@ struct UpcomingPageView: View {
 
   private func refreshAppleItems() async {
     let start = tomorrow
-    let end = Calendar.current.date(byAdding: .day, value: Self.horizonDays, to: start) ?? start
+    let end =
+      Calendar.current.date(byAdding: .day, value: UpcomingPage.horizonDays, to: start) ?? start
     await remindersService.refreshUpcoming(from: start, to: end)
   }
 
@@ -131,179 +126,12 @@ struct UpcomingPageView: View {
     Task { try? await remindersService.setCompleted(true, identifier: id) }
   }
 
-  // MARK: Regroupement par jour / mois
-
-  private func buildDayGroups() -> [Date: DayGroup] {
-    let calendar = Calendar.current
-    var byDay: [Date: DayGroup] = [:]
-    func key(_ date: Date) -> Date { calendar.startOfDay(for: date) }
-
-    for task in SmartList.upcoming.filter(allTasks) {
-      guard let when = task.when else { continue }
-      let day = key(when)
-      byDay[day, default: DayGroup(date: day)].items.append(.task(task))
-    }
-    for event in events {
-      let day = key(event.startDate)
-      byDay[day, default: DayGroup(date: day)].items.append(.event(event))
-    }
-    for reminder in unlinkedReminders {
-      guard let components = reminder.dueDateComponents, let due = calendar.date(from: components)
-      else { continue }
-      let day = key(due)
-      byDay[day, default: DayGroup(date: day)].items.append(.reminder(reminder))
-    }
-    for dayKey in byDay.keys {
-      byDay[dayKey]?.items.sort(by: AgendaItem.precedes)
-    }
-    return byDay
-  }
-
-  private var agenda: Agenda {
-    let calendar = Calendar.current
-    let todayStart = calendar.startOfDay(for: Date())
-    let groups = buildDayGroups()
-
-    let near = (1...Self.nearWindowDays).map { offset -> DayGroup in
-      let date = calendar.date(byAdding: .day, value: offset, to: todayStart)!
-      return groups[date] ?? DayGroup(date: date)
-    }
-    guard let nearEnd = near.last?.date else { return Agenda(nearDays: near, monthBands: []) }
-    let horizonEnd =
-      calendar.date(byAdding: .day, value: Self.horizonDays, to: todayStart) ?? nearEnd
-
-    // Au-delà de la fenêtre proche, seuls les jours qui contiennent réellement quelque chose
-    // deviennent une ligne — pas de `DayHeader` vide comme dans la fenêtre proche.
-    let distantDates = groups.keys.filter { $0 > nearEnd && $0 <= horizonEnd }.sorted()
-
-    var bands: [MonthBand] = []
-    var currentMonthStart: Date?
-    var currentDays: [DayGroup] = []
-    func flush() {
-      guard let start = currentMonthStart, !currentDays.isEmpty else { return }
-      bands.append(
-        MonthBand(
-          id: start, name: monthName(start), rangeLabel: rangeLabel(for: start, nearEnd: nearEnd),
-          days: currentDays))
-      currentDays = []
-    }
-    for date in distantDates {
-      let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date))!
-      if monthStart != currentMonthStart {
-        flush()
-        currentMonthStart = monthStart
-      }
-      currentDays.append(groups[date]!)
-    }
-    flush()
-    return Agenda(nearDays: near, monthBands: bands)
-  }
-
-  /// « Août » dans l'année courante, « Août 2027 » sinon — même règle que `ArchiveMonth.label`.
-  private func monthName(_ monthStart: Date) -> String {
-    let calendar = Calendar.current
-    let sameYear =
-      calendar.component(.year, from: monthStart) == calendar.component(.year, from: Date())
-    let style: Date.FormatStyle = sameYear ? .dateTime.month(.wide) : .dateTime.month(.wide).year()
-    return monthStart.formatted(style).capitalized
-  }
-
-  /// Plage FIXE du mois (pas ajustée au contenu) : le premier mois distant démarre juste après la
-  /// fenêtre proche (ex. J+7 = 6 août → bandeau « 7-31 ») ; les mois suivants couvrent 1 à leur
-  /// dernier jour.
-  private func rangeLabel(for monthStart: Date, nearEnd: Date) -> String {
-    let calendar = Calendar.current
-    let isPartial = calendar.isDate(monthStart, equalTo: nearEnd, toGranularity: .month)
-    let startDay = isPartial ? calendar.component(.day, from: nearEnd) + 1 : 1
-    let lastDay = calendar.range(of: .day, in: .month, for: monthStart)?.count ?? startDay
-    return "\(startDay)-\(lastDay)"
-  }
-}
-
-// MARK: - Regroupement
-
-private struct Agenda {
-  let nearDays: [DayGroup]
-  let monthBands: [MonthBand]
-
-  /// Ce que la page affiche, pan par pan, dans l'ordre du rendu : les jours proches puis ceux des
-  /// bandeaux de mois. Seules les TÂCHES y entrent — un événement ou un rappel Apple n'est pas à
-  /// nous, la sélection ne le désigne pas et ⌫ n'aurait rien à en faire.
-  var taskBlocks: [TaskPageBlock] {
-    (nearDays + monthBands.flatMap(\.days)).map { day in
-      .visible(
-        day.items.compactMap {
-          if case .task(let task) = $0 { return task }
-          return nil
-        })
-    }
-  }
-}
-
-private struct MonthBand: Identifiable {
-  let id: Date
-  let name: String
-  let rangeLabel: String
-  let days: [DayGroup]
-}
-
-private struct DayGroup: Identifiable {
-  let date: Date
-  var items: [AgendaItem] = []
-  var id: Date { date }
-}
-
-/// Une entrée de la vue calendrier — tâche de l'app, événement ou rappel Apple. Un seul type pour
-/// que les trois se trient et s'affichent dans le MÊME flux chronologique (contrairement à
-/// « Aujourd'hui », qui les sépare en sections).
-private enum AgendaItem: Identifiable {
-  case task(TaskItem)
-  case event(EKEvent)
-  case reminder(EKReminder)
-
-  var id: String {
-    switch self {
-    case .task(let task): return "task-\(task.persistentModelID)"
-    case .event(let event): return "event-\(event.eventIdentifier ?? "")"
-    case .reminder(let reminder): return "reminder-\(reminder.calendarItemIdentifier)"
-    }
-  }
-
-  /// Minutes depuis minuit si l'entrée porte une heure, `nil` sinon (tâche non datée à l'heure
-  /// près, événement toute la journée, rappel sans heure d'échéance) — ce `nil` la place dans le
-  /// groupe « sans heure », toujours en tête.
-  private var minutesOfDay: Int? {
-    let calendar = Calendar.current
-    switch self {
-    case .task(let task):
-      guard task.hasTime, let when = task.when else { return nil }
-      let c = calendar.dateComponents([.hour, .minute], from: when)
-      return (c.hour ?? 0) * 60 + (c.minute ?? 0)
-    case .event(let event):
-      guard !event.isAllDay else { return nil }
-      let c = calendar.dateComponents([.hour, .minute], from: event.startDate)
-      return (c.hour ?? 0) * 60 + (c.minute ?? 0)
-    case .reminder(let reminder):
-      guard let c = reminder.dueDateComponents, let hour = c.hour else { return nil }
-      return hour * 60 + (c.minute ?? 0)
-    }
-  }
-
-  /// Sans heure d'abord (ordre d'insertion — tâches déjà en tête), puis chronologique.
-  static func precedes(_ a: Self, _ b: Self) -> Bool {
-    switch (a.minutesOfDay, b.minutesOfDay) {
-    case (nil, nil): return false
-    case (nil, _): return true
-    case (_, nil): return false
-    case (let x?, let y?): return x < y
-    }
-  }
 }
 
 // MARK: - Rendu
 
 /// En-tête de jour (numéro + nom) suivi de ses entrées — absentes si le jour est vide (fenêtre
-/// proche uniquement, cf. `UpcomingPageView.agenda`).
+/// proche uniquement, cf. `UpcomingPage`).
 private struct DaySection: View {
   let group: DayGroup
   @Binding var focus: TaskFocus
@@ -407,10 +235,6 @@ private struct UpcomingTaskRow: View {
         }
       }
       Spacer(minLength: 0)
-      if task.hasTime, let when = task.when {
-        Text(when.formatted(date: .omitted, time: .shortened))
-          .foregroundStyle(.secondary)
-      }
     }
     .font(.app(.callout))
     .padding(.vertical, 4)

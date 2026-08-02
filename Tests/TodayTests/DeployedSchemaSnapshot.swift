@@ -1,14 +1,18 @@
 import Foundation
 import SwiftData
 
-/// **PHOTO FIGÉE de la forme du store au 2 août 2026.** Ne se modifie que quand la forme DÉPLOYÉE
-/// change, et alors dans le même geste que les modèles vivants — jamais pour faire taire un test.
+/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 2.0.0, 2 août 2026.** Ne se modifie que
+/// quand la forme déployée change, et alors dans le même geste que les modèles vivants — jamais
+/// pour faire taire un test.
 ///
-/// Une seule retouche depuis sa création : `TaskItem.smartOrder`, le 2 août 2026. Ajout PUR (champ
-/// à valeur par défaut), donc absorbé par SwiftData sans étape de migration : une base d'avant
-/// s'ouvre et gagne la colonne à 0, ce qui veut dire « jamais posée à la main » et rend exactement
-/// l'ordre qu'elle avait. `StoreBackup` a de toute façon copié la base au premier lancement de
-/// cette forme — c'est précisément le changement d'empreinte qui le déclenche.
+/// S'appelait `SchemaV1Snapshot` tant qu'il n'existait qu'une forme. Le nom aurait menti dès la
+/// 2.0.0 : ce fichier ne décrit pas la version 1, il décrit *celle qui est déployée*, quel que soit
+/// son numéro. Les formes PASSÉES, elles, vivent dans `Models/TodaySchema.swift` (`SchemaV1`),
+/// parce que la migration en a besoin à l'exécution — pas seulement les tests.
+///
+/// Historique des retouches :
+/// - `TaskItem.smartOrder`, 2 août 2026 — ajout PUR, absorbé par SwiftData sans étape de migration.
+/// - `TaskItem.hasTime` RETIRÉ, 2 août 2026 — changement CASSANT, d'où `SchemaV1` et son étape.
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -23,14 +27,8 @@ import SwiftData
 /// ne les touche pas. Vérifié : imbriquer un `@Model` ne change pas l'entité de store qu'il décrit —
 /// ces classes relisent sans perte un fichier écrit par les modèles de premier niveau, relations
 /// comprises.
-///
-/// Elles vivent dans la cible de TESTS et pas dans `Sources` tant qu'aucune migration n'en a besoin
-/// à l'exécution : l'app n'en a aucun usage, et quatre `@Model` de plus dans le binaire ne
-/// serviraient qu'à semer le doute sur lesquels sont les vrais. Le jour où une version devient
-/// PASSÉE, elles déménagent telles quelles dans `Models/TodaySchema.swift` sous le nom `SchemaV1`
-/// (mode d'emploi dans ce fichier-là) — et ce fichier-ci se re-fige sur la nouvelle forme déployée.
-enum SchemaV1Snapshot: VersionedSchema {
-  static let versionIdentifier = Schema.Version(1, 0, 0)
+enum DeployedSchemaSnapshot: VersionedSchema {
+  static let versionIdentifier = Schema.Version(2, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
@@ -70,7 +68,6 @@ enum SchemaV1Snapshot: VersionedSchema {
     var sortIndex: Int = 0
     var smartOrder: Int = 0
     var when: Date?
-    var hasTime: Bool = false
     var deadline: Date?
     var priorityRaw: Int = 0
     var estimateMinutes: Int = 0

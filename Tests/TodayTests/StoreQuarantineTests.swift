@@ -68,4 +68,46 @@ final class StoreQuarantineTests: XCTestCase {
     XCTAssertTrue(
       StoreQuarantine.quarantine(directory.appendingPathComponent("absent.store")).isEmpty)
   }
+
+  // MARK: Le rapport à l'utilisateur
+
+  /// Des défauts À PART : la vraie base d'un développeur qui lance les tests n'a rien à voir ici.
+  private func scratchDefaults() throws -> UserDefaults {
+    let name = UUID().uuidString
+    let suite = try XCTUnwrap(UserDefaults(suiteName: name))
+    addTeardownBlock { suite.removeSuite(named: name) }
+    return suite
+  }
+
+  /// Le contrat de l'alerte : ce qui a été écarté est retrouvable APRÈS coup, depuis un autre
+  /// moment du lancement — la quarantaine a lieu avant qu'aucune fenêtre n'existe.
+  func testReport_survivesQuarantineAndNamesEveryMovedFile() throws {
+    let defaults = try scratchDefaults()
+    let url = try store(["", "-wal", "-shm"])
+
+    let moved = StoreQuarantine.quarantine(url, defaults: defaults)
+
+    XCTAssertEqual(
+      StoreQuarantine.consumeReport(defaults: defaults).sorted(), moved.map(\.path).sorted())
+  }
+
+  /// Lu une fois, oublié : sans ça l'alerte reviendrait à CHAQUE lancement, pour toujours.
+  func testReport_isConsumedOnce() throws {
+    let defaults = try scratchDefaults()
+    StoreQuarantine.quarantine(try store([""]), defaults: defaults)
+
+    XCTAssertFalse(StoreQuarantine.consumeReport(defaults: defaults).isEmpty)
+    XCTAssertTrue(StoreQuarantine.consumeReport(defaults: defaults).isEmpty)
+  }
+
+  /// Une quarantaine qui n'écarte rien ne doit pas EFFACER un rapport pas encore lu : deux
+  /// lancements ratés d'affilée, et le premier — celui qui portait la vraie base — serait perdu.
+  func testReport_isNotErasedByAQuarantineThatMovedNothing() throws {
+    let defaults = try scratchDefaults()
+    StoreQuarantine.quarantine(try store([""]), defaults: defaults)
+
+    StoreQuarantine.quarantine(directory.appendingPathComponent("absent.store"), defaults: defaults)
+
+    XCTAssertEqual(StoreQuarantine.consumeReport(defaults: defaults).count, 1)
+  }
 }

@@ -49,6 +49,9 @@ struct ContentView: View {
   /// relâchement qui tranche entre replier et ouvrir. Sans cette valeur séparée, la sidebar
   /// butait sur son minimum pendant que le curseur continuait.
   @State private var dragWidth: Double?
+  /// Les fichiers écartés par `StoreQuarantine` au lancement, s'il y en a eu (cf. l'alerte).
+  /// Vide 999 fois sur 1000 — c'est un signal de bug, pas une routine.
+  @State private var quarantinedPaths: [String] = []
   @State private var grabberHovered = false
   /// Survol de la sidebar elle-même. État SÉPARÉ de `grabberHovered` (et pas le même drapeau posé
   /// des deux côtés) : les deux zones se touchent, et rien ne garantit que SwiftUI livre la sortie
@@ -58,6 +61,13 @@ struct ContentView: View {
   /// Le mors se montre dès que la souris est quelque part sur la sidebar OU sur la bande qui la
   /// longe : on ne le cherche pas, il est déjà là quand on arrive au bord.
   private var grabberVisible: Bool { grabberHovered || sidebarHovered }
+
+  /// L'alerte se ferme en vidant la liste : c'est ELLE l'état, pas un second booléen à tenir
+  /// synchronisé avec (cf. la règle « avant d'ajouter un `@State`, chercher celui qui porte déjà
+  /// ce comportement »).
+  private var quarantineAlertPresented: Binding<Bool> {
+    Binding(get: { !quarantinedPaths.isEmpty }, set: { if !$0 { quarantinedPaths = [] } })
+  }
 
   /// Ce que le layout affiche vraiment : le drag en cours s'il y en a un, sinon l'état validé.
   private var effectiveWidth: Double {
@@ -154,6 +164,24 @@ struct ContentView: View {
     // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande,
     // donc elle arrive APRÈS la notification et doit venir chercher la sélection elle-même.
     .onAppear(perform: applyPendingSelection)
+    // La base a refusé de s'ouvrir au lancement : le dire, ICI, parce que c'est le premier moment
+    // où une fenêtre existe (la quarantaine, elle, a lieu pendant la construction du container).
+    .onAppear { quarantinedPaths = StoreQuarantine.consumeReport() }
+    .alert("Une base illisible a été mise de côté", isPresented: quarantineAlertPresented) {
+      // Le seul bouton qui fait quelque chose d'utile : montrer les fichiers. Les retrouver à la
+      // main demanderait d'aller dans un dossier que le Finder cache par défaut.
+      Button("Afficher dans le Finder") {
+        NSWorkspace.shared.activateFileViewerSelecting(
+          quarantinedPaths.map { URL(fileURLWithPath: $0) })
+      }
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(
+        "Today n'a pas pu ouvrir sa base de données et a redémarré sur une base vide. "
+          + "RIEN N'A ÉTÉ SUPPRIMÉ : l'ancienne est à côté, sous un nom horodaté.\n\n"
+          + quarantinedPaths.map { ($0 as NSString).lastPathComponent }.joined(separator: "\n")
+          + "\n\nNe ressaisis rien avant d'avoir tenté de la récupérer.")
+    }
     // ⌘Z. Le menu *Édition ▸ Annuler* n'annule pas « ce qui vient d'être fait » dans l'absolu : il
     // envoie `undo:` dans la chaîne des répondeurs, qui aboutit à l'`UndoManager` DE LA FENÊTRE.
     // Poser un `UndoManager` neuf sur le contexte SwiftData — ce qui était fait au démarrage —

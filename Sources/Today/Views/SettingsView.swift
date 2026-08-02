@@ -35,8 +35,6 @@ private struct SettingsPane<Content: View>: View {
 
 private struct GeneralSettingsTab: View {
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
-  @AppStorage(DayCapacity.endOfDayHourKey) private var endOfDayHour = DayCapacity
-    .defaultEndOfDayHour
   @State private var autoCheckUpdates = SparkleUpdater.shared.automaticallyChecksForUpdates
 
   private var version: String {
@@ -54,11 +52,6 @@ private struct GeneralSettingsTab: View {
           }
         }
 
-        Picker("Fin de journée", selection: $endOfDayHour) {
-          ForEach(6...23, id: \.self) { hour in
-            Text("\(hour) h").tag(hour)
-          }
-        }
       }
 
       Section("Mises à jour") {

@@ -19,8 +19,8 @@ BIN=".build/${CONFIG}/${TARGET}"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.14"
-BUILD="13"
+SHORT_VERSION="0.15"
+BUILD="14"
 
 # Reconstruire par-dessus une instance EN COURS lui retire son Info.plist sous les pieds (le
 # `rm -rf` plus bas) : la moindre lecture CFBundle ensuite — AppKit en fait une à chaque réveil de
@@ -41,7 +41,15 @@ rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources" "${APP}/Contents/Frameworks"
 cp "${BIN}" "${APP}/Contents/MacOS/${TARGET}"
 cp "Sources/App.icns" "${APP}/Contents/Resources/App.icns"
-cp -r ".build/arm64-apple-macosx/${CONFIG}/Sparkle.framework" "${APP}/Contents/Frameworks/"
+# `ditto` et PAS `cp -r` : un framework versionné n'est qu'une arborescence de liens symboliques
+# (`Sparkle` → `Versions/Current/Sparkle`, idem Autoupdate, Resources, XPCServices). `cp -r` les
+# SUIT et copie les cibles — mesuré : 3,0 Mo deviennent 8,9 Mo, chaque binaire présent deux fois,
+# et le bundle n'a plus la forme d'un framework versionné. Conséquence : la signature ne se vérifie
+# plus (`codesign --verify --deep --strict` sort en erreur, « bundle format is ambiguous »), or
+# c'est exactement ce sceau que Sparkle compare entre l'app installée et celle qu'il télécharge
+# avant d'installer une mise à jour.
+ditto ".build/arm64-apple-macosx/${CONFIG}/Sparkle.framework" \
+      "${APP}/Contents/Frameworks/Sparkle.framework"
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

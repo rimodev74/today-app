@@ -48,7 +48,7 @@ final class StoreBackupTests: XCTestCase {
   /// **Le test qui compte, et celui qui manquait.** L'empreinte ne doit dépendre QUE des noms et des
   /// types — pas des valeurs par défaut.
   ///
-  /// `SchemaV1Snapshot` décrit la même forme que les modèles vivants (`SchemaCompatibilityTests` le
+  /// `DeployedSchemaSnapshot` décrit la même forme que les modèles vivants (`SchemaCompatibilityTests` le
   /// prouve en relisant l'un par l'autre) mais DÉCLARE ses valeurs par défaut là où les modèles
   /// vivants les posent dans leur `init`. Deux empreintes égales prouvent donc que les défauts n'y
   /// entrent pas.
@@ -61,7 +61,7 @@ final class StoreBackupTests: XCTestCase {
   func testFingerprintIgnoresDefaultValues() {
     XCTAssertEqual(
       StoreBackup.fingerprint(of: schema),
-      StoreBackup.fingerprint(of: Schema(versionedSchema: SchemaV1Snapshot.self)))
+      StoreBackup.fingerprint(of: Schema(versionedSchema: DeployedSchemaSnapshot.self)))
   }
 
   // MARK: Le déclenchement

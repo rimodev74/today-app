@@ -18,21 +18,20 @@ struct ArchivePageView: View {
   /// d'édition : on ne renomme pas une tâche terminée, on la décoche ou on la jette.
   @State private var focus = TaskFocus()
 
-  private var archived: [TaskItem] {
-    SmartList.archive.sort(SmartList.archive.filter(allTasks))
-  }
-
   var body: some View {
-    ScrollView {
+    // Construite UNE fois par rendu, puis distribuée. Avant, `archived` était une propriété
+    // calculée relue six fois par rendu, et chaque lecture refiltrait puis retriait toute la base.
+    let page = ArchivePage(tasks: allTasks)
+    return ScrollView {
       VStack(alignment: .leading, spacing: 0) {
-        header
+        header(page)
 
         Group {
-          if archived.isEmpty {
+          if page.isEmpty {
             Text("Aucune tâche archivée.")
               .foregroundStyle(.tertiary)
           } else {
-            ForEach(archiveMonths(archived)) { month in
+            ForEach(page.months) { month in
               ArchiveMonthSection(
                 month: month,
                 onToggle: { restore($0) },
@@ -51,7 +50,7 @@ struct ArchivePageView: View {
     // relâcher. Un pan par mois, dans l'ordre affiché — aucun n'est repliable ici.
     .taskPageBase(
       focus: $focus,
-      blocks: { archiveMonths(archived).map { .visible($0.tasks) } },
+      blocks: { page.blocks },
       delete: delete,
       // Pas de réordonnancement ici : la page se prononce, elle ne peut pas l'oublier.
       reorder: nil
@@ -63,23 +62,23 @@ struct ArchivePageView: View {
     // Le seul geste irréversible en masse de l'app : il passe par une confirmation, contrairement
     // à la suppression à l'unité (une seule tâche, sous les yeux).
     .alert("Vider les archives ?", isPresented: $confirmingEmpty) {
-      Button("Tout supprimer", role: .destructive) { emptyArchive() }
+      Button("Tout supprimer", role: .destructive) { emptyArchive(page.tasks) }
       Button("Annuler", role: .cancel) {}
     } message: {
-      let plural = archived.count > 1 ? "s" : ""
+      let plural = page.tasks.count > 1 ? "s" : ""
       Text(
-        "\(archived.count) tâche\(plural) archivée\(plural) "
+        "\(page.tasks.count) tâche\(plural) archivée\(plural) "
           + "seront définitivement supprimées. Cette action est irréversible.")
     }
   }
 
-  private var header: some View {
+  private func header(_ page: ArchivePage) -> some View {
     HStack(spacing: 10) {
       PageHeaderIcon(systemImage: SmartList.archive.systemImage, tint: SmartList.archive.color)
       Text(SmartList.archive.label)
         .font(.app(.title).bold())
       Spacer(minLength: 0)
-      if !archived.isEmpty {
+      if !page.isEmpty {
         Button("Vider les archives") { confirmingEmpty = true }
       }
     }
@@ -98,43 +97,16 @@ struct ArchivePageView: View {
     try? modelContext.save()
   }
 
-  private func emptyArchive() {
+  private func emptyArchive(_ tasks: [TaskItem]) {
     focus.dismiss()
     withAnimation(taskInsert) {
-      for task in archived { modelContext.delete(task) }
+      for task in tasks { modelContext.delete(task) }
     }
     try? modelContext.save()
   }
 }
 
 // MARK: - Rendu partagé
-
-/// Un mois d'archives. `id` = le premier jour du mois, qui sert aussi de clé de tri.
-struct ArchiveMonth: Identifiable {
-  let id: Date
-  let tasks: [TaskItem]
-
-  /// « Juillet » dans l'année courante, « Juillet 2025 » sinon — l'année n'apparaît que quand elle
-  /// apporte quelque chose.
-  var label: String {
-    let calendar = Calendar.current
-    let sameYear = calendar.component(.year, from: id) == calendar.component(.year, from: Date())
-    let style = sameYear ? Date.FormatStyle.dateTime.month(.wide) : .dateTime.month(.wide).year()
-    return id.formatted(style).capitalized
-  }
-}
-
-/// Regroupe des tâches archivées par mois de complétion, du plus récent au plus ancien. L'ordre
-/// À L'INTÉRIEUR d'un mois est celui reçu (déjà trié par l'appelant).
-func archiveMonths(_ tasks: [TaskItem]) -> [ArchiveMonth] {
-  let calendar = Calendar.current
-  let grouped = Dictionary(grouping: tasks) { task -> Date in
-    let components = calendar.dateComponents(
-      [.year, .month], from: task.completedAt ?? .distantPast)
-    return calendar.date(from: components) ?? .distantPast
-  }
-  return grouped.keys.sorted(by: >).map { ArchiveMonth(id: $0, tasks: grouped[$0] ?? []) }
-}
 
 /// En-tête de mois + ses lignes. Partagé par la page « Archives » et la section repliable d'une
 /// page de liste : les deux montrent la même chose, elles ne diffèrent que par le périmètre.

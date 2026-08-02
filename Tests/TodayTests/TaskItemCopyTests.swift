@@ -22,7 +22,6 @@ final class TaskItemCopyTests: XCTestCase {
       when: Date(timeIntervalSince1970: 1_000_000),
       isHeader: true
     )
-    task.hasTime = true
     task.deadline = Date(timeIntervalSince1970: 2_000_000)
     task.estimateMinutes = 30
     task.sortIndex = 7
@@ -47,7 +46,6 @@ final class TaskItemCopyTests: XCTestCase {
     XCTAssertEqual(clone.title, source.title)
     XCTAssertEqual(clone.notes, source.notes)
     XCTAssertEqual(clone.when, source.when)
-    XCTAssertEqual(clone.hasTime, source.hasTime)
     XCTAssertEqual(clone.deadline, source.deadline)
     XCTAssertEqual(clone.estimateMinutes, source.estimateMinutes)
     XCTAssertEqual(clone.sortIndex, source.sortIndex)

@@ -41,14 +41,38 @@ enum SidebarSelection: Hashable {
   case pomodoro
 }
 
+/// Les bornes de date d'un filtrage, calculées UNE fois pour toute une liste de tâches.
+///
+/// Sans elles, `scopeMatches` reconstruisait un `Calendar` et le début de demain à CHAQUE tâche —
+/// mesuré à 40 % du coût du filtre sur une page. Elles rendent aussi la date injectable : les
+/// périmètres « aujourd'hui » et « à venir » ne se testaient jusque-là que par rapport à l'heure
+/// réelle de la machine.
+struct DayBounds {
+  let calendar: Calendar
+  let now: Date
+  let startOfTomorrow: Date
+
+  init(now: Date = Date(), calendar: Calendar = .current) {
+    self.calendar = calendar
+    self.now = now
+    let startOfToday = calendar.startOfDay(for: now)
+    // Repli plutôt que force-unwrap : `date(byAdding:)` ne rend `nil` pour aucune date qu'on peut
+    // représenter, mais la garantie n'a pas besoin d'un `!` pour tenir.
+    startOfTomorrow =
+      calendar.date(byAdding: .day, value: 1, to: startOfToday)
+      ?? startOfToday.addingTimeInterval(86_400)
+  }
+}
+
 extension SmartList {
   /// Une tâche appartient-elle à cette liste, indépendamment de son statut isCompleted ?
-  func scopeMatches(_ task: TaskItem) -> Bool {
+  ///
+  /// Les bornes se passent en paramètre pour être calculées une fois par filtrage (cf. `DayBounds`)
+  /// ; le défaut garde l'appel à une tâche isolée lisible.
+  func scopeMatches(_ task: TaskItem, _ bounds: DayBounds = DayBounds()) -> Bool {
     guard !task.isHeader else { return false }
-    let calendar = Calendar.current
-    let startOfTomorrow = calendar.date(
-      byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())
-    )!
+    let calendar = bounds.calendar
+    let startOfTomorrow = bounds.startOfTomorrow
     switch self {
     case .all, .archive: return true
     // Le JOUR même, ni avant ni après. Une tâche datée d'hier et non faite quitte donc
@@ -56,18 +80,18 @@ extension SmartList {
     // pour une tâche libre), d'où on la reprogramme d'un « Quand… » si on la veut encore.
     // Volontairement SANS repêchage des retards : « Aujourd'hui » ne montre que ce qu'on a
     // décidé de faire aujourd'hui, pas l'accumulation des jours précédents.
-    case .today: return task.when.map(calendar.isDateInToday) ?? false
+    case .today: return task.when.map { calendar.isDate($0, inSameDayAs: bounds.now) } ?? false
     case .upcoming: return task.when.map { $0 >= startOfTomorrow } ?? false
     }
   }
 
   /// ponytail: filtrage en mémoire tant que le volume reste petit — passer en #Predicate si lent.
-  func filter(_ all: [TaskItem]) -> [TaskItem] {
+  func filter(_ all: [TaskItem], _ bounds: DayBounds = DayBounds()) -> [TaskItem] {
     switch self {
     case .archive:
       return all.filter { $0.isCompleted && !$0.isHeader }
     default:
-      return all.filter { !$0.isCompleted && scopeMatches($0) }
+      return all.filter { !$0.isCompleted && scopeMatches($0, bounds) }
     }
   }
 
@@ -75,8 +99,8 @@ extension SmartList {
   /// du jour, tâches COCHÉES COMPRISES — elles restent barrées à leur place jusqu'à minuit, où
   /// leur `when` cesse d'être aujourd'hui et les fait sortir d'elles-mêmes. `filter` reste la
   /// version « ce qui reste à faire » (badge de la sidebar).
-  func scoped(_ all: [TaskItem]) -> [TaskItem] {
-    all.filter(scopeMatches)
+  func scoped(_ all: [TaskItem], _ bounds: DayBounds = DayBounds()) -> [TaskItem] {
+    all.filter { scopeMatches($0, bounds) }
   }
 
   /// Ordre d'affichage.
@@ -94,11 +118,15 @@ extension SmartList {
     if self == .archive {
       return tasks.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
     }
+    // Réglage « Descendre en bas de la liste », lu UNE fois. Dans le comparateur, c'était une
+    // interrogation des défauts par COMPARAISON — n log n accès pour une valeur qui ne bouge pas
+    // pendant un tri.
+    let autoSortCompleted = TodoList.autoSortCompletedEnabled
     return tasks.sorted { a, b in
-      // Réglage « Descendre en bas de la liste » : il prime sur l'ordre manuel lui-même — une tâche
-      // cochée descend, où qu'on l'ait posée. Sans `sortIndex` à réécrire ici (cf.
-      // `TodoList.moveToEndOfSection`), la règle s'applique en première clé de tri.
-      if TodoList.autoSortCompletedEnabled, a.isCompleted != b.isCompleted { return b.isCompleted }
+      // Il prime sur l'ordre manuel lui-même — une tâche cochée descend, où qu'on l'ait posée.
+      // Sans `sortIndex` à réécrire ici (cf. `TodoList.moveToEndOfSection`), la règle s'applique
+      // en première clé de tri.
+      if autoSortCompleted, a.isCompleted != b.isCompleted { return b.isCompleted }
       // 0 = jamais posée à la main, donc après toutes celles qui l'ont été.
       let ra = a.smartOrder == 0 ? Int.max : a.smartOrder
       let rb = b.smartOrder == 0 ? Int.max : b.smartOrder

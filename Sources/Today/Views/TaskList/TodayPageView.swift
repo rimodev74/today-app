@@ -34,10 +34,9 @@ struct TodayPageView: View {
   /// Cibles du « Déplacer vers… » : depuis cette page, toutes les listes sont des destinations
   /// possibles (les tâches affichées viennent déjà d'un peu partout).
   @Query private var allLists: [TodoList]
-  @AppStorage(DayCapacity.endOfDayHourKey) private var endOfDayHour = DayCapacity
-    .defaultEndOfDayHour
-  // Le temps restant fond pendant que la page est ouverte : sans re-rendu régulier, la barre
-  // affiche la capacité de l'instant où l'on a ouvert la page, pas celle de maintenant.
+  // Ce que la page appelle « aujourd'hui » ne doit pas être figé à l'ouverture : `startOfToday`
+  // en dépend (la date posée à une tâche créée ici), et le rafraîchissement EventKit aussi. Sans
+  // re-rendu régulier, une page laissée ouverte à travers minuit daterait d'hier.
   @State private var now = Date()
   // `@State` et pas un `let` construit dans le body : le tick change `now`, donc le body se
   // ré-évalue, donc un publisher construit là serait remplacé à chaque minute — `onReceive` se
@@ -78,13 +77,6 @@ struct TodayPageView: View {
     reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
   }
 
-  private func capacity(of tasks: [TaskItem]) -> DayCapacity {
-    // Sans les cochées : elles restent affichées mais ne pèsent plus sur le temps qui reste.
-    DayCapacity(
-      estimates: tasks.filter { !$0.isCompleted }.map(\.estimateMinutes), now: now,
-      endOfDayHour: endOfDayHour)
-  }
-
   var body: some View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `tasks` refiltrait
     // et retriait toute la base — plusieurs fois par image.
@@ -108,9 +100,6 @@ struct TodayPageView: View {
         Group {
           eventsSection
 
-          // ponytail: barre de capacité masquée à la demande de Ryan (« je jugerai plus tard ») —
-          // le code (`capacityBar`, `capacity`, `planned`/`remaining`) reste intact pour la
-          // rebrancher d'une ligne plutôt que de la reconstruire si elle revient.
           ForEach(rows) { task in
             taskRow(
               for: task, offset: offsets[task.persistentModelID] ?? .zero, draggable: true,
@@ -173,44 +162,6 @@ struct TodayPageView: View {
     // de la colonne des cases à cocher (cf. `ListPageView.inboxHeader`, même règle).
     .padding(.leading, rowInset)
     .padding(.bottom, 14)
-  }
-
-  /// La barre de réalité. `ProgressView` linéaire plutôt qu'un tracé maison : teinte, hauteur et
-  /// contraste suivent le système (et le mode sombre) sans une ligne de plus.
-  private func capacityBar(of tasks: [TaskItem]) -> some View {
-    let capacity = capacity(of: tasks)
-    return VStack(alignment: .leading, spacing: 6) {
-      ProgressView(value: capacity.fill)
-        .tint(capacity.isOverbooked ? .red : .accentColor)
-
-      HStack(spacing: 6) {
-        Text(planned(capacity))
-          .foregroundStyle(capacity.isOverbooked ? Color.red : .secondary)
-        Text("·").foregroundStyle(.tertiary)
-        Text(remaining(capacity))
-          .foregroundStyle(.secondary)
-        if capacity.unestimatedCount > 0 {
-          Text("·").foregroundStyle(.tertiary)
-          Text("\(capacity.unestimatedCount) sans durée")
-            .foregroundStyle(.tertiary)
-        }
-      }
-      .font(.app(.callout))
-    }
-  }
-
-  private func planned(_ capacity: DayCapacity) -> String {
-    guard let total = Estimate.label(capacity.plannedMinutes) else { return "Rien d'estimé" }
-    guard capacity.isOverbooked else { return "\(total) planifiées" }
-    // Le chiffre qui compte est le dépassement, pas le total : c'est lui qui appelle une décision.
-    return "\(total) planifiées, \(Estimate.label(capacity.overflowMinutes) ?? "") de trop"
-  }
-
-  private func remaining(_ capacity: DayCapacity) -> String {
-    guard let left = Estimate.label(capacity.availableMinutes) else {
-      return "journée finie (\(endOfDayHour) h)"
-    }
-    return "\(left) avant \(endOfDayHour) h"
   }
 
   // MARK: Lignes de tâche

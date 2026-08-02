@@ -19,7 +19,7 @@ final class SchemaCompatibilityTests: XCTestCase {
       .appendingPathComponent("schema-compat-\(UUID().uuidString).store")
   }
 
-  /// Écrit un store à la forme figée (cf. `SchemaV1Snapshot`), le rouvre par le chemin de l'app,
+  /// Écrit un store à la forme figée (cf. `DeployedSchemaSnapshot`), le rouvre par le chemin de l'app,
   /// et vérifie que TOUT se relit : les quatre entités et les relations qui les lient.
   @MainActor
   func testStoreWrittenAtV1ShapeStillOpensThroughTheApp() throws {
@@ -27,27 +27,27 @@ final class SchemaCompatibilityTests: XCTestCase {
 
     do {
       let frozen = try ModelContainer(
-        for: Schema(versionedSchema: SchemaV1Snapshot.self),
+        for: Schema(versionedSchema: DeployedSchemaSnapshot.self),
         configurations: ModelConfiguration(url: url))
       let context = ModelContext(frozen)
 
-      let project = SchemaV1Snapshot.Project()
+      let project = DeployedSchemaSnapshot.Project()
       project.title = "Maison"
       context.insert(project)
 
-      let list = SchemaV1Snapshot.TodoList()
+      let list = DeployedSchemaSnapshot.TodoList()
       list.title = "Courses"
       list.project = project
       context.insert(list)
 
-      let task = SchemaV1Snapshot.TaskItem()
+      let task = DeployedSchemaSnapshot.TaskItem()
       task.title = "Acheter du pain"
       task.list = list
       task.when = Date(timeIntervalSince1970: 1_800_000_000)
       task.priorityRaw = 2
       context.insert(task)
 
-      let subtask = SchemaV1Snapshot.Subtask()
+      let subtask = DeployedSchemaSnapshot.Subtask()
       subtask.title = "Baguette"
       subtask.task = task
       context.insert(subtask)
@@ -87,13 +87,74 @@ final class SchemaCompatibilityTests: XCTestCase {
   /// Une base VIDE à la forme figée doit s'ouvrir aussi : c'est le cas du premier lancement après
   /// une mise à jour, où rien n'a encore été écrit mais où le fichier porte déjà sa version.
   @MainActor
-  func testEmptyV1StoreOpensThroughTheApp() throws {
+  func testEmptyStoreAtDeployedShapeOpensThroughTheApp() throws {
     let url = temporaryStoreURL()
     _ = try ModelContainer(
-      for: Schema(versionedSchema: SchemaV1Snapshot.self),
+      for: Schema(versionedSchema: DeployedSchemaSnapshot.self),
       configurations: ModelConfiguration(url: url))
 
     let container = try TodayApp.openStore(ModelConfiguration(url: url))
     XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).count, 0)
+  }
+
+  // MARK: La migration elle-même
+
+  /// Le test que la 2.0.0 a rendu nécessaire : une base écrite à l'ANCIENNE forme (1.0.0, avec
+  /// `hasTime`) doit traverser `TodayMigrationPlan` sans rien perdre.
+  ///
+  /// C'est la seule chose qui distingue une migration déclarée d'une colonne qui disparaît en
+  /// silence — les deux compilent, les deux ouvrent le store sans erreur. Retirer l'étape
+  /// `.lightweight` du plan vire CE test au rouge, et rien d'autre.
+  @MainActor
+  func testStoreWrittenAtV1ShapeMigratesWithoutLosingAnything() throws {
+    let url = temporaryStoreURL()
+
+    do {
+      let v1 = try ModelContainer(
+        for: Schema(versionedSchema: SchemaV1.self),
+        configurations: ModelConfiguration(url: url))
+      let context = ModelContext(v1)
+
+      let project = SchemaV1.Project()
+      project.title = "Maison"
+      context.insert(project)
+
+      let list = SchemaV1.TodoList()
+      list.title = "Courses"
+      list.project = project
+      context.insert(list)
+
+      let task = SchemaV1.TaskItem()
+      task.title = "Acheter du pain"
+      task.list = list
+      task.when = Date(timeIntervalSince1970: 1_800_000_000)
+      task.priorityRaw = 2
+      task.estimateMinutes = 45
+      // Le champ que la 2.0.0 retire : posé à vrai pour que sa disparition soit le seul écart
+      // possible entre les deux formes — tout le reste doit arriver intact de l'autre côté.
+      task.hasTime = true
+      context.insert(task)
+
+      let subtask = SchemaV1.Subtask()
+      subtask.title = "Baguette"
+      subtask.task = task
+      context.insert(subtask)
+
+      try context.save()
+    }
+
+    let container = try TodayApp.openStore(ModelConfiguration(url: url))
+    let context = ModelContext(container)
+
+    let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+    XCTAssertEqual(tasks.map(\.title), ["Acheter du pain"])
+
+    // Ce qui devait SURVIVRE au retrait de `hasTime` — scalaires et relations.
+    XCTAssertEqual(tasks.first?.when, Date(timeIntervalSince1970: 1_800_000_000))
+    XCTAssertEqual(tasks.first?.priority, .medium)
+    XCTAssertEqual(tasks.first?.estimateMinutes, 45)
+    XCTAssertEqual(tasks.first?.list?.title, "Courses")
+    XCTAssertEqual(tasks.first?.list?.project?.title, "Maison")
+    XCTAssertEqual(tasks.first?.subtasks.map(\.title), ["Baguette"])
   }
 }

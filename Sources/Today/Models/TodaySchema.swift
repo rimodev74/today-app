@@ -1,3 +1,4 @@
+import Foundation
 import SwiftData
 
 /// Le schéma COURANT : ce que le code décrit *maintenant*, estampillé d'un numéro de version.
@@ -25,10 +26,90 @@ import SwiftData
 /// Tant que ce test est vert, l'estampille 1.0.0 est légitime. Rouge = elle ment, ne pas lancer
 /// l'app avant d'avoir suivi la marche ci-dessous.
 enum CurrentSchema: VersionedSchema {
+  static let versionIdentifier = Schema.Version(2, 0, 0)
+
+  static var models: [any PersistentModel.Type] {
+    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+}
+
+/// **Forme 1.0.0, FIGÉE — ne se modifie plus jamais.** C'est ce que contiennent les bases écrites
+/// avant le 2 août 2026, et la seule description qui en reste : les modèles vivants, eux, ont
+/// changé.
+///
+/// Elle ne diffère de la forme courante que par `TaskItem.hasTime`, un booléen que rien n'a jamais
+/// mis à vrai (l'app ne pose que des jours, jamais d'heures). Le retirer est un changement CASSANT
+/// au sens de SwiftData — d'où cette version et l'étape ci-dessous, sans quoi la colonne serait
+/// partie en silence, ce que `SchemaCompatibilityTests` aurait viré au rouge.
+///
+/// Les classes sont IMBRIQUÉES dans l'enum, donc indépendantes du code vivant : modifier `TaskItem`
+/// ne les touche pas, et c'est ce qui leur permet de continuer à décrire l'ancienne forme.
+/// Vérifié : imbriquer un `@Model` ne change pas l'entité de store qu'il décrit — une base écrite
+/// par les modèles de premier niveau s'y relit sans perte, relations comprises.
+enum SchemaV1: VersionedSchema {
   static let versionIdentifier = Schema.Version(1, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+
+  @Model final class Project {
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var isCollapsed: Bool = false
+    @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
+
+    init() {}
+  }
+
+  @Model final class TodoList {
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var scheduledWhen: Date?
+    var priorityRaw: Int = 0
+    var project: Project?
+    var isInbox: Bool = false
+    @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
+
+    init() {}
+  }
+
+  @Model final class TaskItem {
+    var title: String = ""
+    var notes: Data = Data()
+    var isCompleted: Bool = false
+    var isHeader: Bool = false
+    var completedAt: Date?
+    var sortIndex: Int = 0
+    var smartOrder: Int = 0
+    var when: Date?
+    /// LE champ retiré en 2.0.0. Il reste ici parce qu'il est sur les disques.
+    var hasTime: Bool = false
+    var deadline: Date?
+    var priorityRaw: Int = 0
+    var estimateMinutes: Int = 0
+    var createdAt: Date = Date()
+    var reminderIdentifier: String?
+    var list: TodoList?
+    var headerColorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
+
+    init() {}
+  }
+
+  @Model final class Subtask {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var isDone: Bool = false
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var task: TaskItem?
+
+    init() {}
   }
 }
 
@@ -58,6 +139,12 @@ enum CurrentSchema: VersionedSchema {
 /// Le test, lui, ne change jamais de nature : il vérifie toujours qu'une base au format déployé
 /// s'ouvre par `TodayApp.openStore`. C'est ce qui rend l'ajout d'une version mécanique.
 enum TodayMigrationPlan: SchemaMigrationPlan {
-  static var schemas: [any VersionedSchema.Type] { [CurrentSchema.self] }
-  static var stages: [MigrationStage] { [] }
+  static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, CurrentSchema.self] }
+
+  /// `.lightweight` et pas `.custom` : la 2.0.0 ne fait que RETIRER `hasTime`, elle ne transporte
+  /// aucune valeur d'un champ vers un autre. Une étape sur mesure ne servirait qu'à recopier ce
+  /// booléen quelque part — or il vaut faux partout, c'est toute la raison de sa suppression.
+  static var stages: [MigrationStage] {
+    [.lightweight(fromVersion: SchemaV1.self, toVersion: CurrentSchema.self)]
+  }
 }
