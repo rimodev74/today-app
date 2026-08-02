@@ -3,7 +3,7 @@
 **Lire `CLAUDE.md` d'abord** (architecture, pièges, conventions). Ce fichier-ci ne dit que ce qui
 reste à faire et *pourquoi* — il ne répète pas ce qui y est déjà écrit.
 
-Repères au moment d'écrire : commit `0a623ad`, **125 tests verts**, cliquet de concurrence **inchangé**
+Repères au moment d'écrire : commit `27eb929`, **140 tests verts**, cliquet de concurrence **inchangé**
 (que des chemins de clé SwiftData, cf. `Package.swift`), `TaskListView.swift` à 2 764 lignes.
 
 ---
@@ -77,38 +77,37 @@ l'aveugle faute de savoir où sont les lignes.
 Le glisser, lui, a été écrit puis retiré (`6ad6b41`). Ce qu'il faut en retenir est dans la section
 « déjà essayé et rejeté ».
 
-### Ce qui reste, et ce que ça demande vraiment
+### La cause de la saccade est levée (`27eb929`)
 
-Rendre ces pages réordonnables demande de leur donner **une séquence de lignes STABLE**, pas de
-régler une animation. Aujourd'hui `tasks` est recalculé (portée + tri, et pour « Aujourd'hui » un
-regroupement de toute la réserve) à CHAQUE évaluation du `body` — donc à chaque image d'un geste.
-Une page de liste, elle, lit `list.orderedTasks`, un ordre déjà écrit.
+`TodayPage` et `AllTasksPage` (dans `Models/`) disent quelles lignes la page montre et dans quel
+ordre, à partir des tâches qu'on leur donne. La vue en construit **une par rendu** et la distribue,
+au lieu de refiltrer et retrier toute la base à chaque lecture.
 
-Deux directions, à trancher avant d'écrire :
+Le glisser redevient donc écrivable. Il manque encore, et c'est tout :
 
-1. **figer les lignes pendant le geste** — la page garde un instantané de sa séquence à
-   l'empoignade et ne la recalcule qu'au relâchement. Le plus petit changement, et il n'engage rien
-   de plus ;
-2. **stocker l'ordre** — c'est `TaskItem.smartOrder`, écrit puis retiré avec le glisser. À reprendre
-   tel quel dans l'historique (`cbdb06c`) : l'ajout était additif, le tri écrit et testé.
+1. **figer la séquence pendant le geste** — la page garde l'instantané pris à l'empoignade et ne le
+   reconstruit qu'au relâchement. `TaskPageReorder` gèle déjà les CADRES de la même façon, pour la
+   même raison ;
+2. **stocker l'ordre** — `TaskItem.smartOrder`, écrit puis retiré avec le glisser. À reprendre tel
+   quel dans l'historique (`cbdb06c`) : l'ajout était additif, le tri écrit et testé.
 
-Le premier point est la vraie cause de la saccade. Le second est ce qui fait tenir l'ordre entre
-deux lancements. Les deux sont nécessaires, mais ils ne se justifient pas l'un l'autre.
+Le geste lui-même est dans `47dfdd5`, réutilisable sans modification.
 
 ---
 
-## ③ Aucun test ne couvre une vue
+## ③ Les premiers tests de page — FAIT (`27eb929`)
 
-125 tests, tous sur des modèles et services. **Zéro sur une page.** `TaskPageRowsTests` couvre la
-RÈGLE d'aplatissement (« un pan replié ne fournit aucune ligne »), pas ce qu'une page en fait.
+`TodayPageTests` et `AllTasksPageTests` posent enfin la question qu'on ne posait qu'à l'œil :
+*avec ces tâches-là, que montre la page, et dans quel ordre ?* Ce qu'ils tiennent :
 
-Une page peut donc encore perdre ⌫ sans qu'aucun test ne rougisse. Ce qui est enfin adressable
-depuis ① : *quelles lignes cette page présente-t-elle, dans quel ordre, après tel filtre ?* — la
-réponse est une valeur (`displayedBlocks` / `displayedSections`), plus un rendu.
+- une tâche du jour QUITTE sa liste et son projet — sinon la même ligne se sélectionnerait à deux
+  endroits ;
+- une tâche en retard n'est repêchée nulle part ;
+- un dépliant fermé n'offre aucune ligne au clavier ;
+- les listes d'un projet ne fabriquent pas un second dépliant.
 
-Ce qui manque pour y arriver : ces propriétés sont `private` dans des `struct: View` qui tiennent
-des `@Query`. Les rendre interrogeables demande de sortir la construction des pans de la vue, comme
-`Reorder` et `TaskFocus` l'ont été. C'est le même mouvement, pas un mécanisme de test à inventer.
+Ce qui reste sans test : les pages « À venir » et « Archives », dont le regroupement vit encore dans
+la vue (`agenda`, `archiveMonths`). Même mouvement à faire, plus petit.
 
 ---
 
@@ -156,7 +155,7 @@ des `@Query`. Les rendre interrogeables demande de sortir la construction des pa
 
 ## Invariants à ne pas casser
 
-- **`swift test` : 125 tests, tous verts.**
+- **`swift test` : 140 tests, tous verts.**
 - **Cliquet de concurrence : exactement 37 diagnostics, tous « does not conform to Sendable » sur des
   chemins de clé.** Tout diagnostic d'une AUTRE nature est une régression d'isolation à corriger
   sur-le-champ, pas à ajouter au décompte.
@@ -186,13 +185,9 @@ des `@Query`. Les rendre interrogeables demande de sortir la construction des pa
 
 ## Ordre recommandé
 
-1. **Essayer « À venir » et « Archives » à la souris.** Elles viennent de recevoir le socle et n'ont
-   été vérifiées qu'au compilateur : sélection, ⌫, ↑/↓, clic dans le vide, **dans les deux thèmes**.
-2. **Le refacto qui débloque le glisser** : donner aux pages intelligentes une séquence de lignes
-   stable (cf. ②). C'est lui qui conditionne tout le reste, et c'est le seul point où le projet
-   s'écarte encore de « une base unique, puis des contraintes au cas par cas ».
-3. **③** les premiers tests de page, qui deviennent écrivables dans le même mouvement : sortir la
-   construction des pans de la vue, c'est à la fois ce que le glisser demande et ce qu'un test
-   demande.
-
-Le 2 et le 3 sont le même travail vu de deux côtés. Les faire ensemble, pas l'un après l'autre.
+1. **Remettre le glisser** sur « Aujourd'hui » puis « Tâches » : figer la séquence pendant le geste,
+   reprendre `smartOrder` et le geste de `47dfdd5`. La cause de la saccade est levée, plus rien ne
+   bloque.
+2. **Sortir le regroupement de « À venir » et « Archives »** de leurs vues, comme les deux autres —
+   et leurs tests viennent avec.
+3. Le reste est dans « Reporté délibérément » : rien qui presse.
