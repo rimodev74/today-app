@@ -277,14 +277,21 @@ struct TodayPageView: View {
 
   /// Relâchement : l'ordre affiché devient l'ordre écrit.
   ///
-  /// Aucune animation, et c'est le point : pendant le glissement, chaque ligne est DÉJÀ à la place
-  /// qu'elle occupera. Écrire l'ordre et remettre les décalages à zéro dans la même passe fait
-  /// coïncider l'affiché et le réel sans un seul saut — c'est cette continuité, pas une courbe, qui
-  /// rend le dépôt propre.
+  /// **Une seule transaction pour les deux**, comme `ListPageView.endDrag`. Séparés, ils se
+  /// contredisent : l'ordre écrit déplace la rangée à sa nouvelle place INSTANTANÉMENT, pendant que
+  /// son décalage, lui, revient à zéro EN S'ANIMANT — depuis l'ancienne place. La rangée part donc
+  /// dans la mauvaise direction avant de revenir.
+  ///
+  /// Ensemble, il ne se passe rien à l'écran : pendant le glissement, chaque ligne était déjà à la
+  /// place qu'elle occupe maintenant. C'est cette continuité, pas la courbe, qui rend le dépôt net.
+  ///
+  /// Le plan se lit AVANT de désarmer : il dépend de l'état du geste.
   private func dropDraggedTask() {
-    defer { reorder.end() }
-    guard let ordered = reorder.dropped() else { return }
-    TaskItem.stampSmartOrder(ordered)
+    let ordered = reorder.dropped()
+    withAnimation(.snappy(duration: 0.22)) {
+      if let ordered { TaskItem.stampSmartOrder(ordered) }
+      reorder.end()
+    }
     try? modelContext.save()
   }
 
