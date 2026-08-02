@@ -46,9 +46,10 @@ struct AllTasksPageView: View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `sections`
     // refiltrait et retriait toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
-    // La séquence AFFICHÉE, toutes sections confondues : c'est elle que le glissement parcourt, et
-    // c'est pour ça qu'une tâche peut passer d'un dépliant à l'autre. Figée pendant le geste.
-    let rows = reorder.rows(live: page.blocks(isExpanded: isExpanded).displayedRows)
+    // La séquence affichée, toutes sections confondues : c'est elle que le glissement parcourt, et
+    // c'est pour ça qu'une tâche peut passer d'un dépliant à l'autre. Le geste en fige sa propre
+    // copie à l'empoignade (cf. `TaskPageReorder`) ; ce qui est RENDU reste vivant.
+    let rows = page.blocks(isExpanded: isExpanded).displayedRows
     let offsets = reorder.offsets()
     return ScrollView {
       VStack(alignment: .leading, spacing: 0) {

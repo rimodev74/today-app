@@ -25,13 +25,16 @@ struct TaskPageReorder {
   private(set) var dragging: PersistentIdentifier?
   /// Translation du geste en cours, depuis l'empoignade.
   private(set) var translation: CGSize = .zero
-  /// La séquence de lignes FIGÉE à l'empoignade.
+  /// La séquence de lignes FIGÉE à l'empoignade, pour le CALCUL.
   ///
   /// Une vue intelligente ne stocke pas son ordre : elle le recalcule (filtre, tri, regroupement) à
-  /// chaque rendu, donc à chaque image du geste. Repartir de cette séquence-là en cours de route,
-  /// c'est risquer que les cadres mesurés, les décalages calculés et les rangées affichées parlent
-  /// de trois listes différentes. Ici les trois parlent de celle-ci, du premier pixel au
-  /// relâchement — exactement comme les CADRES sont gelés, et pour la même raison.
+  /// chaque rendu, donc à chaque image du geste. Le calcul s'appuie donc sur cette copie, prise une
+  /// fois, et pas sur une liste qui pourrait changer sous lui — exactement comme les CADRES sont
+  /// gelés, et pour la même raison.
+  ///
+  /// Ce que la page RÉAFFICHE, en revanche, reste sa séquence vivante : rendre celle-ci pendant le
+  /// geste puis rebasculer sur celle-là au relâchement ferait deux mouvements simultanés, et la
+  /// rangée déposée partirait à l'opposé avant de revenir.
   private(set) var rows: [TaskItem] = []
 
   init() {}
@@ -80,9 +83,6 @@ struct TaskPageReorder {
     translation = .zero
     rows = []
   }
-
-  /// Ce que la page doit RENDRE : la séquence figée pendant le geste, la vivante sinon.
-  func rows(live: [TaskItem]) -> [TaskItem] { isDragging ? rows : live }
 
   /// La mise en page du glissement dans `rows`, l'ordre affiché. `nil` hors glissement, ou tant que
   /// la ligne tirée n'est pas mesurée.

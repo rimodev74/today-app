@@ -89,10 +89,15 @@ struct TodayPageView: View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `tasks` refiltrait
     // et retriait toute la base — plusieurs fois par image.
     let page = TodayPage.build(from: allTasks)
-    // Pendant un glissement, on rend la séquence FIGÉE à l'empoignade et pas celle du moment : les
-    // cadres mesurés, les décalages calculés et les rangées affichées parlent alors tous de la même
-    // liste, du premier pixel au relâchement.
-    let rows = reorder.rows(live: page.tasks)
+    // La séquence VIVANTE, comme sur les autres pages. Elle ne bouge pas d'elle-même pendant un
+    // geste (rien n'est écrit avant le relâchement), et c'est ce qui compte : rendre une séquence
+    // figée puis rebasculer sur la vivante au lâcher faisait DEUX mouvements en même temps — le
+    // `ForEach` réordonnait ses identités pendant que les décalages revenaient à zéro. La rangée
+    // partait à l'opposé avant de revenir se poser.
+    //
+    // Le geste, lui, garde bien sa copie figée pour son calcul (cf. `TaskPageReorder`) : ce qui est
+    // rendu et ce qui est calculé n'ont pas les mêmes contraintes.
+    let rows = page.tasks
     // Calculés UNE fois et distribués aux rangées : les interroger par ligne referait le même
     // balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
     let offsets = reorder.offsets()

@@ -45,16 +45,16 @@ final class TaskPageReorderTests: XCTestCase {
       reorder.frames.count, before.count, "une mesure en cours de geste doit être ignorée")
   }
 
-  /// **Le gel de la séquence.** Une vue intelligente recalcule ses lignes à chaque rendu. Si le
-  /// geste suivait ce recalcul, les cadres mesurés et les rangées affichées parleraient de deux
-  /// listes différentes.
+  /// **Le gel de la séquence.** Une vue intelligente recalcule ses lignes à chaque rendu ; le
+  /// calcul du geste, lui, s'appuie sur la copie prise à l'empoignade — pas sur une liste qui
+  /// pourrait changer sous lui.
   func testTheSequenceIsFrozenAtGrab() {
     let rows = rows()
     var reorder = armed(rows, grabbing: 0)
 
-    XCTAssertEqual(reorder.rows(live: []).map(\.title), ["a", "b", "c"])
+    XCTAssertEqual(reorder.rows.map(\.title), ["a", "b", "c"])
     reorder.end()
-    XCTAssertEqual(reorder.rows(live: []).map(\.title), [], "hors geste, c'est la liste vivante")
+    XCTAssertTrue(reorder.rows.isEmpty, "hors geste, il n'y a rien à figer")
   }
 
   // MARK: Où la ligne se pose
