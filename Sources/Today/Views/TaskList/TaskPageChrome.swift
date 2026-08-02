@@ -128,6 +128,22 @@ extension View {
   func taskRowInsertion() -> some View {
     transition(.scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
   }
+
+  /// La pilule lavande d'une ligne sélectionnée, pour les rangées qui ne sont pas des `TaskRow`
+  /// (« À venir », « Archives », qui ont leur propre rendu).
+  ///
+  /// Le double retrait est volontaire : la pilule déborde de `rowInset` de chaque côté, comme dans
+  /// une page de liste, mais la géométrie EXTÉRIEURE de la rangée ne bouge pas d'un point — sans
+  /// quoi ajouter la sélection décalerait toute la page de 10 pt vers la droite.
+  func taskRowSelection(_ isSelected: Bool) -> some View {
+    padding(.horizontal, rowInset)
+      .background(
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(thingsSelectionFill)
+          .opacity(isSelected ? 1 : 0)
+      )
+      .padding(.horizontal, -rowInset)
+  }
 }
 
 // MARK: - Où sont les lignes

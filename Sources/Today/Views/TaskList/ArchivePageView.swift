@@ -14,6 +14,9 @@ struct ArchivePageView: View {
   @Environment(RemindersService.self) private var remindersService
   @Query private var allTasks: [TaskItem]
   @State private var confirmingEmpty = false
+  /// La sélection, comme sur toute autre page de tâches (cf. `TaskFocus`). Cette page n'a pas
+  /// d'édition : on ne renomme pas une tâche terminée, on la décoche ou on la jette.
+  @State private var focus = TaskFocus()
 
   private var archived: [TaskItem] {
     SmartList.archive.sort(SmartList.archive.filter(allTasks))
@@ -33,7 +36,8 @@ struct ArchivePageView: View {
               ArchiveMonthSection(
                 month: month,
                 onToggle: { restore($0) },
-                onDelete: { delete($0) }
+                onDelete: { delete($0) },
+                focus: $focus
               )
             }
           }
@@ -43,6 +47,13 @@ struct ArchivePageView: View {
       .padding(.horizontal, gutter)
       .padding(.top, 30)
     }
+    // Le socle commun : ⌫ pour jeter la sélection, ↑/↓ pour la déplacer, clic dans le vide pour la
+    // relâcher. Un pan par mois, dans l'ordre affiché — aucun n'est repliable ici.
+    .taskPageBase(
+      focus: $focus,
+      blocks: { archiveMonths(archived).map { .visible($0.tasks) } },
+      delete: delete
+    )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
@@ -80,11 +91,13 @@ struct ArchivePageView: View {
   }
 
   private func delete(_ task: TaskItem) {
+    focus.forget(task)
     withAnimation(taskInsert) { modelContext.delete(task) }
     try? modelContext.save()
   }
 
   private func emptyArchive() {
+    focus.dismiss()
     withAnimation(taskInsert) {
       for task in archived { modelContext.delete(task) }
     }
@@ -127,6 +140,11 @@ struct ArchiveMonthSection: View {
   let month: ArchiveMonth
   var onToggle: (TaskItem) -> Void
   var onDelete: (TaskItem) -> Void
+  /// Sélection — seulement sur la page « Archives ». La section repliable d'une page de liste rend
+  /// les mêmes lignes mais n'en a pas : sa page a déjà sa propre sélection, et surtout ses propres
+  /// cadres de lignes. Publier ceux des archives dans le socle y ferait relâcher la sélection au
+  /// premier clic sur une tâche vivante (elle n'est dans aucun cadre d'archive).
+  var focus: Binding<TaskFocus>? = nil
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -137,7 +155,21 @@ struct ArchiveMonthSection: View {
         .padding(.top, 6)
 
       ForEach(month.tasks) { task in
-        ArchiveRow(task: task, onToggle: { onToggle(task) }, onDelete: { onDelete(task) })
+        if let focus {
+          ArchiveRow(
+            task: task, isSelected: focus.wrappedValue.isSelected(task),
+            onToggle: { onToggle(task) }, onDelete: { onDelete(task) }
+          )
+          .rowPressGesture(
+            isSelected: focus.wrappedValue.isSelected(task),
+            isEditing: false,
+            onSelect: { withAnimation(taskSelectFade) { focus.wrappedValue.select(task) } },
+            onEdit: {}
+          )
+          .measureTaskRow(task)
+        } else {
+          ArchiveRow(task: task, onToggle: { onToggle(task) }, onDelete: { onDelete(task) })
+        }
       }
       .padding(.top, 8)
     }
@@ -149,6 +181,7 @@ struct ArchiveMonthSection: View {
 /// distingue plus rien et alourdit la lecture ; la case cochée et la date suffisent.
 struct ArchiveRow: View {
   @Bindable var task: TaskItem
+  var isSelected: Bool = false
   var onToggle: () -> Void
   var onDelete: () -> Void
 
@@ -176,6 +209,7 @@ struct ArchiveRow: View {
       Spacer(minLength: 0)
     }
     .padding(.vertical, 4)
+    .taskRowSelection(isSelected)
     .contentShape(Rectangle())
     .contextMenu {
       Button("Décocher", action: onToggle)

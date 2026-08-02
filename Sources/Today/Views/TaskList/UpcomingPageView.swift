@@ -7,13 +7,21 @@ import SwiftUI
 /// (plage fixe du mois) ne laisse apparaître que les jours qui contiennent réellement quelque
 /// chose.
 ///
-/// ponytail: page en lecture + coche seulement, pas de création ni de glisser-déposer — c'est un
-/// aperçu groupé par date, pas une liste à ordre manuel (cf. `ListPageView` pour ça).
+/// Elle a le socle commun des pages de tâches — sélection, ⌫, ↑/↓, clic dans le vide — sur ses
+/// seules tâches : un événement ou un rappel Apple ne nous appartient pas, il ne se sélectionne
+/// donc pas.
+///
+/// ponytail: ni création ni ordre manuel — c'est un aperçu groupé par date, pas une liste
+/// (cf. `ListPageView` pour ça).
 struct UpcomingPageView: View {
   @Binding var searchPresented: Bool
 
   @Environment(RemindersService.self) private var remindersService
+  @Environment(\.modelContext) private var modelContext
   @Query private var allTasks: [TaskItem]
+  /// La sélection, comme sur toute autre page de tâches (cf. `TaskFocus`). Pas d'édition ici : la
+  /// page est un aperçu par date, on y coche et on y supprime — renommer se fait dans la liste.
+  @State private var focus = TaskFocus()
 
   /// Horizon de chargement EventKit — au-delà, on arrête d'interroger Calendrier/Rappels.
   /// ponytail: plafond simple ; à agrandir/paginer si quelqu'un plie réellement 6 mois à l'avance.
@@ -48,12 +56,16 @@ struct UpcomingPageView: View {
 
         Group {
           ForEach(agenda.nearDays) { group in
-            DaySection(group: group, onToggleTask: toggle, onToggleReminder: completeReminder)
+            DaySection(
+              group: group, focus: $focus, onToggleTask: toggle,
+              onToggleReminder: completeReminder)
           }
           ForEach(agenda.monthBands) { band in
             MonthBandHeader(name: band.name, rangeLabel: band.rangeLabel)
             ForEach(band.days) { group in
-              DaySection(group: group, onToggleTask: toggle, onToggleReminder: completeReminder)
+              DaySection(
+                group: group, focus: $focus, onToggleTask: toggle,
+                onToggleReminder: completeReminder)
             }
           }
         }
@@ -62,6 +74,10 @@ struct UpcomingPageView: View {
       .padding(.horizontal, gutter)
       .padding(.top, 30)
     }
+    // Le socle commun : ⌫, ↑/↓, clic dans le vide. Un pan par jour, dans l'ordre affiché — les
+    // rappels et événements Apple n'en font pas partie, ils ne se sélectionnent pas (ils ne nous
+    // appartiennent pas : ⌫ ne peut rien en faire).
+    .taskPageBase(focus: $focus, blocks: { agenda.taskBlocks }, delete: delete)
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
     }
@@ -91,6 +107,12 @@ struct UpcomingPageView: View {
     let start = tomorrow
     let end = Calendar.current.date(byAdding: .day, value: Self.horizonDays, to: start) ?? start
     await remindersService.refreshUpcoming(from: start, to: end)
+  }
+
+  private func delete(_ task: TaskItem) {
+    focus.forget(task)
+    withAnimation(taskInsert) { modelContext.delete(task) }
+    try? modelContext.save()
   }
 
   private func toggle(_ task: TaskItem) {
@@ -203,6 +225,19 @@ struct UpcomingPageView: View {
 private struct Agenda {
   let nearDays: [DayGroup]
   let monthBands: [MonthBand]
+
+  /// Ce que la page affiche, pan par pan, dans l'ordre du rendu : les jours proches puis ceux des
+  /// bandeaux de mois. Seules les TÂCHES y entrent — un événement ou un rappel Apple n'est pas à
+  /// nous, la sélection ne le désigne pas et ⌫ n'aurait rien à en faire.
+  var taskBlocks: [TaskPageBlock] {
+    (nearDays + monthBands.flatMap(\.days)).map { day in
+      .visible(
+        day.items.compactMap {
+          if case .task(let task) = $0 { return task }
+          return nil
+        })
+    }
+  }
 }
 
 private struct MonthBand: Identifiable {
@@ -271,6 +306,7 @@ private enum AgendaItem: Identifiable {
 /// proche uniquement, cf. `UpcomingPageView.agenda`).
 private struct DaySection: View {
   let group: DayGroup
+  @Binding var focus: TaskFocus
   var onToggleTask: (TaskItem) -> Void
   var onToggleReminder: (EKReminder) -> Void
 
@@ -286,7 +322,16 @@ private struct DaySection: View {
   @ViewBuilder private func row(for item: AgendaItem) -> some View {
     switch item {
     case .task(let task):
-      UpcomingTaskRow(task: task, onToggle: { onToggleTask(task) })
+      UpcomingTaskRow(
+        task: task, isSelected: focus.isSelected(task), onToggle: { onToggleTask(task) }
+      )
+      .rowPressGesture(
+        isSelected: focus.isSelected(task),
+        isEditing: false,
+        onSelect: { withAnimation(taskSelectFade) { focus.select(task) } },
+        onEdit: {}
+      )
+      .measureTaskRow(task)
     case .event(let event):
       EventRow(event: event)
     case .reminder(let reminder):
@@ -346,6 +391,7 @@ private struct MonthBandHeader: View {
 /// Pas de contrôle de durée (contrairement à `TodayRow`) : hors sujet pour un calendrier.
 private struct UpcomingTaskRow: View {
   @Bindable var task: TaskItem
+  var isSelected: Bool = false
   var onToggle: () -> Void
 
   var body: some View {
@@ -368,6 +414,7 @@ private struct UpcomingTaskRow: View {
     }
     .font(.app(.callout))
     .padding(.vertical, 4)
+    .taskRowSelection(isSelected)
     .contentShape(Rectangle())
   }
 
