@@ -10,9 +10,14 @@ import SwiftUI
 /// page qui s'ajoute se construit AVEC ces briques ; les trouver ici plutôt que dans la page d'une
 /// liste est ce qui rend cette règle évidente au lieu d'être une consigne à retenir.
 
-/// Marge latérale du contenu du panneau de détail. Interne (pas `private`) : `ArchivePageView`
-/// vit dans son propre fichier et doit se caler sur la même marge que les pages de liste.
-let gutter: CGFloat = 75
+/// Marge latérale des FONDS du panneau de détail — pilule de sélection, bandeau d'en-tête, cadre
+/// de notes. Le CONTENU, lui, tombe `rowInset` plus loin (soit 75 pt du bord), et c'est cette
+/// colonne-là qui se voit : case à cocher, ＋ de création, texte « Notes », anneau de progression
+/// d'une liste. Séparer les deux est ce qui met l'anneau d'en-tête sur la même verticale que les
+/// cases — il était seul posé au bord des fonds, 10 pt à gauche de tout le reste.
+/// Interne (pas `private`) : `ArchivePageView` vit dans son propre fichier et doit se caler sur la
+/// même marge que les pages de liste.
+let gutter: CGFloat = 65
 
 /// Retrait interne d'une ligne de tâche : la respiration du fond de sélection, entre le bord de
 /// section et la case à cocher. C'est lui qui définit la colonne des cases — donc celle sur

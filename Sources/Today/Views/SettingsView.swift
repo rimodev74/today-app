@@ -29,11 +29,12 @@ private struct SettingsPane<Content: View>: View {
   var body: some View {
     Form { content }
       .formStyle(.grouped)
-      .frame(height: 300)
+      .frame(height: 360)  // « Général » porte trois sections depuis le profil : 300 le faisait défiler
   }
 }
 
 private struct GeneralSettingsTab: View {
+  @Environment(UserProfile.self) private var profile
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
   @State private var autoCheckUpdates = SparkleUpdater.shared.automaticallyChecksForUpdates
 
@@ -45,6 +46,10 @@ private struct GeneralSettingsTab: View {
 
   var body: some View {
     SettingsPane {
+      Section("Profil") {
+        ProfileSettingsRows(profile: profile)
+      }
+
       Section("Apparence") {
         Picker("Thème", selection: $themeRaw) {
           ForEach(AppTheme.allCases) { option in
@@ -70,6 +75,51 @@ private struct GeneralSettingsTab: View {
           }
         }
       }
+    }
+  }
+}
+
+/// Nom et photo du profil affiché en haut de la sidebar (cf. `ProfileCard`, qui ne fait plus
+/// qu'afficher). Des rangées et pas une vue à part entière : c'est le `Form` de l'onglet qui
+/// aligne les libellés sur ceux des autres sections.
+private struct ProfileSettingsRows: View {
+  @Bindable var profile: UserProfile
+  @State private var isImporting = false
+  @State private var importError: String?
+
+  var body: some View {
+    LabeledContent("Photo") {
+      HStack(spacing: 12) {
+        AvatarView(profile: profile, size: 40)
+        Button("Choisir…") { isImporting = true }
+        if profile.avatarData != nil {
+          Button("Retirer") { profile.avatarData = nil }
+        }
+      }
+    }
+    .fileImporter(isPresented: $isImporting, allowedContentTypes: [.image]) { result in
+      importError = nil
+      guard case .success(let url) = result else { return }
+      // Sandbox : l'URL retournée par le fileImporter n'est lisible que dans cette portée.
+      guard url.startAccessingSecurityScopedResource() else {
+        importError = "Photo illisible."
+        return
+      }
+      defer { url.stopAccessingSecurityScopedResource() }
+      guard let data = try? Data(contentsOf: url), NSImage(data: data) != nil else {
+        importError = "Ce fichier n'est pas une image valide."
+        return
+      }
+      profile.avatarData = data
+    }
+
+    TextField("Prénom", text: $profile.firstName)
+    TextField("Nom", text: $profile.lastName)
+
+    if let importError {
+      Text(importError)
+        .font(.caption)
+        .foregroundStyle(.red)
     }
   }
 }

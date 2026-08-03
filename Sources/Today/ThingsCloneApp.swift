@@ -205,6 +205,7 @@ struct TodayApp: App {
       // Même thème que la fenêtre principale : sans ça, choisir « Sombre » avec un système clair
       // laissait la fenêtre de réglages en clair (le scheme n'est pas hérité entre Scenes).
       SettingsView()
+        .environment(profile)
         .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
     // Les raccourcis texte proposent les listes comme destination : cette Scene a besoin du MÊME

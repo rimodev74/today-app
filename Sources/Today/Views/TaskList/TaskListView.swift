@@ -1039,6 +1039,9 @@ private struct ListPageView: View {
         text: Binding(get: { drafts[block.id] ?? "" }, set: { drafts[block.id] = $0 })
       )
       .textFieldStyle(.plain)
+      // Sans ça le champ retombe sur le `body` natif (13 pt) là où un titre de tâche est mis à
+      // l'échelle par `Typo` (14 pt) : la rangée de création se lisait plus petite que ses voisines.
+      .font(.app(.body))
       .focused($focusedDraft, equals: block.id)
       .onSubmit { createTask(in: block) }
       // Raccourci texte : « ajd » + Tab devient « @today », que l'`onChange` ci-dessous change
@@ -1196,10 +1199,16 @@ private struct ListPageView: View {
         listMenu.opacity(headerHovering ? 1 : 0)
         Spacer(minLength: 0)
       }
+      // L'anneau est du CONTENU, pas un fond : il se cale donc sur la colonne des cases à cocher
+      // (cf. `gutter`), comme l'icône des bandeaux d'« Aujourd'hui » et « Tâches ». Le `notesBox`,
+      // lui, ne prend rien : c'est un fond, il part du bord de section comme les pilules de ligne —
+      // et son propre retrait intérieur de 10 pt remet son texte sur la même colonne que l'anneau.
+      .padding(.leading, rowInset)
+
       notesBox
     }
-    // Aucun retrait ici : l'anneau, le titre et le notesBox partent du bord de section, à l'aplomb
-    // des bandeaux d'en-tête et des fonds de ligne (cf. `pageHeader` dans le LazyVStack).
+    // Aucun retrait sur le VStack : les fonds (notesBox) partent du bord de section, à l'aplomb
+    // des bandeaux d'en-tête et des pilules de ligne (cf. `pageHeader` dans le LazyVStack).
     // contentShape pour que le survol couvre toute la bande, pas seulement le texte.
     .contentShape(Rectangle())
     .onHover { headerHovering = $0 }
@@ -1589,6 +1598,10 @@ private struct NotesBox: View {
     .background(
       Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
     )
+    // APRÈS le fond, donc c'est le CADRE qui se cale sur la colonne (case à cocher, anneau, ＋), pas
+    // le texte qu'il contient — un encart visible s'aligne par son bord, sinon c'est lui qui déborde
+    // à gauche de tout le reste. Son retrait intérieur pose ensuite « Notes » 10 pt plus loin.
+    .padding(.leading, rowInset)
     .padding(.top, 4)
     .padding(.bottom, 10)
   }

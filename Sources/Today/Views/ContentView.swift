@@ -298,7 +298,7 @@ struct ContentView: View {
       .help(sidebarVisible ? "Masquer la barre latérale (⌘B)" : "Afficher la barre latérale (⌘B)")
       // Bande de survol : 40 pt de large depuis le bord de la sidebar, sur TOUTE la hauteur — c'est
       // elle qui révèle le mors, où qu'on approche du bord. Elle tient dans la marge de la page
-      // (`gutter` = 75) : aucune ligne ne commence là, elle ne peut voler aucun clic. Le geste, lui,
+      // (`gutter` = 65) : aucune ligne ne commence là, elle ne peut voler aucun clic. Le geste, lui,
       // reste sur le mors seul — une bande cliquable sur toute la hauteur replierait la sidebar au
       // moindre clic tombé loin de la poignée.
       .frame(width: Self.grabberHoverWidth, alignment: .leading)

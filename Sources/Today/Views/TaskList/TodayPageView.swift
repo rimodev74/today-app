@@ -341,6 +341,9 @@ struct TodayPageView: View {
         .frame(width: 16, height: 16)
       TextField("Nouvelle tâche…", text: $draft)
         .textFieldStyle(.plain)
+        // Même police qu'un titre de tâche (cf. `ListPageView.newTaskRow`) : le `body` natif est
+        // 1 pt plus petit que l'échelle `Typo` de l'app.
+        .font(.app(.body))
         .focused($draftFocused)
         .onSubmit(createTask)
     }
