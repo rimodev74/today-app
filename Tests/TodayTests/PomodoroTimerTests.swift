@@ -62,4 +62,60 @@ final class PomodoroTimerTests: XCTestCase {
       widths.count, 1,
       "toutes les images MM:SS doivent avoir la même largeur, trouvé : \(widths.sorted())")
   }
+
+  /// La même contrainte de largeur DANS l'état pause : c'est un second format, avec son glyphe.
+  /// Elle change de largeur entre marche et pause, et c'est voulu — ça n'arrive qu'à ce moment-là,
+  /// pas à chaque seconde.
+  func testMenuBarTimerImage_pausedWidthIsAlsoStable() {
+    let timer = PomodoroTimer()
+    let widths = Set(
+      stride(from: 0, through: timer.workMinutes * 60 + 59, by: 37).map { total in
+        timer.remaining = TimeInterval(total)
+        return MenuBarTimerImage.make(timer.formattedRemaining, paused: true).size.width
+      }
+    )
+
+    XCTAssertEqual(
+      widths.count, 1,
+      "toutes les images ⏸ MM:SS doivent avoir la même largeur, trouvé : \(widths.sorted())")
+  }
+
+  /// Les deux pauses doivent sonner PAREIL, et le travail autrement — c'est la demande, et c'est la
+  /// seule chose vérifiable d'un son sans l'écouter.
+  func testBothBreaksShareTheSameSound() {
+    XCTAssertEqual(PomodoroSound.starting(.shortBreak), PomodoroSound.starting(.longBreak))
+    XCTAssertEqual(PomodoroSound.starting(.work), .start)
+    XCTAssertNotEqual(PomodoroSound.starting(.work), PomodoroSound.starting(.shortBreak))
+    // Trois sons distincts : deux qui se ressemblent rendraient les trois états indiscernables.
+    XCTAssertEqual(Set([PomodoroSound.start, .pause, .rest]).count, 3)
+  }
+
+  /// Les sons sont des sons SYSTÈME : un nom qui ne correspond à rien ne lève pas, il ne joue rien.
+  /// Le test attrape la faute de frappe que le compilateur laisse passer.
+  func testEverySoundExistsOnThisSystem() {
+    for sound in [PomodoroSound.start, .pause, .rest] {
+      XCTAssertNotNil(NSSound(named: sound.rawValue), "son système introuvable : \(sound.rawValue)")
+    }
+  }
+
+  /// Ce que la barre de menus lit pour décider d'afficher l'heure ou son icône. La PAUSE ne remet
+  /// pas au repos — c'est tout l'objet de cette propriété, et le défaut qu'elle corrige.
+  func testHasStartedSurvivesPauseAndFallsOnlyOnReset() {
+    let timer = PomodoroTimer()
+    XCTAssertFalse(timer.hasStarted, "un minuteur jamais lancé est au repos")
+
+    timer.start()
+    XCTAssertTrue(timer.hasStarted)
+
+    timer.pause()
+    XCTAssertTrue(timer.hasStarted, "en pause, la session reste engagée")
+    XCTAssertFalse(timer.isRunning)
+
+    // Une phase qui s'achève sans enchaînement automatique laisse elle aussi le temps affiché.
+    timer.handlePhaseCompletion()
+    XCTAssertTrue(timer.hasStarted)
+
+    timer.reset()
+    XCTAssertFalse(timer.hasStarted, "seule la remise à zéro rend la barre à son icône")
+  }
 }

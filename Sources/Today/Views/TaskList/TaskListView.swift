@@ -29,7 +29,9 @@ struct TaskListView: View {
         list: list, selection: $selection, searchPresented: $searchPresented,
         pendingTitleFocus: $pendingTitleFocus)
     case .project(let project):
-      ProjectPageView(project: project, selection: $selection, searchPresented: $searchPresented)
+      ProjectPageView(
+        project: project, selection: $selection, searchPresented: $searchPresented,
+        pendingTitleFocus: $pendingTitleFocus)
     case .pomodoro:
       PomodoroView(searchPresented: $searchPresented)
     case .smartList(.archive):
@@ -1184,6 +1186,7 @@ private struct ListPageView: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 12) {
         ProgressRing(progress: list.progress, size: 26, lineWidth: 3, showsFill: true)
+          .tint(list.project?.color?.color)
         TextField("Nom de la liste", text: $list.title)
           .textFieldStyle(.plain)
           .font(.app(.title).bold())
@@ -1349,11 +1352,7 @@ private struct ListPageView: View {
   }
 
   private func deleteList() {
-    let fallback = list.project.map(SidebarSelection.project)
-    modelContext.delete(list)
-    try? modelContext.save()
-    // Naviguer AILLEURS avant que SwiftUI ne rende une page adossée à un modèle effacé.
-    selection = fallback
+    list.delete(from: $selection, in: modelContext)
   }
 
   private func delete(_ task: TaskItem) {
@@ -1426,135 +1425,338 @@ private struct ListPageView: View {
   /// Une couleur pas déjà portée par une en-tête de CETTE liste, pour que les en-têtes se
   /// distinguent d'un coup d'œil par défaut. Palette épuisée (7 en-têtes déjà toutes teintées) :
   /// on retombe sur la palette complète — l'utilisateur reste libre de changer la couleur à la main.
-  private func randomUnusedHeaderColor() -> HeaderColor {
+  private func randomUnusedHeaderColor() -> PaletteColor {
     let used = Set(list.tasks.filter(\.isHeader).compactMap(\.headerColor))
-    let available = HeaderColor.allCases.filter { !used.contains($0) }
-    return (available.isEmpty ? HeaderColor.allCases : available).randomElement()!
+    let available = PaletteColor.allCases.filter { !used.contains($0) }
+    return (available.isEmpty ? PaletteColor.allCases : available).randomElement()!
   }
 }
 
-/// Page d'un projet : ses to-do lists dépliées. Chaque liste montre son titre (cliquable pour
-/// l'ouvrir en édition) puis ses tâches en LECTURE (case à cocher + titre) — un survol du projet
-/// sans avoir à ouvrir chaque liste. L'édition d'une tâche reste sur la page de sa liste.
+/// Page d'un projet : un tableau de CARTES, une par to-do list, chacune avec un aperçu de ce qui
+/// reste à y faire (cf. `ProjectBoard`). Cliquer une carte ouvre la page de sa liste, où se fait
+/// tout le travail (édition, création, réordonnancement) ; la carte est une vitrine, pas un
+/// deuxième endroit où éditer.
+///
+/// Remplace l'empilement « titre de liste + ses tâches en lecture », qui redonnait à voir la page
+/// de chaque liste les unes sous les autres : sur un projet à cinq listes, il fallait faire défiler
+/// pour savoir ce que le projet contient. Une carte tient le résumé dans un écran.
 private struct ProjectPageView: View {
   @Bindable var project: Project
   @Binding var selection: SidebarSelection?
   @Binding var searchPresented: Bool
-  @Environment(RemindersService.self) private var remindersService
+  @Binding var pendingTitleFocus: PersistentIdentifier?
+
+  @Environment(\.modelContext) private var modelContext
   @FocusState private var notesFocused: Bool
+  /// Liste en attente de confirmation de suppression (non nil ⇒ alerte). Même règle que la
+  /// sidebar : vide, elle part sans rien demander (cf. `TodoList.needsDeleteConfirmation`).
+  @State private var deletionCandidate: TodoList?
+
+  /// Ce qu'une carte REND, fondu compris — délibérément plus que ce qu'elle laisse voir en entier
+  /// (`ListCardView.visibleRows`) : les dernières rangées passent sous le dégradé, et c'est ce
+  /// dégradé qui dit « ça continue ».
+  private static let previewLimit = 6
 
   var body: some View {
-    // Header dans la List, pour la même raison que sur la page d'une liste : un header
-    // au-dessus d'une List dans un VStack se fait recouvrir par elle (cf. ListPageView).
-    List {
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 12) {
-          ProgressRing(progress: project.progress, size: 26, lineWidth: 3)
-          TextField("Nom du projet", text: $project.title)
-            .textFieldStyle(.plain)
-            .font(.app(.title).bold())
-        }
-        // Même encadré que la page de liste (cf. `NotesBox`) : les deux avaient deux visuels
-        // distincts (ici un simple ZStack sans fond), plus de raison de diverger.
-        NotesBox(
-          notes: $project.notes,
-          font: .app(),
-          textColor: .labelColor,
-          focused: $notesFocused
+    // Construit UNE fois en tête du body, puis distribué (cf. Conventions) : lu depuis les
+    // rangées, chaque chiffre retraverserait SwiftData à chaque rendu.
+    let board = ProjectBoard.build(from: project, previewLimit: Self.previewLimit)
+
+    return ScrollView {
+      VStack(alignment: .leading, spacing: 20) {
+        header
+        listsHeader(board)
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 16)],
+          alignment: .leading, spacing: 16
         ) {
-          notesFocused = false
-        }
-      }
-      .padding(.bottom, 14)
-      .listRowSeparator(.hidden)
-      .selectionDisabled()
-
-      ForEach(project.orderedLists) { list in
-        // Titre de la liste : cliquer ouvre sa page (édition, création, réordonnancement).
-        Button {
-          selection = .list(list)
-        } label: {
-          HStack(spacing: 10) {
-            // Pas de `showsFill` ici : cette variante garde un contour bleu PLEIN en permanence,
-            // qu'un petit anneau de 16pt rend comme une pastille bleue — une liste sans rien de
-            // coché s'affichait donc comme terminée. Le rendu sidebar (trait gris + arc) dit vrai.
-            ProgressRing(progress: list.progress, size: 16)
-            Text(list.title.isEmpty ? "Sans titre" : list.title).font(.app(.headline))
-            Spacer(minLength: 0)
-            Text("\(list.countableTasks.filter { !$0.isCompleted }.count)")
-              .foregroundStyle(.secondary)
+          ForEach(board.cards) { card in
+            ListCardView(
+              card: card,
+              open: { selection = .list(card.list) },
+              rename: { rename(card.list) },
+              delete: { requestDelete(card.list) }
+            )
+            // La carte qui part s'efface, celles qui restent COULENT vers leur nouvelle place —
+            // le `withAnimation(taskInsert)` des chemins de création/suppression anime le
+            // replacement de la grille, cette transition ne concerne que la carte elle-même.
+            // Même couple qu'une tâche qui disparaît d'une liste (cf. `TaskRow`) : fondu seul,
+            // pas de glissement, sinon la carte part de travers pendant que la grille se retasse.
+            .transition(.opacity)
           }
-          .padding(.top, 8)
-          .padding(.bottom, 4)
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
-        // Par rangée : une `List` est paresseuse elle aussi (même précaution que
-        // `ListPageView.draggableRow`). Le bloc anneau + titre + notes au-dessus reste hors du
-        // fondu.
-
-        ForEach(list.orderedTasks) { task in
-          taskRow(task).listRowSeparator(.hidden)
-        }
-
-        if list.tasks.isEmpty {
-          Text("Aucune tâche")
-            .font(.app(.callout))
-            .foregroundStyle(.tertiary)
-            .padding(.leading, 26)
-            .listRowSeparator(.hidden)
-            .selectionDisabled()
+          createCard
         }
       }
-
-      if project.lists.isEmpty {
-        Text("Aucune liste. Crée-en une depuis la barre latérale.")
-          .foregroundStyle(.tertiary)
-          .listRowSeparator(.hidden)
-          .selectionDisabled()
-      }
+      // `gutter`, comme toutes les autres pages : à `gutter - 8`, l'en-tête et son encadré de notes
+      // tombaient 8 pt à gauche de ceux d'une liste — un décalage que rien ne justifiait, visible
+      // au moindre aller-retour entre les deux pages.
+      .padding(.horizontal, gutter)
+      .padding(.top, 30)
+      .padding(.bottom, 24)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .listStyle(.inset)
-    .scrollContentBackground(.hidden)
-    .environment(\.defaultMinListRowHeight, 1)
-    .padding(.horizontal, gutter - 8)
-    .padding(.top, 30)
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
+      BottomToolbar(
+        onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
+    }
+    .alert(
+      "Supprimer la liste ?",
+      isPresented: Binding(
+        get: { deletionCandidate != nil }, set: { if !$0 { deletionCandidate = nil } }),
+      presenting: deletionCandidate
+    ) { list in
+      Button("Supprimer", role: .destructive) {
+        withAnimation(boardFlow) { list.delete(from: $selection, in: modelContext) }
+        deletionCandidate = nil
+      }
+      Button("Annuler", role: .cancel) { deletionCandidate = nil }
+    } message: { list in
+      Text(list.deleteConfirmationMessage)
     }
   }
 
-  /// Tâche en lecture sous le titre de sa liste. Une en-tête devient un intertitre discret ; une
-  /// tâche garde sa case à cocher active (comme partout ailleurs), le titre n'est pas éditable ici.
-  @ViewBuilder
-  private func taskRow(_ task: TaskItem) -> some View {
-    if task.isHeader {
-      Text(task.title.isEmpty ? "En-tête" : task.title)
-        .font(.app(.subheadline).bold())
-        .foregroundStyle(
-          task.headerColor.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary)
-        )
-        .padding(.leading, 20)
-        .padding(.top, 6)
-    } else {
-      HStack(spacing: 10) {
-        TaskCheckbox(isCompleted: task.isCompleted) {
-          withAnimation(taskInsert) {
-            task.toggleCompletion()
-            if task.isCompleted { task.list?.moveToEndOfSection(task) }
-          }
-          Task { await remindersService.pushCompletion(for: task) }
-        }
-        Text(task.title.isEmpty ? "Sans titre" : task.title)
-          .strikethrough(task.isCompleted)
-          .foregroundStyle(task.isCompleted ? .secondary : .primary)
-        Spacer(minLength: 0)
+  private var header: some View {
+    // Même construction QUE `ListPageView.header`, au point près (espacement, retrait de l'anneau,
+    // encadré de notes) : les deux pages doivent se lire comme une seule.
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 12) {
+        ProgressRing(progress: project.progress, size: 26, lineWidth: 3)
+          .tint(project.color?.color)
+        TextField("Nom du projet", text: $project.title)
+          .textFieldStyle(.plain)
+          .font(.app(.title).bold())
       }
-      .padding(.leading, 20)
-      .padding(.vertical, 2)
+      // L'anneau est du CONTENU : il se cale sur la colonne, comme sur la page d'une liste (cf.
+      // `ListPageView.header`). Le `NotesBox`, lui, est un FOND : il part du bord de section et
+      // son retrait intérieur de 10 pt ramène « Notes » sur la même colonne que l'anneau. Sans ce
+      // retrait ici, l'anneau tombait 10 pt à gauche de l'encadré.
+      .padding(.leading, rowInset)
+
+      // Même encadré que la page de liste (cf. `NotesBox`).
+      NotesBox(notes: $project.notes, font: .app(), textColor: .labelColor, focused: $notesFocused)
+      {
+        notesFocused = false
+      }
     }
   }
+
+  /// La ligne qui coiffe la grille : ce qu'on regarde à gauche, ce que ça pèse à droite.
+  private func listsHeader(_ board: ProjectBoard) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text("Listes").font(.app(.headline))
+      Spacer(minLength: 12)
+      Text(remainingLabel(board))
+        .font(.app(.callout))
+        .foregroundStyle(.secondary)
+    }
+    .padding(.leading, rowInset)
+  }
+
+  private func remainingLabel(_ board: ProjectBoard) -> String {
+    let count = board.remainingCount
+    return count == 0 ? "Rien à faire" : "\(count) tâche\(count > 1 ? "s" : "") à faire"
+  }
+
+  /// Carte en pointillés qui crée une liste. Même geste que « + » de la sidebar, même point de
+  /// passage (`Project.appendList`) : la nouvelle liste s'ouvre avec son titre en édition.
+  private var createCard: some View {
+    Button(action: addList) {
+      VStack(spacing: 10) {
+        Image(systemName: "plus").font(.system(size: 18, weight: .medium))
+        Text("Créer une liste").font(.app(.callout).weight(.semibold))
+      }
+      .foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity)
+      .frame(height: ListCardView.height)
+      .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+          .strokeBorder(
+            Color.primary.opacity(0.2),
+            style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+      )
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func addList() {
+    let list = withAnimation(boardFlow) {
+      project.appendList(titled: "Nouvelle liste", in: modelContext)
+    }
+    rename(list)
+  }
+
+  /// Renommer depuis une carte = ouvrir la liste, titre en édition. Le champ du titre vit sur la
+  /// page de la liste (`pendingTitleFocus`) : c'est le seul endroit où le nom s'édite, et ça évite
+  /// un second état d'édition ici — exactement ce que la sidebar fait déjà pour une liste neuve.
+  private func rename(_ list: TodoList) {
+    selection = .list(list)
+    pendingTitleFocus = list.persistentModelID
+  }
+
+  private func requestDelete(_ list: TodoList) {
+    if list.needsDeleteConfirmation {
+      deletionCandidate = list
+    } else {
+      withAnimation(boardFlow) { list.delete(from: $selection, in: modelContext) }
+    }
+  }
+}
+
+/// Une carte du tableau d'un projet : anneau + titre, le menu ••• à droite, les tâches à faire,
+/// et ce qui reste en bas à gauche. Sans `@Bindable` : rien ne s'édite ici, la carte ouvre la page
+/// de sa liste et c'est tout.
+private struct ListCardView: View {
+  let card: ProjectBoard.Card
+  let open: () -> Void
+  let rename: () -> Void
+  let delete: () -> Void
+
+  @State private var hovering = false
+
+  /// Rangées visibles EN ENTIER. Au-delà, l'aperçu continue sous le fondu — d'où une hauteur de
+  /// zone qui coupe une rangée en deux (`previewHeight`) plutôt qu'un compte rond : une rangée
+  /// tranchée net se lit comme une fin de liste, une rangée qui s'efface se lit comme une suite.
+  private static let visibleRows = 4
+  private static let rowHeight: CGFloat = 30
+  private static let rowSpacing: CGFloat = 6
+  private static let previewHeight =
+    CGFloat(visibleRows) * rowHeight + CGFloat(visibleRows) * rowSpacing + rowHeight / 2
+  private static let padding: CGFloat = 14
+  private static let titleHeight: CGFloat = 22
+  private static let footerHeight: CGFloat = 16
+  private static let spacing: CGFloat = 12
+
+  /// La hauteur d'une carte est la somme de pièces qui DÉCLARENT toutes la leur — aucun terme ne
+  /// dépend de ce qu'une police rend à l'écran. Un terme deviné (la hauteur du pied) suffisait à
+  /// faire diverger cette somme du contenu réel, et le `Spacer` qui séparait l'aperçu du pied
+  /// rattrapait l'écart en poussant celui-ci jusqu'au bord : le retrait du bas disparaissait.
+  /// Plus de `Spacer` — il n'y a plus rien à rattraper.
+  static let height: CGFloat =
+    2 * padding + titleHeight + spacing + previewHeight + spacing + footerHeight
+
+  var body: some View {
+    // Le menu est un FRÈRE du bouton, pas un enfant : imbriqué dans le label, c'est le bouton de
+    // la carte qui happe le clic et le menu ne s'ouvre jamais.
+    ZStack(alignment: .topTrailing) {
+      Button(action: open) { cardBody }
+        .buttonStyle(.plain)
+      menu.padding(Self.padding)
+    }
+    // Pas de curseur « main » : une carte est de la navigation, pas un lien (cf. CLAUDE.md).
+    // Le repère de survol est le contour, comme les lignes de la sidebar.
+    .onHover { hovering = $0 }
+  }
+
+  private var cardBody: some View {
+    VStack(alignment: .leading, spacing: Self.spacing) {
+      title
+      preview
+      footer
+    }
+    .padding(Self.padding)
+    // Exactement la hauteur naturelle du contenu (cf. `height`) : le cadre ne fait plus
+    // qu'affirmer que toutes les cartes de la grille ont la même.
+    .frame(height: Self.height, alignment: .topLeading)
+    .background(cardFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .strokeBorder(Color.primary.opacity(hovering ? 0.18 : 0.08), lineWidth: 1)
+    )
+    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
+  private var title: some View {
+    HStack(spacing: 8) {
+      ProgressRing(progress: card.list.progress, size: 18)
+        .tint(card.list.project?.color?.color)
+      Text(card.list.title.isEmpty ? "Sans titre" : card.list.title)
+        .font(.app(.headline))
+        .lineLimit(1)
+      Spacer(minLength: 0)
+    }
+    // La place du menu, qui flotte au-dessus : sans elle, un titre long passe dessous.
+    .padding(.trailing, 22)
+    .frame(height: Self.titleHeight)
+  }
+
+  private var footer: some View {
+    Text(remainingLabel)
+      .font(.app(.caption).weight(.semibold))
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+      // Hauteur DÉCLARÉE, pas minimale : c'est ce qui garde la somme de `height` exacte quoi que
+      // rende la police (le pied tient sur une ligne de 10 pt, 16 est large).
+      .frame(height: Self.footerHeight)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// Les tâches à faire, empilées. La zone a une hauteur FIXE et coupe au milieu d'une rangée ;
+  /// le dégradé n'est posé que s'il y a effectivement une suite — appliqué à quatre tâches qui
+  /// tiennent, il effacerait la dernière sans rien annoncer.
+  private var preview: some View {
+    VStack(spacing: Self.rowSpacing) {
+      ForEach(card.preview) { task in previewRow(task) }
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: Self.previewHeight, alignment: .top)
+    .clipped()
+    .mask(overflows ? AnyView(fade) : AnyView(Color.black))
+  }
+
+  private var overflows: Bool { card.preview.count > Self.visibleRows }
+
+  /// Le fondu : opaque sur la première rangée, puis décroissant jusqu'au bas de la zone.
+  private var fade: some View {
+    LinearGradient(
+      stops: [
+        .init(color: .black, location: 0),
+        .init(color: .black, location: 0.18),
+        .init(color: .clear, location: 1),
+      ],
+      startPoint: .top, endPoint: .bottom)
+  }
+
+  private func previewRow(_ task: TaskItem) -> some View {
+    Text(task.title.isEmpty ? "Sans titre" : task.title)
+      .font(.app(.callout))
+      .lineLimit(1)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 10)
+      .frame(height: Self.rowHeight)
+      .background(
+        Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  private var remainingLabel: String {
+    let n = card.remainingCount
+    return n == 0 ? "Aucune tâche en attente" : "\(n) tâche\(n > 1 ? "s" : "") en attente"
+  }
+
+  /// Le MÊME menu que le clic droit sur une liste dans la sidebar. Renommer ouvre la liste avec
+  /// son titre en édition (cf. `ProjectPageView.rename`), faute de champ éditable sur la carte.
+  private var menu: some View {
+    Menu {
+      Button("Renommer") { rename() }
+      Divider()
+      Button("Supprimer la liste", role: .destructive) { delete() }
+    } label: {
+      Image(systemName: "ellipsis")
+        .font(.app(15, weight: .semibold))
+        .foregroundStyle(.secondary)
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+  }
+
+  /// Fond de carte : un voile sur le fond de page, comme `NotesBox` et les rangées d'aperçu.
+  /// Surtout PAS une couleur opaque comme `.controlBackgroundColor` : en sombre la page est un
+  /// matériau translucide (cf. `ContentView`), teinté par le bureau — mesuré (37,40,53) — alors
+  /// qu'une couleur opaque reste un gris nu (30,30,30). La carte apparaissait comme une plaque
+  /// noire posée sur une page bleutée. Un voile compose avec ce qu'il y a dessous : il garde la
+  /// teinte de la page dans les deux thèmes, sans valeur à doubler à la main.
+  private var cardFill: Color { Color.primary.opacity(0.05) }
 }
 
 /// Notes de tâche/liste/projet : encadré au fond légèrement plus foncé que la page, gros rayon,
@@ -1572,14 +1774,21 @@ private struct NotesBox: View {
   /// (ex. le champ « Nouvelle tâche » d'une liste vide) au lieu du simple retrait de focus par défaut.
   var onEnter: (() -> Void)? = nil
 
+  /// Retrait du texte dans l'encadré, porté par la vue texte elle-même (cf. `body`).
+  private static let inset = NSSize(width: 10, height: 8)
+
   var body: some View {
     ZStack(alignment: .topLeading) {
-      // Placeholder et éditeur SANS retrait propre : le retrait est posé une seule fois sur le
-      // ZStack (padding commun ci-dessous), donc le texte tapé et « Notes » partent du même x.
+      // Le retrait est INTÉRIEUR à la vue texte (cf. `RichTextEditor.insets`), pas posé autour
+      // d'elle : sinon la marge du cadre n'est pas cliquable et l'encart, haut d'une seule ligne
+      // quand il est vide, ne prend le focus que si on vise le texte. Le placeholder reprend donc
+      // le même retrait à la main pour partir du même x et du même y que le texte tapé.
       if notes.isEmpty {
         Text("Notes")
           .font(.app(.body))
           .foregroundStyle(.tertiary)
+          .padding(.horizontal, Self.inset.width)
+          .padding(.vertical, Self.inset.height)
           .allowsHitTesting(false)
       }
       RichTextEditor(
@@ -1588,13 +1797,12 @@ private struct NotesBox: View {
           guard !shiftHeld else { return false }
           if let onEnter { onEnter() } else { focused.wrappedValue = false }
           return true
-        }
+        },
+        insets: Self.inset
       )
       .fixedSize(horizontal: false, vertical: true)
       .focused(focused)
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 8)
     .background(
       Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
     )

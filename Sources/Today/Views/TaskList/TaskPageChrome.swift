@@ -65,11 +65,19 @@ let thingsSelectionFill = Color(
 // `TaskRow` — deux courbes distinctes se verraient au passage d'une page à l'autre.
 let taskFlow = Animation.timingCurve(0.4, 0, 0.2, 1, duration: 0.2)
 let taskSelectFade = Animation.easeOut(duration: 0.05)
-/// Apparition (création) ET disparition (suppression) d'une ligne : ressort peu amorti pour un
-/// léger rebond, dans les deux sens. Le réordonnancement, lui, passe par des offsets et pas des
-/// insertions/suppressions — la transition des rangées n'y répond donc jamais.
+/// Apparition (création) ET disparition (suppression) d'une ligne, dans les deux sens. Le
+/// réordonnancement, lui, passe par des offsets et pas des insertions/suppressions — la
+/// transition des rangées n'y répond donc jamais.
 /// Interne pour la même raison que `gutter` : `ArchivePageView` anime ses sorties de ligne avec.
-let taskInsert = Animation.spring(response: 0.32, dampingFraction: 0.62)
+let taskInsert = Animation.spring(response: 0.32, dampingFraction: 1)
+/// Même ressort, CRITIQUEMENT amorti : le tableau de cartes d'un projet (`ProjectPageView`).
+///
+/// Le rebond de `taskInsert` est juste sur une RANGÉE — un objet fin, qui parcourt quelques points
+/// et dont le dépassement se lit comme de l'élan. Sur une carte de 250 pt qui traverse une grille,
+/// le même dépassement devient un ballottement : la carte arrive, repart, revient. La distance
+/// parcourue change ce qu'on lit du même ressort, d'où deux amortissements et pas deux courbes
+/// inventées séparément. Même raisonnement que `ProgressRing.ringFlow`.
+let boardFlow = Animation.spring(response: 0.32, dampingFraction: 1)
 /// Le repos d'un réordonnancement : écartement des voisines pendant le geste, et retour des
 /// décalages à zéro au relâchement. Une seule valeur pour les deux, et pour toutes les pages —
 /// deux courbes différentes se verraient au passage d'un onglet à l'autre.
@@ -159,14 +167,9 @@ extension View {
 }
 
 extension View {
-  /// Le rebond d'apparition d'une ligne de tâche : elle grandit depuis sa case à cocher, pas
-  /// depuis son centre — d'où l'ancrage à gauche.
-  ///
-  /// Il n'existait que sur la page d'une liste ; « Aujourd'hui » et « Tâches » faisaient apparaître
-  /// leurs lignes en fondu. Rien ne justifiait que la même tâche entre différemment selon l'onglet
-  /// où on la regarde.
+  /// Apparition d'une ligne de tâche : fondu seul, sans scale.
   func taskRowInsertion() -> some View {
-    transition(.scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
+    transition(.opacity)
   }
 
   /// La pilule lavande d'une ligne sélectionnée, pour les rangées qui ne sont pas des `TaskRow`

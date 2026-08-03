@@ -24,12 +24,16 @@ struct SettingsView: View {
 
 // ponytail: shared sizing only, pas de wrapper générique de pane
 private struct SettingsPane<Content: View>: View {
+  /// 360 va à trois sections courtes (« Général » depuis le profil : 300 le faisait défiler). Un
+  /// onglet plus chargé le dit — sans quoi ses dernières rangées ne sont pas absentes, elles sont
+  /// SOUS le bord, ce qui est pire : rien ne les annonce.
+  var height: CGFloat = 360
   @ViewBuilder var content: Content
 
   var body: some View {
     Form { content }
       .formStyle(.grouped)
-      .frame(height: 360)  // « Général » porte trois sections depuis le profil : 300 le faisait défiler
+      .frame(height: height)
   }
 }
 
@@ -552,7 +556,9 @@ private struct PomodoroSettingsTab: View {
     .defaultAlertSound
 
   var body: some View {
-    SettingsPane {
+    // Trois sections dont une de cinq rangées : mesuré à l'écran, il faut 610 pour que « Minuteur »
+    // ne passe pas sous le bord haut. La hauteur commune (360) en cachait la moitié.
+    SettingsPane(height: 610) {
       Section("Minuteur") {
         Toggle("Enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
       }
@@ -568,6 +574,83 @@ private struct PomodoroSettingsTab: View {
           NSSound(named: pomodoroAlertSound)?.play()
         }
       }
+
+      PomodoroShortcutsSection()
     }
+  }
+}
+
+/// Les cinq commandes du minuteur, chacune avec ses DEUX déclencheurs possibles : une combinaison de
+/// touches (qui répond app en arrière-plan) ou une abréviation tapée dans la capsule. Aucun des deux
+/// n'est obligatoire, et les deux peuvent coexister sur la même action.
+///
+/// Rien n'est stocké ici : les deux colonnes écrivent dans les listes de l'onglet Raccourcis, à la
+/// ligne qui porte le jeton de la commande (cf. `setCombo(_:for:)`). Un raccourci Pomodoro réglé ici
+/// s'y affiche, et réciproquement — c'est la même ligne, pas une copie.
+private struct PomodoroShortcutsSection: View {
+  @AppStorage(KeyShortcut.storageKey) private var keyData = Data()
+  @AppStorage(TextShortcut.storageKey) private var textData = Data()
+
+  private static let keyWidth: CGFloat = 104
+  private static let triggerWidth: CGFloat = 96
+  private static let columns: CGFloat = 10
+
+  var body: some View {
+    Section {
+      headers
+      ForEach(AppCommand.pomodoroCommands) { command in
+        HStack(spacing: Self.columns) {
+          Text(command.label)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          HotKeyRecorder(combo: combo(for: command), width: Self.keyWidth)
+          TextField("", text: trigger(for: command), prompt: Text("aucune"))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: Self.triggerWidth)
+        }
+      }
+    } header: {
+      Text("Raccourcis")
+    } footer: {
+      Text(
+        """
+        Une combinaison agit même quand Today est en arrière-plan. Une abréviation se tape dans la \
+        capsule de saisie rapide, puis ⇥ ou ↩ — elle ne laisse aucune tâche derrière elle.
+        """
+      )
+      .foregroundStyle(.secondary)
+    }
+    // Les combinaisons sont enregistrées auprès du système : sans réenregistrement, l'ancienne
+    // répondrait encore (même raison qu'à l'onglet Raccourcis).
+    .onChange(of: keyData) { GlobalHotKey.shared.reload() }
+  }
+
+  private var headers: some View {
+    HStack(spacing: Self.columns) {
+      Text("Action").frame(maxWidth: .infinity, alignment: .leading)
+      Text("Touches").frame(width: Self.keyWidth, alignment: .center)
+      Text("Capsule").frame(width: Self.triggerWidth, alignment: .center)
+    }
+    .font(.caption)
+    .foregroundStyle(.secondary)
+  }
+
+  private func combo(for command: AppCommand) -> Binding<KeyCombo?> {
+    Binding(
+      get: { KeyShortcut.decode(keyData).combo(for: command.token) },
+      set: {
+        var list = KeyShortcut.decode(keyData)
+        list.setCombo($0, for: command.token)
+        keyData = KeyShortcut.encode(list)
+      })
+  }
+
+  private func trigger(for command: AppCommand) -> Binding<String> {
+    Binding(
+      get: { TextShortcut.decode(textData).trigger(for: command.token) },
+      set: {
+        var list = TextShortcut.decode(textData)
+        list.setTrigger($0, for: command.token)
+        textData = TextShortcut.encode(list)
+      })
   }
 }

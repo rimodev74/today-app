@@ -29,10 +29,6 @@ struct TaskRow: View {
   /// Rattachement affiché à droite du titre. `nil` dans une page de liste (on sait déjà où l'on
   /// est) ; renseigné dans « Aujourd'hui », qui mélange les provenances.
   var parentLabel: String? = nil
-  /// Raccourci « faire aujourd'hui » (⊕ au survol). Posé uniquement par la réserve sans date
-  /// d'« Aujourd'hui » : y dater une tâche est le geste de la section, il ne doit pas coûter un
-  /// passage par « Quand… » et son sélecteur.
-  var onSchedule: (() -> Void)? = nil
   var onBeginEditing: () -> Void
   var onEndEditing: () -> Void
   var onMove: (TodoList) -> Void
@@ -108,7 +104,6 @@ struct TaskRow: View {
             .fixedSize()
         }
         titleView
-        if !isEditing && task.notes.isEmpty { noteHint }
         Spacer(minLength: 0)
         // À droite plutôt qu'en sous-titre : la ligne garde sa hauteur d'une seule ligne, donc la
         // même que dans une page de liste — l'ouverture de la carte d'édition reste continue.
@@ -117,16 +112,6 @@ struct TaskRow: View {
             .font(.app(.callout))
             .foregroundStyle(.secondary)
             .fixedSize()
-        }
-        if !isEditing, let onSchedule {
-          Button(action: onSchedule) {
-            Image(systemName: "plus.circle")
-              .font(.app(13))
-              .foregroundStyle(.secondary)
-          }
-          .buttonStyle(.plain)
-          .help("Faire aujourd'hui")
-          .opacity(hovering ? 1 : 0)
         }
         if !isEditing { trailing }
       }
@@ -184,11 +169,9 @@ struct TaskRow: View {
       }
 
       // Sous-tâches : montées au repos comme en édition, APRÈS l'éditeur de notes pour respecter
-      // l'ordre titre → notes → sous-tâches. Séparées de ce qui précède (aperçu de note au repos,
-      // éditeur de notes en édition) par un trait.
-      if !task.orderedSubtasks.isEmpty {
-        subtasksSection
-      }
+      // l'ordre titre → notes → sous-tâches. Repliées, elles ne sont pas montées du tout — un bloc
+      // vide laisserait sa marge haute et gonflerait la ligne fermée de quelques points.
+      if showsSubtasks { subtasksSection }
     }
     // Ajout/suppression d'une sous-tâche : `withAnimation` autour de la mutation ne suffit PAS —
     // SwiftData notifie le changement de relation hors de la transaction, la carte sautait donc à sa
@@ -207,9 +190,9 @@ struct TaskRow: View {
     // Bas en édition : les sous-tâches sont désormais le dernier élément de la carte (après
     // l'éditeur), il leur faut une respiration jusqu'au bord bas.
     .padding(.top, isEditing ? 16 : 6)
-    // Au repos, une tâche à sous-tâches finit sur une rangée de sous-tâche et non sur son titre :
-    // il lui faut un peu plus de fond que les 6 pt d'une ligne simple.
-    .padding(.bottom, isEditing ? 14 : (task.subtasks.isEmpty ? 6 : 10))
+    // Au repos, une tâche DÉPLIÉE finit sur une rangée de sous-tâche et non sur son titre : il lui
+    // faut un peu plus de fond que les 6 pt d'une ligne simple. Repliée, elle EST une ligne simple.
+    .padding(.bottom, isEditing ? 14 : (showsSubtasks ? 10 : 6))
     .padding(.horizontal, isEditing ? 16 : rowInset)
     .background { rowBackground }
     .contentShape(Rectangle())
@@ -320,13 +303,12 @@ struct TaskRow: View {
       HStack(spacing: 16) {
         Spacer(minLength: 0)
         dateControl
-        // Reste en place (la rangée d'icônes ne bouge pas) mais devient inerte dès la première
-        // sous-tâche : c'est le « + » de l'en-tête du dépliant qui prend alors le relais.
+        // Seul point d'ajout d'une sous-tâche depuis l'édition : l'en-tête du dépliant, qui portait
+        // un « + » redondant, a disparu au profit du résumé sur la ligne du titre.
         Button(action: addNewSubtask) {
-          actionIcon("list.bullet")
+          actionIcon("list.bullet", active: !task.subtasks.isEmpty)
         }
         .buttonStyle(.plain)
-        .disabled(!task.subtasks.isEmpty)
         priorityControl
       }
     }
@@ -504,75 +486,74 @@ struct TaskRow: View {
     }
   }
 
-  private var subtasksSection: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      // Dans le VStack (donc décalé comme lui) : le trait part de l'anneau de progression, pas de
-      // la case de la tâche parente — il ouvre le bloc sous-tâches au lieu de couper la carte.
-      Divider().padding(.bottom, 2)
-      subtasksHeader
-      // En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
-      // est piloté par `subtasksExpanded`.
-      if isEditing || subtasksExpanded {
-        VStack(alignment: .leading, spacing: 2) {
-          ForEach(task.orderedSubtasks, id: \.uuid) { subtask in
-            SubtaskRowView(
-              subtask: subtask,
-              isEditing: isEditing,
-              focus: $focusedSubtask,
-              onEnter: { enterOnSubtask(subtask) },
-              onDelete: { removeSubtask(subtask) }
-            )
-            // La rangée se fond en glissant depuis le haut pendant que la carte s'ouvre ; sans
-            // transition elle apparaît nette d'un coup au milieu d'une hauteur encore en mouvement.
-            .transition(.opacity.combined(with: .move(edge: .top)))
-          }
-        }
-      }
-    }
-    // Le bloc entier (trait + en-tête) naît avec la 1re sous-tâche : même fondu.
-    .transition(.opacity)
-    // Aligné sur le DÉBUT DU TEXTE du titre (case 16 + espace 10 = 26), comme l'aperçu de note :
-    // trait, anneau et cases des sous-tâches partent tous de cette colonne.
-    .padding(.leading, 26)
-    .padding(.top, 14)
+  /// En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
+  /// est piloté par `subtasksExpanded`.
+  private var showsSubtasks: Bool {
+    !task.orderedSubtasks.isEmpty && (isEditing || subtasksExpanded)
   }
 
-  /// En-tête du dépliant, sur une ligne : anneau de progression + « fait/total », un « + » (en
-  /// édition) pour ajouter une sous-tâche, et à droite le chevron pour déplier/replier.
-  private var subtasksHeader: some View {
-    let total = task.subtasks.count
-    let done = task.subtasks.filter(\.isDone).count
-    return HStack(spacing: 8) {
-      SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
-        .frame(width: 13, height: 13)
-      Text("\(done)/\(total) sous-tâches")
-        .font(.app(.body).weight(.semibold))
-        .foregroundStyle(.primary)
-        .monospacedDigit()
-      if isEditing {
-        Button(action: addNewSubtask) {
-          Image(systemName: "plus")
-            .font(.app(13))
-            .foregroundStyle(.secondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-      }
-      Spacer(minLength: 0)
-      // Chevron de repli UNIQUEMENT en mode normal : en édition la liste est toujours dépliée.
-      if !isEditing {
-        Button {
-          withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
-        } label: {
-          Image(systemName: "chevron.right")
-            .font(.app(11, weight: .semibold))
-            .foregroundStyle(.tertiary)
-            .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+  private var subtasksSection: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      ForEach(task.orderedSubtasks, id: \.uuid) { subtask in
+        SubtaskRowView(
+          subtask: subtask,
+          isEditing: isEditing,
+          focus: $focusedSubtask,
+          onEnter: { enterOnSubtask(subtask) },
+          onDelete: { removeSubtask(subtask) }
+        )
+        // La rangée se fond en glissant depuis le haut pendant que la carte s'ouvre ; sans
+        // transition elle apparaît nette d'un coup au milieu d'une hauteur encore en mouvement.
+        .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
+    .transition(.opacity)
+    // Aligné sur le DÉBUT DU TEXTE du titre (case 16 + espace 10 = 26), comme l'aperçu de note :
+    // les cases des sous-tâches partent de cette colonne.
+    .padding(.leading, 26)
+    // Flèche de filiation, dans la gouttière laissée par ce retrait : elle descend de la case de la
+    // tâche parente vers la PREMIÈRE sous-tâche, et elle seule — répétée sur chaque rangée, elle
+    // ferait une colonne de bruit là où une seule suffit à dire « ce qui suit dépend d'au-dessus ».
+    // En overlay et non dans un HStack : elle ne prend aucune place, la colonne des cases ne bouge
+    // donc pas selon qu'elle est là ou non.
+    .overlay(alignment: .topLeading) {
+      Image(systemName: "arrow.turn.down.right")
+        .font(.app(11))
+        .foregroundStyle(.tertiary)
+        // Largeur de la case parente : la flèche est centrée dessous, pas collée au bord.
+        .frame(width: 16)
+        .padding(.top, 2)
+    }
+    .padding(.top, isEditing ? 10 : 5)
+  }
+
+  /// Résumé du dépliant, POSÉ SUR LA LIGNE DU TITRE (à droite) et non dans un bloc sous elle :
+  /// anneau de progression + « N sous-tâches » + chevron de repli. Le bloc précédent (trait +
+  /// en-tête en gras sur sa propre ligne) doublait la hauteur d'une tâche à sous-tâches et cassait
+  /// l'alignement de la liste ; ici la tâche garde exactement la hauteur d'une ligne simple.
+  /// Absent en édition : la liste y est toujours dépliée, il n'y a rien à replier.
+  private var subtasksSummary: some View {
+    let total = task.subtasks.count
+    let done = task.subtasks.filter(\.isDone).count
+    return Button {
+      withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
+    } label: {
+      HStack(spacing: 6) {
+        SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
+          .frame(width: 12, height: 12)
+        Text("\(total) sous-tâche\(total > 1 ? "s" : "")")
+          .font(.app(.callout))
+          .foregroundStyle(.secondary)
+          .monospacedDigit()
+          .fixedSize()
+        Image(systemName: "chevron.right")
+          .font(.app(11, weight: .semibold))
+          .foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
   }
 
   /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus.
@@ -617,18 +598,19 @@ struct TaskRow: View {
   /// Icône discrète révélée au survol quand la tâche n'a pas encore de notes : sans elle,
   /// l'existence même du champ notes (caché derrière un double-clic) n'est pas devinable. Un clic
   /// ouvre directement l'édition avec le focus posé dans les notes (cf. `focusNotesOnAppear`).
+  /// Le fondu au survol est porté par le groupe de droite (cf. `trailing`), pas ici.
   private var noteHint: some View {
     Button {
       focusNotesOnAppear = true
       onBeginEditing()
     } label: {
       Image(systemName: "note.text")
-        .font(.app(12, weight: .regular))
-        .foregroundStyle(.tertiary)
+        .font(.app(13, weight: .regular))
+        .foregroundStyle(.secondary)
+        .frame(width: 22, height: 22)
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .opacity(hovering ? 1 : 0)
-    .animation(.easeOut(duration: 0.15), value: hovering)
   }
 
   /// Aperçu de la note au repos : sa première ligne en gris, tronquée. Rappelle le CONTENU de la
@@ -644,27 +626,47 @@ struct TaskRow: View {
       .padding(.leading, 26)
   }
 
-  /// Zone de droite, collée au bord. Badge d'échéance et menu ••• sont SUPERPOSÉS (ZStack), pas
-  /// côte à côte : le badge n'a donc aucun espace réservé à sa droite (le ••• ne le pousse plus).
-  /// Au survol, le badge GLISSE vers la gauche pour libérer la place du •••, qui apparaît en fondu
-  /// tout à droite — comme Things. Le badge reste donc lisible pendant qu'on pointe la ligne.
+  /// Colonne réservée EN PERMANENCE aux icônes de survol (note + •••), vide ou non. C'est elle qui
+  /// garantit que le résumé des sous-tâches ne bouge pas quand la souris entre dans la ligne.
+  private static let hoverActionsWidth: CGFloat = 54
+
+  /// Zone de droite, collée au bord. Deux régimes, et la frontière est l'INTERACTIVITÉ :
+  ///
+  /// - le résumé des sous-tâches porte un chevron, donc une cible de clic. Il est ANCRÉ : la
+  ///   colonne de survol lui garde sa place à droite, vide ou non. Le faire glisser comme le reste
+  ///   se retournait contre l'utilisateur — il voit le chevron, il y va, et le chevron s'échappe
+  ///   sous son curseur au moment précis où le survol commence. Une cible de clic ne se déplace
+  ///   jamais au survol ;
+  /// - le badge d'échéance ne se clique pas. Il reste SUPERPOSÉ aux icônes (ZStack) et glisse vers
+  ///   la gauche pour leur céder la place — comme Things, et sans réserver d'espace à sa droite.
+  ///
   /// L'animation est bornée à `value: hovering` : elle ne se recalcule qu'au survol, pas au scroll.
   private var trailing: some View {
-    ZStack(alignment: .trailing) {
-      deadlineBadge.offset(x: hovering ? -26 : 0)
-      Menu {
-        taskMenu
-      } label: {
-        Image(systemName: "ellipsis")
-          .font(.app(14, weight: .semibold))
-          .foregroundStyle(.secondary)
-          .frame(width: 22, height: 22)
-          .contentShape(Rectangle())
+    HStack(spacing: 8) {
+      if !task.subtasks.isEmpty { subtasksSummary }
+      ZStack(alignment: .trailing) {
+        deadlineBadge.offset(x: hovering ? -Self.hoverActionsWidth : 0)
+        HStack(spacing: 6) {
+          if task.notes.isEmpty { noteHint }
+          Menu {
+            taskMenu
+          } label: {
+            Image(systemName: "ellipsis")
+              .font(.app(14, weight: .semibold))
+              .foregroundStyle(.secondary)
+              .frame(width: 22, height: 22)
+              .contentShape(Rectangle())
+          }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
+          .fixedSize()
+        }
+        // Largeur FIXE, pas la largeur réelle du contenu : sans elle la colonne vaudrait 54 pt sur
+        // une tâche sans notes et 26 sur une tâche qui en a, et le résumé ne serait plus aligné
+        // d'une ligne à l'autre.
+        .frame(width: Self.hoverActionsWidth, alignment: .trailing)
+        .opacity(hovering ? 1 : 0)
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
-      .opacity(hovering ? 1 : 0)
     }
     .animation(.easeOut(duration: 0.15), value: hovering)
   }

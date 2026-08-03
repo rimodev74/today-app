@@ -1,4 +1,35 @@
+import SwiftData
 import SwiftUI
+
+extension TodoList {
+  /// Une liste vide s'efface sans rien demander ; dès qu'elle porte des tâches, l'appelant doit
+  /// confirmer d'abord. La sidebar posait déjà la question, la page de la liste PAS DU TOUT.
+  var needsDeleteConfirmation: Bool { !tasks.isEmpty }
+
+  /// Ce que l'alerte annonce. Ici et pas dans une vue : deux alertes la posent (sidebar, carte
+  /// d'un projet), et deux textes auraient fini par ne plus dire la même chose.
+  var deleteConfirmationMessage: String {
+    let name = title.isEmpty ? "Cette liste" : "« \(title) »"
+    let n = tasks.count
+    return "\(name) contient \(n) tâche\(n > 1 ? "s" : ""). Elles seront aussi supprimées."
+  }
+
+  /// LA suppression d'une liste, pour les trois endroits qui l'offrent (clic droit dans la
+  /// sidebar, menu ••• de la page, menu d'une carte de projet). Deux l'écrivaient chacun de leur
+  /// côté, et le second à l'avoir écrit ne savait rien du premier.
+  ///
+  /// La sélection quitte la page AVANT l'effacement : rendue après, elle s'adosse à un modèle
+  /// effacé — SwiftData sert alors l'ancien instantané au lieu de planter, et on tape dans le vide.
+  /// Écriture explicite comme partout dans l'app : l'autosave laissait une fenêtre où la cascade
+  /// (une liste emporte ses tâches) n'était pas encore sur le disque.
+  func delete(from selection: Binding<SidebarSelection?>, in context: ModelContext) {
+    if selection.wrappedValue == .list(self) {
+      selection.wrappedValue = project.map(SidebarSelection.project) ?? .smartList(.all)
+    }
+    context.delete(self)
+    try? context.save()
+  }
+}
 
 enum SmartList: Hashable, CaseIterable {
   case all

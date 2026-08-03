@@ -42,11 +42,37 @@ TAG="v${SHORT_VERSION}"
 # Surtout PAS de `<sparkle:releaseNotesLink>` : Sparkle charge ce lien dans une WebView, et
 # pointer la page d'une release GitHub affichait TOUTE la page (en-tête, navigation, pied)
 # dans la petite fenêtre de mise à jour.
-HEADLINE_HTML=$(printf '%s' "${HEADLINE}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+esc_html() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# CE QUI CHANGE dans cette version — la seule partie de ces notes qui varie, et elle tenait
+# en une ligne : le reste de la fenêtre était le même texte d'installation à chaque version.
+# Deux sources, dans cet ordre :
+#   1. le message passé en argument. Sa PREMIÈRE ligne résume, les suivantes deviennent des
+#      points. C'est le seul endroit qui puisse décrire le travail pas encore commis —
+#      `quick.sh` ne commet qu'APRÈS nous ;
+#   2. les commits faits depuis la publication précédente, repérée par la ligne que
+#      `quick.sh` écrit dans le corps des siens (« Version X (build N). »). Pas de tag à
+#      tenir : le repère est déjà dans l'historique, écrit par celui qui publie.
+changes_html() {
+  local first rest prev
+  first=$(printf '%s\n' "${HEADLINE}" | head -1 | esc_html)
+  rest=$(printf '%s\n' "${HEADLINE}" | tail -n +2 | esc_html)
+  prev=$(git log -1 --format=%H --grep='^Version [0-9.]\{1,\} (build [0-9]\{1,\})\.$' 2>/dev/null || true)
+  [[ -z "${prev}" ]] || rest=$(printf '%s\n%s\n' "${rest}" "$(git log "${prev}..HEAD" --format='%s' | esc_html)")
+  rest=$(printf '%s\n' "${rest}" | sed -e '/^[[:space:]]*$/d' -e 's|.*|  <li>&</li>|')
+
+  printf '<p>%s</p>\n' "${first}"
+  [[ -z "${rest}" ]] || printf '<ul>\n%s\n</ul>\n' "${rest}"
+}
 
 # `color-scheme` fait suivre au rendu l'apparence système : c'est la seule ligne nécessaire
 # pour que ces notes ne soient pas un rectangle blanc en mode sombre. GitHub, lui, retire les
 # `<style>` de ses corps de release — la balise y disparaît sans rien casser.
+#
+# `$1 == install` joint les instructions de première installation. La fenêtre de Sparkle ne
+# les reçoit PAS : qui la lit a déjà l'app installée. Elles y occupaient les trois quarts de
+# la place pour ne concerner personne. Elles restent sur la page de la release GitHub, où
+# arrive un nouveau venu.
 notes_html() {
   cat <<HTML
 <style>
@@ -55,10 +81,13 @@ notes_html() {
   h2 { margin: 0 0 .2em; font-size: 1.15em; }
   h3 { margin: 1.1em 0 .3em; font-size: 1em; }
   p, li { line-height: 1.45; }
-  ol { padding-left: 1.2em; }
+  ol, ul { padding-left: 1.2em; }
 </style>
 <h2>Today ${SHORT_VERSION}</h2>
-<p>${HEADLINE_HTML}</p>
+$(changes_html)
+HTML
+  [[ "${1:-}" == "install" ]] || return 0
+  cat <<'HTML'
 <h3>Première installation</h3>
 <ol>
   <li>Ouvre le <code>.dmg</code> et glisse <strong>Today</strong> dans Applications.</li>
@@ -166,7 +195,7 @@ echo "→ Publication du DMG dans ${DIST_REPO} (avant l'appcast, sinon 404)…"
 # quarantaine. Ces instructions disparaîtront le jour d'un certificat Developer ID.
 gh release create "${TAG}" "${DMG}" -R "${DIST_REPO}" \
   --title "Today ${SHORT_VERSION}" \
-  --notes "$(notes_html)"
+  --notes "$(notes_html install)"
 
 echo "→ Publication de l'appcast dans ${DIST_REPO}…"
 appcast_xml > "${DIST_DIR}/appcast.xml"

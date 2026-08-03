@@ -32,6 +32,9 @@ struct SidebarView: View {
 
   // Liste/projet en attente de confirmation de suppression (non-vide) ⇒ alerte affichée.
   @State private var deletionCandidate: DeletionCandidate?
+  /// Le projet dont la palette est ouverte. Un identifiant et pas un `Bool` : le popover s'ancre sur
+  /// UNE rangée précise, et les rangées sont toutes rendues par la même fonction.
+  @State private var palettePickerID: PersistentIdentifier?
 
   private enum DeletionCandidate: Identifiable {
     case list(TodoList)
@@ -298,12 +301,33 @@ struct SidebarView: View {
     } label: {
       HStack(spacing: 6) {
         // Icône « dossier » sur le flanc gauche : à l'œil, un projet (dossier) se distingue
-        // d'une liste (anneau de progression) au premier regard. Version pleine quand déplié :
-        // pas de glyphe SF Symbols « dossier ouvert » distinct, `folder.fill` sert d'équivalent.
-        Image(systemName: project.isCollapsed ? "folder" : "folder.fill")
+        // d'une liste (anneau de progression) au premier regard.
+        //
+        // TOUJOURS pleine. Elle alternait `folder` / `folder.fill` pour dire replié/déplié — deux
+        // défauts : la convention macOS lit le contour comme un état INACTIF, pas comme un état
+        // ouvert (donc le sens était à l'envers), et le repli est déjà dit par le chevron, qui
+        // tourne. Une seule chose doit porter un état, sinon l'une des deux finit par mentir.
+        //
+        // Il n'existe PAS de « dossier ouvert » dans SF Symbols — catalogue complet vérifié, aucune
+        // variante autre que badges et flèches. C'est aussi le choix du Finder : son dossier ne
+        // s'ouvre pas non plus dans la barre latérale, seul le triangle bouge.
+        Image(systemName: "folder.fill")
           .font(.system(size: 13))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(
+            project.color.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary)
+          )
           .frame(width: 20)
+          // La palette s'ancre sur l'ICÔNE, qui est justement ce qu'elle colore — et pas sur la
+          // rangée entière, dont le cadre est gelé pendant un glissement (cf. `rowFrames`).
+          .popover(
+            isPresented: Binding(
+              get: { palettePickerID == id },
+              set: { if !$0 { palettePickerID = nil } }),
+            arrowEdge: .trailing
+          ) {
+            PalettePicker(
+              selection: Bindable(project).color, dismiss: { palettePickerID = nil })
+          }
 
         editableTitle(id: id, text: Bindable(project).title, placeholder: "Nom du projet") {
           if project.title.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -337,6 +361,7 @@ struct SidebarView: View {
     .contextMenu {
       Button("Renommer") { startRename(id) }
       Button("Nouvelle to-do list") { addList(to: project) }
+      Button("Couleur…") { palettePickerID = id }
       Divider()
       Button("Supprimer le projet", role: .destructive) { requestDelete(project) }
     }
@@ -352,6 +377,7 @@ struct SidebarView: View {
         // Trait seul (pas de camembert plein) : une liste vide reste un anneau GRIS ; le bleu
         // n'apparaît qu'avec la progression, disque plein bleu quand tout est fait.
         ProgressRing(progress: list.progress)
+          .tint(list.project?.color?.color)
         editableTitle(id: id, text: Bindable(list).title, placeholder: "Nom de la liste") {
           if list.title.trimmingCharacters(in: .whitespaces).isEmpty {
             list.title = "Nouvelle liste"
@@ -639,9 +665,7 @@ struct SidebarView: View {
   }
 
   private func addList(to project: Project) {
-    let list = TodoList(title: "Nouvelle liste", project: project)
-    list.sortIndex = (project.lists.map(\.sortIndex).max() ?? -1) + 1
-    modelContext.insertAndSave(list)
+    let list = project.appendList(titled: "Nouvelle liste", in: modelContext)
     project.isCollapsed = false
     selection = .list(list)
     // Le nom s'édite dans le TITRE de la page (pas la sidebar) : c'est ce qui permet à la validation
@@ -670,17 +694,13 @@ struct SidebarView: View {
   }
 
   private func delete(_ list: TodoList) {
-    if selection == .list(list) {
-      selection = list.project.map { .project($0) } ?? .smartList(.all)
-    }
-    modelContext.delete(list)
-    try? modelContext.save()
+    list.delete(from: $selection, in: modelContext)
   }
 
   /// Suppression directe si l'élément est vide (liste sans tâche, projet sans liste), sinon
   /// confirmation via l'alerte. Point de passage commun à ⌫ et au menu contextuel.
   private func requestDelete(_ list: TodoList) {
-    if list.tasks.isEmpty { delete(list) } else { deletionCandidate = .list(list) }
+    if list.needsDeleteConfirmation { deletionCandidate = .list(list) } else { delete(list) }
   }
 
   private func requestDelete(_ project: Project) {
@@ -704,9 +724,7 @@ struct SidebarView: View {
   private func alertMessage(_ candidate: DeletionCandidate) -> String {
     switch candidate {
     case .list(let list):
-      let name = list.title.isEmpty ? "Cette liste" : "« \(list.title) »"
-      let n = list.tasks.count
-      return "\(name) contient \(n) tâche\(n > 1 ? "s" : ""). Elles seront aussi supprimées."
+      return list.deleteConfirmationMessage
     case .project(let project):
       let name = project.title.isEmpty ? "Ce projet" : "« \(project.title) »"
       let n = project.lists.count

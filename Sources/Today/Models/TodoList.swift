@@ -4,8 +4,10 @@ import SwiftData
 /// Une to-do list : le seul endroit où vivent les tâches.
 @Model
 final class TodoList {
-  var title: String
-  var notes: Data
+  /// Identité stable entre appareils — mêmes raisons et mêmes contraintes que `TaskItem.uuid`.
+  var uuid: UUID = UUID()
+  var title: String = ""
+  var notes: Data = Data()
   var sortIndex: Int = 0
   var createdAt: Date = Date()
   /// Date planifiée de la liste (menu « Définir une date » de l'en-tête).
@@ -15,7 +17,7 @@ final class TodoList {
   /// La liste singleton qui porte les tâches sans projet — page « Tâches » de la sidebar
   /// (équivalent d'« À classer » dans Things). Créée une fois au lancement (cf. `ThingsCloneApp`).
   var isInbox: Bool = false
-  @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem]
+  @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
 
   // Stocké en Int comme sur TaskItem : SwiftData persiste le stocké, pas le calculé.
   var priority: Priority {
@@ -43,14 +45,18 @@ final class TodoList {
   /// Nombre de tâches restantes (non complétées) — le badge de la sidebar.
   var remainingCount: Int { countableTasks.filter { !$0.isCompleted }.count }
 
-  /// Progression du travail EN COURS : les archivées sortent du calcul, numérateur ET dénominateur.
-  /// L'anneau mesure ce que la PAGE montre — 29 tâches archivées derrière deux tâches à faire
-  /// donnaient un disque quasi plein devant une liste où rien n'est fait. Corollaire gratuit :
-  /// une liste entièrement archivée retombe à l'anneau vide, comme une liste neuve.
+  /// Progression de la LISTE : ce qui est coché sur ce qu'elle contient, en-têtes exclues.
+  ///
+  /// L'anneau a d'abord mesuré le flux VISIBLE — les tâches sorties de la page ne comptaient ni au
+  /// numérateur ni au dénominateur — pour qu'une liste au long cours n'affiche pas un disque quasi
+  /// plein devant une page où rien n'est fait. Retiré : vu d'un anneau il n'y a AUCUNE page, donc
+  /// aucun `pageOpenedAt`, et le repli sur le seuil de 1,5 s faisait sortir toute tâche cochée une
+  /// seconde et demie après le clic. Mesuré : 2 faites sur 4 → 0,0. L'anneau montait puis retombait
+  /// à zéro tout seul, partout. Une jauge qui ne retient rien ne mesure rien.
   var progress: Double {
-    let live = countableTasks.filter { !$0.isArchived }
-    guard !live.isEmpty else { return 0 }
-    return Double(live.filter(\.isCompleted).count) / Double(live.count)
+    let countable = countableTasks
+    guard !countable.isEmpty else { return 0 }
+    return Double(countable.filter(\.isCompleted).count) / Double(countable.count)
   }
 
   /// Réglage (Réglages) : descendre automatiquement une tâche cochée en bas de sa section.

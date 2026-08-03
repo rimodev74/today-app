@@ -54,6 +54,50 @@ extension KeyShortcut {
   }
 }
 
+/// Régler un raccourci PAR ACTION, sans ouvrir un second stockage. Les réglages du Pomodoro
+/// présentent cinq actions nommées ; l'onglet Raccourcis présente la même liste, par la ligne. Les
+/// deux écrivent DANS la même liste, à la ligne qui porte ce jeton — sans ça, la même combinaison
+/// aurait deux origines possibles et l'une des deux aurait fini par mentir.
+///
+/// Poser `nil` (ou une abréviation vide) RETIRE la ligne : une ligne sans déclencheur ne déclenche
+/// rien, la garder ferait grossir la liste de l'onglet Raccourcis d'entrées invisibles.
+extension Array where Element == KeyShortcut {
+  func combo(for token: String) -> KeyCombo? {
+    first { $0.expansion == token }?.key
+  }
+
+  mutating func setCombo(_ combo: KeyCombo?, for token: String) {
+    guard let combo else {
+      removeAll { $0.expansion == token }
+      return
+    }
+    if let index = firstIndex(where: { $0.expansion == token }) {
+      self[index].key = combo
+    } else {
+      append(KeyShortcut(expansion: token, key: combo))
+    }
+  }
+}
+
+extension Array where Element == TextShortcut {
+  func trigger(for token: String) -> String {
+    first { $0.expansion == token }?.trigger ?? ""
+  }
+
+  mutating func setTrigger(_ trigger: String, for token: String) {
+    let trimmed = trigger.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else {
+      removeAll { $0.expansion == token }
+      return
+    }
+    if let index = firstIndex(where: { $0.expansion == token }) {
+      self[index].trigger = trimmed
+    } else {
+      append(TextShortcut(trigger: trimmed, expansion: token))
+    }
+  }
+}
+
 extension TextShortcut {
   static let storageKey = "textShortcuts"
 

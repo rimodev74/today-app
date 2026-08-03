@@ -14,6 +14,11 @@ enum AppCommand: String, CaseIterable, Identifiable {
   case today
   case upcoming
   case archive
+  case pomodoroStart
+  case pomodoroPause
+  case pomodoroSkip
+  case pomodoroShortBreak
+  case pomodoroLongBreak
 
   var id: String { rawValue }
   var token: String { "!" + rawValue }
@@ -25,8 +30,18 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case .today: return "Afficher Aujourd'hui"
     case .upcoming: return "Afficher À venir"
     case .archive: return "Afficher Archives"
+    case .pomodoroStart: return "Lancer un pomodoro"
+    case .pomodoroPause: return "Mettre le pomodoro en pause"
+    case .pomodoroSkip: return "Passer à la phase suivante"
+    case .pomodoroShortBreak: return "Démarrer une pause courte"
+    case .pomodoroLongBreak: return "Démarrer une pause longue"
     }
   }
+
+  /// Les cinq commandes du minuteur, dans l'ordre où les réglages les présentent.
+  static let pomodoroCommands: [AppCommand] = [
+    .pomodoroStart, .pomodoroPause, .pomodoroSkip, .pomodoroShortBreak, .pomodoroLongBreak,
+  ]
 
   /// L'onglet à poser, ou `nil` pour « ramène l'app et ne touche à rien ».
   var smartList: SmartList? {
@@ -36,8 +51,15 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case .today: return .today
     case .upcoming: return .upcoming
     case .archive: return .archive
+    case .pomodoroStart, .pomodoroPause, .pomodoroSkip, .pomodoroShortBreak, .pomodoroLongBreak:
+      return nil
     }
   }
+
+  /// Les commandes du minuteur, qui ne sont PAS des commandes de navigation : elles n'emmènent nulle
+  /// part et ne doivent surtout pas ramener l'app: leur seul intérêt est de lancer ou d'arrêter un
+  /// Pomodoro sans quitter ce qu'on fait. C'est la pastille qui rend compte, pas la fenêtre.
+  var isPomodoro: Bool { Self.pomodoroCommands.contains(self) }
 
   init?(token: String) {
     guard token.hasPrefix("!") else { return nil }
@@ -55,10 +77,44 @@ enum AppCommand: String, CaseIterable, Identifiable {
   @MainActor static var pendingSelection: SmartList?
 
   @MainActor func run() {
+    if isPomodoro { return runPomodoro() }
     activate()
     guard let smartList else { return }
     Self.pendingSelection = smartList
     NotificationCenter.default.post(name: Self.selectionNotification, object: smartList)
+  }
+
+  /// Le minuteur, piloté au clavier. `PomodoroTimer.shared` et pas l'instance de l'environnement :
+  /// la frappe part d'un gestionnaire Carbon (cf. `GlobalHotKey`), qui n'a aucun accès à l'arbre de
+  /// vues — et doit répondre même quand la fenêtre principale a été fermée au bouton rouge.
+  @MainActor private func runPomodoro() {
+    let timer = PomodoroTimer.shared
+    switch self {
+    case .pomodoroStart:
+      timer.startWork()
+      HUDWindow.show(
+        "Pomodoro · " + timer.formattedRemaining, systemImage: "play.fill", tint: .red)
+    case .pomodoroPause:
+      timer.pause()
+      HUDWindow.show(
+        "Pomodoro en pause · " + timer.formattedRemaining, systemImage: "pause.fill")
+    case .pomodoroShortBreak:
+      timer.begin(.shortBreak)
+      HUDWindow.show(
+        "Pause courte · " + timer.formattedRemaining, systemImage: "cup.and.saucer.fill",
+        tint: .blue)
+    case .pomodoroLongBreak:
+      timer.begin(.longBreak)
+      HUDWindow.show(
+        "Pause longue · " + timer.formattedRemaining, systemImage: "cup.and.saucer.fill",
+        tint: .blue)
+    case .pomodoroSkip:
+      timer.advancePhase()
+      HUDWindow.show(
+        timer.phase.label + " · " + timer.formattedRemaining, systemImage: "forward.fill")
+    case .show, .all, .today, .upcoming, .archive:
+      break
+    }
   }
 
   /// Ramène Today au premier plan, exactement comme un clic sur son icône du Dock — y compris quand

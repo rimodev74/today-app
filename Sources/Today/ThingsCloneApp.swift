@@ -4,7 +4,7 @@ import SwiftUI
 
 @main
 struct TodayApp: App {
-  @State private var pomodoroTimer = PomodoroTimer()
+  @State private var pomodoroTimer = PomodoroTimer.shared
   @State private var remindersService = RemindersService()
   @State private var profile = UserProfile()
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
@@ -112,10 +112,20 @@ struct TodayApp: App {
     do {
       container = try open()
     } catch {
-      StoreQuarantine.quarantine(configuration.url)
-      // Si ça échoue encore, la base neuve elle-même est impossible à créer (disque plein, droits) :
-      // il n'y a plus d'app à lancer, autant planter ici avec l'erreur sous les yeux.
-      container = try! open()
+      // SECONDE tentative sur les mêmes octets AVANT de mettre quoi que ce soit de côté. Ce n'est
+      // pas une superstition, c'est mesuré : le 4 août 2026, l'app a été tuée en plein travail et a
+      // laissé un journal WAL de 2,4 Mo non rejoué ; l'ouverture suivante a échoué — mais elle avait
+      // rejoué le journal au passage, et la base ainsi RÉPARÉE s'est rouverte sans une erreur (21
+      // tâches, 5 listes). La quarantaine du premier échec a donc coûté une app vide pour une panne
+      // qui n'existait déjà plus. Une tentative de plus est le prix le moins cher du dossier.
+      do {
+        container = try open()
+      } catch {
+        StoreQuarantine.quarantine(configuration.url)
+        // Si ça échoue encore, la base NEUVE elle-même est impossible à créer (disque plein,
+        // droits) : il n'y a plus d'app à lancer, autant planter ici avec l'erreur sous les yeux.
+        container = try! open()
+      }
     }
     // Pas d'`UndoManager` posé ici. SwiftData enregistre bien tout seul dans celui du contexte,
     // mais un manager fabriqué au démarrage n'est relié à RIEN : le menu *Édition ▸ Annuler* parle
@@ -228,12 +238,14 @@ private struct MenuBarTimerLabel: View {
   let timer: PomodoroTimer
 
   var body: some View {
-    if timer.isRunning {
+    // `hasStarted` et pas `isRunning` : une session en pause GARDE son temps affiché. Le faire
+    // disparaître se lisait comme « c'est fini », alors qu'il reste 12 minutes à reprendre.
+    if timer.hasStarted {
       // En style .menu, MenuBarExtra rend son label dans le bouton du NSStatusItem et ignore
       // .font()/.frame() sur un Text : la largeur suit la chasse réelle des glyphes (SF est
       // proportionnel, "11:11" = 27.6pt vs "88:88" = 36.7pt) et toute la barre de menu se
       // décale à chaque seconde. Une Image a une taille intrinsèque non négociable.
-      Image(nsImage: MenuBarTimerImage.make(timer.formattedRemaining))
+      Image(nsImage: MenuBarTimerImage.make(timer.formattedRemaining, paused: !timer.isRunning))
     } else {
       Image(systemName: "timer")
     }
@@ -250,11 +262,33 @@ enum MenuBarTimerImage {
     weight: .regular
   )
 
-  static func make(_ text: String) -> NSImage {
-    let string = NSAttributedString(
-      string: text,
-      attributes: [.font: font, .foregroundColor: NSColor.black]
-    )
+  /// Le glyphe de pause, à la taille du texte. Noir comme lui : l'image entière part en `isTemplate`
+  /// juste en dessous, c'est elle qui prendra la couleur de la barre.
+  private static let pauseGlyph: NSImage? = {
+    let configuration = NSImage.SymbolConfiguration(pointSize: font.pointSize, weight: .semibold)
+    guard
+      let symbol = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "En pause")?
+        .withSymbolConfiguration(configuration)
+    else { return nil }
+    return symbol
+  }()
+
+  /// `paused` préfixe le temps d'un glyphe ⏸. Sans lui, un compte à rebours arrêté est
+  /// indiscernable d'un compte à rebours en marche tant qu'on ne l'a pas fixé une seconde entière —
+  /// c'est le prix à payer pour garder le temps affiché en pause.
+  static func make(_ text: String, paused: Bool = false) -> NSImage {
+    let string = NSMutableAttributedString()
+    if paused, let glyph = pauseGlyph {
+      let attachment = NSTextAttachment()
+      attachment.image = glyph
+      string.append(NSAttributedString(attachment: attachment))
+      string.append(NSAttributedString(string: " "))
+    }
+    string.append(
+      NSAttributedString(
+        string: text,
+        attributes: [.font: font, .foregroundColor: NSColor.black]
+      ))
     let size = string.size()
     let image = NSImage(
       size: NSSize(width: size.width.rounded(.up), height: size.height.rounded(.up)),

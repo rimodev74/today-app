@@ -145,7 +145,9 @@ private final class FloatingPanel: NSPanel {
 
   /// AppKit route Échap ici via la chaîne de responder, y compris depuis le field editor d'un
   /// `TextField` — plus fiable qu'un `.keyboardShortcut(.cancelAction)` sur un bouton caché.
-  override func cancelOperation(_ sender: Any?) { onCancel?() }
+  override func cancelOperation(_ sender: Any?) {
+    onCancel?()
+  }
 
   /// Cliquer ailleurs referme, comme Spotlight. Perdre la clé est le bon signal plutôt qu'un moniteur
   /// de clics globaux : le panneau la garde pendant le tracking d'un `NSMenu` (le chip de
@@ -154,6 +156,22 @@ private final class FloatingPanel: NSPanel {
   override func resignKey() {
     super.resignKey()
     if isVisible { onCancel?() }
+  }
+}
+
+/// L'ombre portée d'un bloc de la capsule, écrite UNE fois pour les deux branches de `pane` — la
+/// branche verre n'en avait aucune (le panneau pose `hasShadow = false` en comptant sur le verre) et
+/// le repli material avait la sienne, en dur : deux traitements pour un même besoin.
+///
+/// Le verre seul ne se détache pas d'un fond CLAIR — la capsule passait inaperçue par-dessus une
+/// fenêtre blanche, là où le Spotlight système reste lisible partout. Deux ombres comme lui : une
+/// courte et dense qui pose le contact, une longue et diffuse qui creuse le fond. Une seule obligerait
+/// à choisir entre les deux, donc à la vouloir soit trop dure, soit trop molle.
+extension View {
+  func paneShadow() -> some View {
+    self
+      .shadow(color: .black.opacity(0.20), radius: 4, y: 2)
+      .shadow(color: .black.opacity(0.16), radius: 32, y: 14)
   }
 }
 
@@ -234,7 +252,7 @@ private struct QuickEntryView: View {
 
   var body: some View {
     glassStack
-      .frame(width: 620)
+      .frame(width: 650)
       // L'ancrage haut fait grandir la capsule depuis sa propre ligne : ancrée au centre, elle
       // remonterait pendant le ressort parce que le bloc s'allonge vers le bas quand les notes
       // s'ouvrent.
@@ -389,16 +407,19 @@ private struct QuickEntryView: View {
           .regular.tint(Color(nsColor: .windowBackgroundColor).opacity(0.45)).interactive(),
           in: shape
         )
-      if morphing {
-        glass.glassEffectID(id, in: morph)
-      } else {
-        glass
+      Group {
+        if morphing {
+          glass.glassEffectID(id, in: morph)
+        } else {
+          glass
+        }
       }
+      .paneShadow()
     } else {
       content()
         .background(.regularMaterial, in: shape)
         .overlay { shape.strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
-        .shadow(color: .black.opacity(0.18), radius: 16, y: 5)
+        .paneShadow()
         .transition(.scale(scale: 0.92, anchor: .top).combined(with: .opacity))
     }
   }
@@ -416,7 +437,7 @@ private struct QuickEntryView: View {
       }
       TextField("Nouvelle tâche", text: $title)
         .textFieldStyle(.plain)
-        .font(.app(19))
+        .font(.app(20))
         .focused($focus, equals: .title)
         // Seul chemin d'enregistrement au clavier depuis que la barre de validation a disparu :
         // plus de bouton par défaut avec qui se dédoubler.
@@ -453,8 +474,11 @@ private struct QuickEntryView: View {
       subtaskButton
       sendButton
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 13)
+    // Les icônes de droite n'ont pas de police à elles : la donner ICI les met à l'échelle du champ
+    // sans toucher aux vues qui fixent déjà la leur (le champ, la mention ⌘↩, le chip).
+    .font(.app(15))
+    .padding(.horizontal, 17)
+    .padding(.vertical, 15)
     // La pastille de date entre et sort de la rangée : sans ça, la barre se réagence d'un coup
     // sous le curseur au moment où le jeton est reconnu.
     .animation(.bouncy(duration: 0.35), value: when)
@@ -580,9 +604,9 @@ private struct QuickEntryView: View {
         destinationIcon
         Text(destination?.title ?? SmartList.all.label)
       }
-      .font(.app(13))
-      .padding(.vertical, 4)
-      .padding(.horizontal, 11)
+      .font(.app(14))
+      .padding(.vertical, 5)
+      .padding(.horizontal, 12)
       .contentShape(Capsule())
       .background(.quaternary.opacity(picking ? 0.9 : 0.5), in: Capsule())
     }
@@ -594,6 +618,7 @@ private struct QuickEntryView: View {
   @ViewBuilder private var destinationIcon: some View {
     if let destination, !destination.isInbox {
       ProgressRing(progress: destination.progress, size: 11, lineWidth: 1.8)
+        .tint(destination.project?.color?.color)
     } else {
       Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
     }
@@ -648,6 +673,7 @@ private struct QuickEntryView: View {
             Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
           } else {
             ProgressRing(progress: list.progress, size: 11, lineWidth: 1.8)
+              .tint(list.project?.color?.color)
           }
         }
         .frame(width: 14)
@@ -823,6 +849,11 @@ private struct QuickEntryView: View {
       return
     }
     batch.forEach(insert)
+    // La capsule s'utilise depuis une AUTRE app : la liste où la tâche vient d'atterrir n'est pas à
+    // l'écran, et rien ne dirait que le dépôt a eu lieu. La pastille est le seul retour possible.
+    HUDWindow.show(
+      batch.count == 1 ? "Tâche ajoutée" : "\(batch.count) tâches ajoutées",
+      systemImage: "checkmark", tint: .green)
     dismiss()
     command?.run()
   }

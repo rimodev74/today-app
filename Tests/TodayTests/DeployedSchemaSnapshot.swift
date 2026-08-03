@@ -13,6 +13,14 @@ import SwiftData
 /// Historique des retouches :
 /// - `TaskItem.smartOrder`, 2 août 2026 — ajout PUR, absorbé par SwiftData sans étape de migration.
 /// - `TaskItem.hasTime` RETIRÉ, 2 août 2026 — changement CASSANT, d'où `SchemaV1` et son étape.
+/// - `Project.colorRaw`, 3 août 2026 — ajout PUR (optionnel), et pourtant 3.0.0 avec son étape.
+///   Retoucher ce fichier SANS monter `CurrentSchema.versionIdentifier` ni déclarer l'étape rend ce
+///   test VERT alors que l'app ne s'ouvre plus : le test fabrique sa base à la forme d'ici, donc
+///   une base déjà migrée, quand les vrais disques, eux, portent l'ancienne. C'est arrivé — la
+///   vraie base est partie en quarantaine. Ce fichier se retouche en DERNIER, jamais en premier.
+/// - `uuid` sur `Project`, `TodoList` et `TaskItem` + valeurs par défaut partout, 3 août 2026 —
+///   4.0.0, préparation de la synchro entre appareils. Ajout pur, mais étape `.custom` : les
+///   identités existantes doivent être TIRÉES une par une (cf. `TodayMigrationPlan`).
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -28,24 +36,27 @@ import SwiftData
 /// ces classes relisent sans perte un fichier écrit par les modèles de premier niveau, relations
 /// comprises.
 enum DeployedSchemaSnapshot: VersionedSchema {
-  static let versionIdentifier = Schema.Version(2, 0, 0)
+  static let versionIdentifier = Schema.Version(4, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
   }
 
   @Model final class Project {
+    var uuid: UUID = UUID()
     var title: String = ""
     var notes: Data = Data()
     var sortIndex: Int = 0
     var createdAt: Date = Date()
     var isCollapsed: Bool = false
+    var colorRaw: String?
     @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
 
     init() {}
   }
 
   @Model final class TodoList {
+    var uuid: UUID = UUID()
     var title: String = ""
     var notes: Data = Data()
     var sortIndex: Int = 0
@@ -60,6 +71,7 @@ enum DeployedSchemaSnapshot: VersionedSchema {
   }
 
   @Model final class TaskItem {
+    var uuid: UUID = UUID()
     var title: String = ""
     var notes: Data = Data()
     var isCompleted: Bool = false

@@ -11,8 +11,12 @@ import XCTest
 /// Sans lui, rien ne prévient : `swift build` passe, les autres tests passent, et c'est au lancement
 /// suivant que la vraie base part en quarantaine et que l'app s'ouvre vide.
 ///
-/// Un ajout ADDITIF (nouveau champ optionnel ou à valeur par défaut) le laisse vert : SwiftData
-/// migre seul, et c'est justement ce qu'on ne veut pas signaler.
+/// **Attention à sa portée, mesurée le 3 août 2026 :** ce premier test écrit sa base à la forme de
+/// `DeployedSchemaSnapshot`. Retoucher ce fichier-là EN MÊME TEMPS que les modèles le laisse donc
+/// vert quoi qu'il arrive — il compare alors la forme neuve à elle-même, pendant que les vrais
+/// disques portent l'ancienne. Ce sont les tests de MIGRATION plus bas qui tiennent l'autre bout :
+/// eux partent d'une forme figée dans le code de l'app, qu'on ne peut pas déplacer sous ses pieds.
+/// Toute forme déployée doit avoir le sien, y compris quand le changement n'est qu'un ajout.
 final class SchemaCompatibilityTests: XCTestCase {
   private func temporaryStoreURL() -> URL {
     URL(fileURLWithPath: NSTemporaryDirectory())
@@ -156,5 +160,60 @@ final class SchemaCompatibilityTests: XCTestCase {
     XCTAssertEqual(tasks.first?.list?.title, "Courses")
     XCTAssertEqual(tasks.first?.list?.project?.title, "Maison")
     XCTAssertEqual(tasks.first?.subtasks.map(\.title), ["Baguette"])
+  }
+
+  /// Le test que la 3.0.0 a rendu nécessaire — et celui qui aurait évité l'incident du 3 août 2026 :
+  /// une base à la forme 2.0.0 (sans `Project.colorRaw`) doit s'ouvrir par le chemin de l'app.
+  ///
+  /// La 3.0.0 n'AJOUTE qu'un champ optionnel, et on aurait juré que SwiftData l'absorbe seul. Non :
+  /// tant que `CurrentSchema.versionIdentifier` restait à 2.0.0, il comparait 2.0.0 à 2.0.0,
+  /// concluait « rien à faire », ne jouait aucune étape — et l'ouverture ÉCHOUAIT. La vraie base est
+  /// partie en quarantaine et l'app s'est ouverte vide. Retirer l'étape 2→3 du plan, ou reposer
+  /// `CurrentSchema` à 2.0.0, vire CE test au rouge.
+  @MainActor
+  func testStoreWrittenAtV2ShapeMigratesWithoutLosingAnything() throws {
+    let url = temporaryStoreURL()
+
+    do {
+      let v2 = try ModelContainer(
+        for: Schema(versionedSchema: SchemaV2.self),
+        configurations: ModelConfiguration(url: url))
+      let context = ModelContext(v2)
+
+      let project = SchemaV2.Project()
+      project.title = "Maison"
+      context.insert(project)
+
+      let list = SchemaV2.TodoList()
+      list.title = "Courses"
+      list.project = project
+      context.insert(list)
+
+      let task = SchemaV2.TaskItem()
+      task.title = "Acheter du pain"
+      task.list = list
+      task.when = Date(timeIntervalSince1970: 1_800_000_000)
+      task.priorityRaw = 2
+      task.headerColorRaw = "purple"
+      context.insert(task)
+
+      try context.save()
+    }
+
+    let container = try TodayApp.openStore(ModelConfiguration(url: url))
+    let context = ModelContext(container)
+
+    let projects = try context.fetch(FetchDescriptor<Project>())
+    let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+
+    XCTAssertEqual(projects.map(\.title), ["Maison"])
+    // Le champ qui APPARAÎT : nil sur une base d'avant, donc teinte d'accent — et surtout pas un
+    // projet perdu au passage.
+    XCTAssertNil(projects.first?.color)
+    XCTAssertEqual(projects.first?.lists.map(\.title), ["Courses"])
+    XCTAssertEqual(tasks.first?.when, Date(timeIntervalSince1970: 1_800_000_000))
+    XCTAssertEqual(tasks.first?.priority, .medium)
+    XCTAssertEqual(tasks.first?.headerColor, .purple)
+    XCTAssertEqual(tasks.first?.list?.project?.title, "Maison")
   }
 }

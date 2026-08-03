@@ -5,7 +5,7 @@ import AppKit
 import SwiftData
 import SwiftUI
 
-/// En-tête de section dans la liste. La pilule lavande (ou teintée si une `HeaderColor` est
+/// En-tête de section dans la liste. La pilule lavande (ou teintée si une `PaletteColor` est
 /// choisie) est TOUJOURS visible, repos comme sélection/édition — ce n'est plus un indicateur de
 /// sélection mais l'apparence permanente de l'en-tête. Le ••• apparaît au survol ou en
 /// sélection/édition ; en édition le champ devient actif + focus (curseur de saisie).
@@ -31,6 +31,8 @@ struct HeaderRow: View {
   /// Bascule brièvement l'icône de copie en checkmark après un clic, pour confirmer visuellement
   /// que le texte est bien dans le presse-papiers (sinon rien à l'écran ne le montre).
   @State private var copied = false
+  /// Palette ouverte. Le choix d'une couleur ne tient pas dans un menu : cf. `PalettePicker`.
+  @State private var pickingColor = false
 
   /// Cascade du drag : décalage vertical d'un calque et retrait horizontal (plus étroit, centré) par
   /// niveau. Couleurs OPAQUES, du même bleu, de plus en plus claires — assez SATURÉES pour se lire
@@ -169,6 +171,11 @@ struct HeaderRow: View {
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       .fixedSize()
+      // La palette s'ancre sur le ••• : c'est de lui qu'elle est ouverte, dans les deux chemins
+      // (le menu du bouton et le clic droit partagent `menuItems`).
+      .popover(isPresented: $pickingColor, arrowEdge: .bottom) {
+        PalettePicker(selection: $task.headerColor, dismiss: { pickingColor = false })
+      }
       // ••• visible en survol et à l'état actif, mais pas pendant le drag (la pilule est en vol).
       .opacity((hovering || active) && !isDragging ? 1 : 0)
     }
@@ -201,17 +208,7 @@ struct HeaderRow: View {
 
   /// Les actions d'une en-tête, écrites une fois pour ses deux points d'entrée (••• et clic droit).
   @ViewBuilder private var menuItems: some View {
-    Menu("Couleur") {
-      Button("Par défaut") { task.headerColor = nil }
-      ForEach(HeaderColor.allCases) { option in
-        Button {
-          task.headerColor = option
-        } label: {
-          Label(option.label, systemImage: "circle.fill")
-            .foregroundStyle(option.color)
-        }
-      }
-    }
+    Button("Couleur…") { pickingColor = true }
     Menu {
       if moveTargets.isEmpty {
         Text("Aucune autre liste")

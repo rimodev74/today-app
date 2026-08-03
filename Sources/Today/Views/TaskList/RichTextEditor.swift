@@ -17,6 +17,12 @@ struct RichTextEditor: NSViewRepresentable {
   /// Pose le focus clavier sur ce champ dès sa création (une seule fois, cf. `makeNSView`). Sert à
   /// ouvrir directement le clavier sur les notes (icône de survol) plutôt que sur le titre.
   var autoFocus: Bool = false
+  /// Retrait INTÉRIEUR au champ, pas autour de lui. Un encadré de notes qui pose sa marge en SwiftUI
+  /// (`.padding`) laisse cette marge hors de la vue texte : elle ne reçoit pas le clic, et sur une
+  /// note vide (une seule ligne de haut) c'est la moitié du cadre visible qui ne fait rien — d'où
+  /// l'impression d'un encart qui ne prend le focus qu'une fois sur deux. Ici, le cadre TOUT ENTIER
+  /// est la vue texte.
+  var insets: NSSize = .zero
 
   func makeNSView(context: Context) -> NSTextView {
     let textView = NSTextView()
@@ -33,7 +39,7 @@ struct RichTextEditor: NSViewRepresentable {
     textView.isAutomaticQuoteSubstitutionEnabled = false
     textView.isAutomaticDashSubstitutionEnabled = false
     textView.drawsBackground = false
-    textView.textContainerInset = .zero
+    textView.textContainerInset = insets
     textView.textContainer?.lineFragmentPadding = 0
     textView.textContainer?.widthTracksTextView = true
     textView.isVerticallyResizable = true
@@ -74,11 +80,14 @@ struct RichTextEditor: NSViewRepresentable {
     guard let width = proposal.width, width.isFinite, width > 0,
       let textContainer = nsView.textContainer, let layoutManager = nsView.layoutManager
     else { return nil }
-    textContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+    // Le retrait intérieur est pris sur la largeur ET rendu à la hauteur : c'est de la place que
+    // la vue texte occupe, pas de la place qu'on lui donne en plus.
+    textContainer.containerSize = NSSize(
+      width: max(width - 2 * insets.width, 1), height: .greatestFiniteMagnitude)
     layoutManager.ensureLayout(for: textContainer)
     let contentHeight = layoutManager.usedRect(for: textContainer).height
     let lineHeight = layoutManager.defaultLineHeight(for: nsView.font ?? font)
-    return CGSize(width: width, height: ceil(max(contentHeight, lineHeight)))
+    return CGSize(width: width, height: ceil(max(contentHeight, lineHeight)) + 2 * insets.height)
   }
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }

@@ -66,7 +66,4 @@ extension TaskItem {
     return retention.hasLeftTheFlow(completedAt: completedAt, now: now, pageOpenedAt: pageOpenedAt)
   }
 
-  /// Vu d'AILLEURS que la page d'une liste (sidebar, anneaux de progression) : pas de page, donc
-  /// pas de `pageOpenedAt`, et le réglage se relit depuis les défauts.
-  var isArchived: Bool { hasLeftTheFlow(CompletedTaskRetention.current) }
 }

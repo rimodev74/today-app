@@ -26,7 +26,7 @@ import SwiftData
 /// Tant que ce test est vert, l'estampille 1.0.0 est légitime. Rouge = elle ment, ne pas lancer
 /// l'app avant d'avoir suivi la marche ci-dessous.
 enum CurrentSchema: VersionedSchema {
-  static let versionIdentifier = Schema.Version(2, 0, 0)
+  static let versionIdentifier = Schema.Version(4, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
@@ -113,38 +113,229 @@ enum SchemaV1: VersionedSchema {
   }
 }
 
+/// **Forme 2.0.0, FIGÉE — ne se modifie plus jamais.** C'est ce que contiennent les bases écrites
+/// entre le 2 et le 3 août 2026 : la 1.0.0 moins `TaskItem.hasTime`.
+///
+/// Elle ne diffère de la forme courante que par `Project.colorRaw` (la teinte d'un projet), un
+/// ajout PUR. Et pourtant elle existe : mesuré le 3 août 2026, un ajout optionnel n'est PAS absorbé
+/// tout seul quand le numéro de version ne bouge pas. SwiftData compare les numéros, pas les
+/// formes — 2.0.0 sur le disque contre 2.0.0 dans le code, il conclut « rien à faire », ne joue
+/// aucune étape, et l'ouverture ÉCHOUE. `StoreQuarantine` a écarté la vraie base et l'app est
+/// repartie vide. C'est le prix d'une étape oubliée : ce n'est pas la NATURE du changement qui
+/// décide, c'est le fait de le DÉCLARER.
+enum SchemaV2: VersionedSchema {
+  static let versionIdentifier = Schema.Version(2, 0, 0)
+
+  static var models: [any PersistentModel.Type] {
+    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+
+  @Model final class Project {
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var isCollapsed: Bool = false
+    @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
+
+    init() {}
+  }
+
+  @Model final class TodoList {
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var scheduledWhen: Date?
+    var priorityRaw: Int = 0
+    var project: Project?
+    var isInbox: Bool = false
+    @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
+
+    init() {}
+  }
+
+  @Model final class TaskItem {
+    var title: String = ""
+    var notes: Data = Data()
+    var isCompleted: Bool = false
+    var isHeader: Bool = false
+    var completedAt: Date?
+    var sortIndex: Int = 0
+    var smartOrder: Int = 0
+    var when: Date?
+    var deadline: Date?
+    var priorityRaw: Int = 0
+    var estimateMinutes: Int = 0
+    var createdAt: Date = Date()
+    var reminderIdentifier: String?
+    var list: TodoList?
+    var headerColorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
+
+    init() {}
+  }
+
+  @Model final class Subtask {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var isDone: Bool = false
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var task: TaskItem?
+
+    init() {}
+  }
+}
+
+/// **Forme 3.0.0, FIGÉE — ne se modifie plus jamais.** La 2.0.0 plus `Project.colorRaw`.
+///
+/// C'est la dernière forme SANS identité stable : aucune de ses entités ne porte d'`uuid` sauf
+/// `Subtask`, et ses propriétés non optionnelles n'ont pas toutes de valeur par défaut. Autrement
+/// dit, la dernière forme qu'iCloud aurait refusé de synchroniser (cf. l'étape 3→4).
+enum SchemaV3: VersionedSchema {
+  static let versionIdentifier = Schema.Version(3, 0, 0)
+
+  static var models: [any PersistentModel.Type] {
+    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+
+  @Model final class Project {
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var isCollapsed: Bool = false
+    var colorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
+
+    init() {}
+  }
+
+  @Model final class TodoList {
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var scheduledWhen: Date?
+    var priorityRaw: Int = 0
+    var project: Project?
+    var isInbox: Bool = false
+    @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
+
+    init() {}
+  }
+
+  @Model final class TaskItem {
+    var title: String = ""
+    var notes: Data = Data()
+    var isCompleted: Bool = false
+    var isHeader: Bool = false
+    var completedAt: Date?
+    var sortIndex: Int = 0
+    var smartOrder: Int = 0
+    var when: Date?
+    var deadline: Date?
+    var priorityRaw: Int = 0
+    var estimateMinutes: Int = 0
+    var createdAt: Date = Date()
+    var reminderIdentifier: String?
+    var list: TodoList?
+    var headerColorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
+
+    init() {}
+  }
+
+  @Model final class Subtask {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var isDone: Bool = false
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var task: TaskItem?
+
+    init() {}
+  }
+}
+
 /// Chaîne de migration de l'app : les formes PASSÉES, dans l'ordre, puis la forme courante.
 ///
-/// Vide de versions passées pour l'instant — personne n'a encore de base à une autre forme que
-/// celle d'aujourd'hui. Le plan existe déjà pour que la première migration soit un ajout et pas un
-/// socle à inventer dans l'urgence.
+/// Deux formes passées à ce jour (1.0.0, 2.0.0). La marche ci-dessous vaut pour TOUT changement de
+/// forme, pas seulement pour un changement cassant : c'est la leçon du 3 août 2026, où un ajout
+/// optionnel sans montée de version a fait échouer l'ouverture et mettre la vraie base en
+/// quarantaine (cf. `SchemaV2`).
 ///
-/// ## Le jour où un changement cassant l'exige
+/// ## À chaque fois que la forme d'un `@Model` bouge
 ///
-/// 1. Déplacer `SchemaV1Snapshot` (cible de tests) ici, renommé `SchemaV1`. Ses types sont
-///    IMBRIQUÉS dans l'enum, donc indépendants du code vivant : c'est ce qui lui permet de
-///    continuer à décrire l'ANCIENNE forme une fois les modèles modifiés. Vérifié : imbriquer un
-///    `@Model` ne change pas l'entité de store qu'il décrit — une base écrite par les modèles de
-///    premier niveau s'y relit sans perte, relations comprises.
-/// 2. Modifier librement les modèles vivants, puis monter `CurrentSchema.versionIdentifier` à
-///    2.0.0. Il n'y a JAMAIS de `SchemaV2` figée : la forme courante n'est décrite qu'une fois,
-///    par les modèles eux-mêmes. On ne fige une version qu'au moment où elle devient passée.
-/// 3. `schemas = [SchemaV1.self, CurrentSchema.self]`.
-/// 4. `stages = [.lightweight(...)]` si le changement est additif, `.custom(...)` s'il faut
-///    transporter de la donnée d'un champ à l'autre — c'est le cas d'un renommage, et c'est LUI qui
-///    sauve les valeurs que SwiftData jetterait sinon.
-/// 5. Re-figer la nouvelle forme dans `SchemaV1Snapshot` (qui garde son rôle : « ce que contiennent
-///    les disques »), et rendre `SchemaCompatibilityTests` vert.
+/// 1. Copier ICI la forme DÉPLOYÉE (`Tests/TodayTests/DeployedSchemaSnapshot.swift`, avant
+///    retouche), sous le numéro qu'elle porte : `SchemaV<N>`. Ses types sont IMBRIQUÉS dans
+///    l'enum, donc indépendants du code vivant : c'est ce qui lui permet de continuer à décrire
+///    l'ANCIENNE forme une fois les modèles modifiés. Vérifié : imbriquer un `@Model` ne change
+///    pas l'entité de store qu'il décrit — une base écrite par les modèles de premier niveau s'y
+///    relit sans perte, relations comprises.
+/// 2. Modifier librement les modèles vivants, puis monter `CurrentSchema.versionIdentifier`. Il
+///    n'y a JAMAIS d'enum figée pour la forme COURANTE : elle n'est décrite qu'une fois, par les
+///    modèles eux-mêmes. On ne fige une version qu'au moment où elle devient passée.
+/// 3. Ajouter la forme passée à `schemas`, dans l'ordre.
+/// 4. Ajouter son étape à `stages` — `.lightweight` si le changement est additif ou purement
+///    soustractif, `.custom(...)` s'il faut transporter de la donnée d'un champ à l'autre (c'est
+///    le cas d'un renommage, et c'est LUI qui sauve les valeurs que SwiftData jetterait sinon).
+///    Une étape même triviale n'est PAS facultative : sans elle, l'ouverture échoue.
+/// 5. Re-figer la nouvelle forme dans `DeployedSchemaSnapshot` (qui garde son rôle : « ce que
+///    contiennent les disques »), son `versionIdentifier` compris, et rendre
+///    `SchemaCompatibilityTests` vert.
 ///
 /// Le test, lui, ne change jamais de nature : il vérifie toujours qu'une base au format déployé
 /// s'ouvre par `TodayApp.openStore`. C'est ce qui rend l'ajout d'une version mécanique.
 enum TodayMigrationPlan: SchemaMigrationPlan {
-  static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, CurrentSchema.self] }
+  static var schemas: [any VersionedSchema.Type] {
+    [SchemaV1.self, SchemaV2.self, SchemaV3.self, CurrentSchema.self]
+  }
 
-  /// `.lightweight` et pas `.custom` : la 2.0.0 ne fait que RETIRER `hasTime`, elle ne transporte
-  /// aucune valeur d'un champ vers un autre. Une étape sur mesure ne servirait qu'à recopier ce
-  /// booléen quelque part — or il vaut faux partout, c'est toute la raison de sa suppression.
+  /// Les deux premières étapes sont `.lightweight` : rien n'y voyage d'un champ vers un autre. La
+  /// 2.0.0 RETIRE `hasTime` (faux partout, c'est la raison de sa suppression) ; la 3.0.0 AJOUTE
+  /// `Project.colorRaw`, optionnel et donc nil sur toutes les bases existantes.
+  ///
+  /// Elles sont là malgré leur caractère trivial : sans étape, SwiftData ne compare que les numéros
+  /// de version, conclut « rien à faire » et l'ouverture ÉCHOUE (cf. `SchemaV2`).
+  ///
+  /// **La 3→4 est `.custom`, et il le fallait.** Elle ajoute un `uuid` à `Project`, `TodoList` et
+  /// `TaskItem` — l'identité stable dont la synchro entre appareils a besoin. En `.lightweight`,
+  /// les lignes existantes auraient été remplies par la valeur par DÉFAUT de l'attribut, et une
+  /// valeur par défaut est une expression évaluée UNE fois à la construction du schéma : les 87
+  /// tâches d'une base auraient toutes reçu le MÊME `UUID`. Un identifiant d'identité partagé par
+  /// tout le monde ne distingue rien — c'est précisément le doublon en masse qu'il est censé
+  /// empêcher, livré dès le premier jour de synchro. `didMigrate` en attribue donc un neuf à chaque
+  /// ligne, une fois, au moment du passage. Vérifié par `SchemaMigrationV4Tests`.
   static var stages: [MigrationStage] {
-    [.lightweight(fromVersion: SchemaV1.self, toVersion: CurrentSchema.self)]
+    [
+      .lightweight(fromVersion: SchemaV1.self, toVersion: SchemaV2.self),
+      .lightweight(fromVersion: SchemaV2.self, toVersion: SchemaV3.self),
+      .custom(
+        fromVersion: SchemaV3.self,
+        toVersion: CurrentSchema.self,
+        willMigrate: nil,
+        didMigrate: stampIdentities
+      ),
+    ]
+  }
+
+  /// Donne à chaque ligne d'avant la 4.0.0 son identité propre.
+  ///
+  /// Inconditionnel, et c'est volontaire : cette étape ne s'exécute qu'AU passage 3→4, où par
+  /// construction aucune ligne n'a encore d'`uuid` qui lui appartienne. Chercher lesquelles
+  /// « en ont besoin » demanderait de reconnaître la valeur par défaut — celle-là même qui change à
+  /// chaque lancement du process, donc rien de fiable à comparer.
+  ///
+  /// `Subtask` est épargnée : elle porte un `uuid` depuis la 1.0.0, et le sien est bien distinct
+  /// (ses lignes sont toutes nées d'un `init`, jamais remplies par une migration).
+  /// `@Sendable` explicite : `MigrationStage.custom` attend une fonction `@Sendable`, et en mode
+  /// Swift 5 le compilateur ne l'infère pas d'une déclaration — même quand elle ne capture rien.
+  @Sendable private static func stampIdentities(_ context: ModelContext) throws {
+    for project in try context.fetch(FetchDescriptor<Project>()) { project.uuid = UUID() }
+    for list in try context.fetch(FetchDescriptor<TodoList>()) { list.uuid = UUID() }
+    for task in try context.fetch(FetchDescriptor<TaskItem>()) { task.uuid = UUID() }
+    try context.save()
   }
 }

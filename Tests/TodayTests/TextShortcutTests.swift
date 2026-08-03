@@ -62,6 +62,52 @@ final class TextShortcutTests: XCTestCase {
     XCTAssertNil(QuickEntry.resolving("Relire le devis", shortcuts: all))
   }
 
+  /// Les commandes du minuteur sont des commandes d'app comme les autres (même sigil, même menu de
+  /// réglages), mais elles ne NAVIGUENT pas : `smartList` nul et `isPomodoro` vrai, c'est ce couple
+  /// qui les empêche de ramener la fenêtre au premier plan quand on les frappe depuis une autre app.
+  func testPomodoroCommandsNavigateNowhere() {
+    XCTAssertEqual(AppCommand.pomodoroCommands.count, 5)
+    for command in AppCommand.pomodoroCommands {
+      XCTAssertNil(command.smartList, command.rawValue)
+      XCTAssertTrue(command.isPomodoro, command.rawValue)
+      XCTAssertEqual(AppCommand(token: command.token), command)
+    }
+    XCTAssertFalse(AppCommand.today.isPomodoro)
+  }
+
+  /// Les réglages du Pomodoro et l'onglet Raccourcis écrivent dans la MÊME liste : régler la
+  /// combinaison d'une action met à jour sa ligne, ne la duplique pas, et la retirer efface la
+  /// ligne au lieu de laisser une entrée sans déclencheur.
+  func testCombosAreKeyedByTokenInASingleList() {
+    let combo = KeyCombo(keyCode: 35, modifiers: 0, label: "⌃P")
+    var keys: [KeyShortcut] = [.init(expansion: "@today", key: combo)]
+
+    keys.setCombo(combo, for: AppCommand.pomodoroStart.token)
+    XCTAssertEqual(keys.count, 2)
+    XCTAssertEqual(keys.combo(for: AppCommand.pomodoroStart.token), combo)
+
+    let autre = KeyCombo(keyCode: 36, modifiers: 0, label: "⌃L")
+    keys.setCombo(autre, for: AppCommand.pomodoroStart.token)
+    XCTAssertEqual(keys.count, 2, "une action ne doit jamais avoir deux lignes")
+    XCTAssertEqual(keys.combo(for: AppCommand.pomodoroStart.token), autre)
+
+    keys.setCombo(nil, for: AppCommand.pomodoroStart.token)
+    XCTAssertEqual(keys.count, 1)
+    XCTAssertNil(keys.combo(for: AppCommand.pomodoroStart.token))
+  }
+
+  /// Même règle pour l'abréviation, plus une : les espaces autour sont retirés, et une abréviation
+  /// vidée efface la ligne — sinon « » resterait un déclencheur, que TOUT texte satisferait.
+  func testTriggersAreTrimmedAndClearable() {
+    var texts: [TextShortcut] = []
+    texts.setTrigger("  pom ", for: AppCommand.pomodoroStart.token)
+    XCTAssertEqual(texts.trigger(for: AppCommand.pomodoroStart.token), "pom")
+
+    texts.setTrigger("   ", for: AppCommand.pomodoroStart.token)
+    XCTAssertTrue(texts.isEmpty)
+    XCTAssertEqual(texts.trigger(for: AppCommand.pomodoroStart.token), "")
+  }
+
   /// Les deux familles ne doivent pas se confondre : un jeton de date n'est pas une commande.
   func testDateTokenIsNotAnAppCommand() {
     XCTAssertNil(AppCommand(token: "@today"))

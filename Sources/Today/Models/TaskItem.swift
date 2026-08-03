@@ -3,9 +3,23 @@ import SwiftData
 
 @Model
 final class TaskItem {
-  var title: String
-  var notes: Data
-  var isCompleted: Bool
+  /// Identité STABLE entre appareils, posée à la création et jamais réécrite.
+  ///
+  /// `PersistentIdentifier` ne peut pas servir à ça : il n'a de sens que dans le store qui l'a
+  /// attribué. Le Mac et l'iPhone en donneraient deux différents à la même tâche, et la synchro
+  /// n'aurait aucun moyen de savoir si deux lignes sont la même chose ou deux choses — le mode de
+  /// panne classique est que tout se retrouve en double.
+  ///
+  /// PAS de `@Attribute(.unique)` : CloudKit l'interdit (il ne sait pas tenir une contrainte
+  /// d'unicité côté serveur), et un modèle qui en porte une refuse simplement de se synchroniser.
+  /// L'unicité vient d'`UUID` lui-même, pas d'une contrainte de base.
+  var uuid: UUID = UUID()
+  // Valeurs par défaut sur TOUTE propriété non optionnelle : exigence dure de SwiftData + CloudKit,
+  // qui doit pouvoir matérialiser une ligne dont un champ n'est pas encore arrivé. Elles ne changent
+  // ni la forme du store ni les données — l'app remplit ces champs par `init` de toute façon.
+  var title: String = ""
+  var notes: Data = Data()
+  var isCompleted: Bool = false
   /// Une en-tête est une ligne de séparation titrée dans la liste, pas une tâche.
   var isHeader: Bool = false
   var completedAt: Date?
@@ -35,13 +49,13 @@ final class TaskItem {
   /// Durée estimée en minutes, 0 = non estimée (cf. `Estimate`). C'est elle que la page
   /// « Aujourd'hui » additionne pour confronter la journée planifiée au temps qui reste.
   var estimateMinutes: Int = 0
-  var createdAt: Date
+  var createdAt: Date = Date()
   /// Identifiant du rappel Apple Rappels associé, s'il existe.
   /// Permet de re-modifier le rappel au lieu d'en recréer un.
   var reminderIdentifier: String?
   var list: TodoList?
   /// Couleur de l'en-tête (uniquement significatif si `isHeader`). `nil` = style par défaut.
-  /// Stocke `HeaderColor.rawValue` — voir `headerColor` ci-dessous, même pattern que `priority`.
+  /// Stocke `PaletteColor.rawValue` — voir `headerColor` ci-dessous, même pattern que `priority`.
   var headerColorRaw: String?
   @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
 
@@ -78,8 +92,8 @@ final class TaskItem {
   }
 
   /// Stocké en String (rawValue) : SwiftData persiste les propriétés stockées, pas les calculées.
-  var headerColor: HeaderColor? {
-    get { headerColorRaw.flatMap(HeaderColor.init(rawValue:)) }
+  var headerColor: PaletteColor? {
+    get { headerColorRaw.flatMap(PaletteColor.init(rawValue:)) }
     set { headerColorRaw = newValue?.rawValue }
   }
 

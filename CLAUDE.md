@@ -77,15 +77,53 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
 - **Le store contient de la VRAIE donnée**, pas des jeux d'essai — et il vit à la racine de
   `~/Library/Application Support/` (`default.store`), sans sous-dossier au nom du bundle id.
   Le compter avant d'y toucher : `sqlite3 default.store "select count(*) from ZTASKITEM;"`.
-- **Un `@Model` modifié peut vider une colonne sans un mot.** `CurrentSchema` pointe les classes
-  VIVANTES et son numéro de version ne bouge pas tout seul. Un ajout est absorbé sans rien faire ;
-  un renommage, une suppression ou un changement de type laisse `swift build` passer, laisse le
-  store s'ouvrir SANS erreur, et perd la donnée — mesuré, pas supposé. Ni quarantaine ni alerte.
-  Deux protections, à deux moments différents : `SchemaCompatibilityTests` attrape le changement AU
-  MOMENT OÙ ON L'ÉCRIT (**rouge ⇒ ne pas lancer l'app**, suivre les cinq points en tête de
-  `TodaySchema.swift`) ; `StoreBackup` copie la vraie base AVANT de l'ouvrir dès que la forme a
-  bougé, dans `~/Library/Application Support/Today-Backups/` (3 copies gardées, journal SQLite
-  compris). Restaurer = recopier les trois fichiers par-dessus `default.store`, app fermée.
+- **TOUT changement de forme d'un `@Model` demande une montée de version ET une étape.** Y compris
+  un ajout. `CurrentSchema` pointe les classes VIVANTES et son numéro de version ne bouge pas tout
+  seul — SwiftData compare les NUMÉROS, jamais les formes. Deux issues, toutes deux muettes à la
+  compilation :
+  - **numéro inchangé** → il conclut « rien à faire », ne joue aucune étape, et **l'ouverture
+    échoue** : la vraie base part en quarantaine et l'app démarre VIDE. Mesuré le 3 août 2026 en
+    ajoutant `Project.colorRaw`, un simple `String?` — « un ajout est absorbé tout seul » était
+    faux, ça a coûté une restauration.
+  - **numéro monté mais étape manquante sur un renommage / une suppression / un changement de
+    type** → `swift build` passe, le store s'ouvre SANS erreur, et **la donnée part**.
+
+  Marche à suivre : les cinq points en tête de `TodaySchema.swift`. **Rouge ⇒ ne pas lancer
+  l'app.** Deux cliquets le disent, et ils ont été vérifiés en REJOUANT la faute :
+
+  1. `SchemaFingerprintTests` — l'empreinte SHA de la forme (`StoreBackup.fingerprint`, qui la
+     calculait déjà pour décider d'une sauvegarde) confrontée à une constante versionnée. Modifier
+     un `@Model` la fait bouger, point. Ne JAMAIS recopier l'empreinte pour faire taire le test :
+     c'est l'oubli qu'il attrape.
+  2. `StoreFixtureTests` — une VRAIE base par version livrée (`Tests/TodayTests/Fixtures/`),
+     rouverte par `TodayApp.openStore`. À chaque montée de version, y déposer la base de la version
+     sortante et l'ajouter à `shipped` ; les fichiers déjà là ne se retouchent jamais.
+
+  Pourquoi ces deux-là et pas `SchemaCompatibilityTests` seul : ce dernier fabrique ses bases à
+  partir d'une DESCRIPTION en code (`DeployedSchemaSnapshot`), éditable — et éditée le 3 août dans
+  le même commit que les modèles, ce qui l'a laissé vert pendant que la vraie base partait en
+  quarantaine. Mesuré en rejouant ce commit : les 4 `SchemaCompatibilityTests` verts, les 2 cliquets
+  rouges. Un binaire versionné ne dérive pas. `DeployedSchemaSnapshot` se retouche EN DERNIER.
+
+  Troisième filet, à l'exécution : `StoreBackup` copie la vraie base AVANT de l'ouvrir dès que la
+  forme a bougé, dans `~/Library/Application Support/Today-Backups/` (3 copies gardées, journal
+  SQLite compris). Restaurer = recopier les trois fichiers par-dessus `default.store`, app fermée.
+
+  **Une migration se répète à blanc sur une COPIE de la vraie base avant de lancer l'app.** Les
+  tests portent sur des fixtures ; la vraie base peut contenir ce qu'aucune fixture ne décrit.
+  Copier `default.store` + ses deux journaux ailleurs, l'ouvrir par `TodayApp.openStore`, compter.
+- **Une valeur par défaut est évaluée UNE fois, pas une fois par ligne.** Conséquence non évidente
+  et mesurée le 3 août 2026 : ajouter `var uuid: UUID = UUID()` en migration `.lightweight` remplit
+  TOUTES les lignes existantes avec le MÊME identifiant (`Schema.Attribute.defaultValue` contient un
+  UUID concret, pas un générateur). Un identifiant d'identité partagé par tout le monde ne distingue
+  rien — c'est le doublon en masse dès le premier jour de synchro. D'où l'étape `.custom` 3→4 et son
+  `didMigrate`, gardée par `SchemaMigrationV4Tests`. La règle générale : dès qu'un champ ajouté doit
+  valoir quelque chose de DIFFÉRENT par ligne, `.lightweight` ne peut pas convenir.
+- **Le modèle est prêt pour CloudKit, et un test le tient.** `CloudKitReadinessTests` vérifie sur le
+  `Schema` lui-même les quatre contraintes qu'iCloud impose : toute propriété optionnelle ou pourvue
+  d'une valeur par défaut, aucune `@Attribute(.unique)`, toute relation « à un » optionnelle et
+  pourvue d'un inverse, une identité stable (`uuid`) sur chaque entité. Elles ne coûtent rien tant
+  que la synchro n'est pas branchée — c'est justement pourquoi elles se cassent sans qu'on le voie.
 - **EventKit rend des optionnels implicites.** `EKEvent.startDate`, `EKCalendarItem.calendar`,
   `EKCalendar.cgColor`, `.title` sont `null_unspecified` : les lire sans garde plante sur un
   calendrier d'abonnement mal formé. Filtrer À L'ENTRÉE, dans `RemindersService`, jamais chez chaque
@@ -133,6 +171,21 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
   framework. Conséquence : `codesign --verify --deep --strict` sort en erreur (« bundle format is
   ambiguous »), or c'est ce sceau que Sparkle compare entre l'app installée et celle qu'il télécharge
   avant d'installer une mise à jour. `ditto` partout où l'on copie un bundle (cf. `make-app.sh`).
+- **Un store laissé sale par un plantage se répare tout seul — à la DEUXIÈME tentative.** Le 4 août
+  2026, l'app a été tuée en plein travail (cf. le plantage ci-dessous) et a laissé un journal WAL de
+  2,4 Mo non rejoué. L'ouverture suivante a ÉCHOUÉ, la base est partie en quarantaine, l'app est
+  repartie vide — mais cette tentative ratée avait rejoué le journal au passage, et les MÊMES octets
+  se rouvrent depuis sans une erreur (21 tâches, 5 listes, vérifié par `TodayApp.openStore` sur une
+  copie). La quarantaine avait donc coûté une app vide pour une panne qui n'existait déjà plus. D'où
+  la seconde tentative dans `TodayApp.container`, avant toute mise à l'écart.
+- **Ne JAMAIS poster la notification d'ouverture de la capsule à une instance dont on refait le
+  bundle.** C'est ce qui a tué l'app ce jour-là, et la pile le dit mot pour mot :
+  `QuickEntryWindow.show` → `makeKeyAndOrderFront` → `NSRemoteView` → `_CFBundleGetValueForInfoKey`
+  → exception → « Abort trap: 6 ». Ordonner une fenêtre à l'écran fait lire l'`Info.plist` du bundle
+  par une vue hors-process ; si `make-app.sh` est en train de le réécrire, il n'y a rien à lire.
+  C'est le plantage fantôme déjà décrit en tête de ce fichier, atteint par une autre porte —
+  `run.sh` tue bien l'instance AVANT de reconstruire, mais un script qui parle à l'app par
+  `DistributedNotificationCenter` court-circuite cette garantie.
 - **La quarantaine se DIT à l'utilisateur.** `StoreQuarantine` écarte la base illisible et l'app
   repart vide ; « ça se remarque » ne suffisait pas — rien ne disait que le travail était encore là,
   à côté, sous un autre nom, et le vrai risque était de tout retaper par-dessus. Le rapport passe par
@@ -242,6 +295,12 @@ renommage, complétion, projets, sous-tâches, notes en texte riche, saisie rapi
 Apple (lecture + report de complétion), recherche (`QuickFindPanel`), capsule de saisie rapide hors
 app, et les quatre pages intelligentes — **Tâches**, **Aujourd'hui**, **À venir**, **Archives** —
 toutes réelles.
+
+`HUDWindow` est la pastille d'accusé de réception, en bas de l'ÉCRAN : elle ne parle QUE des gestes
+dont le résultat n'est pas à l'écran — une tâche déposée par la capsule depuis une autre app, un
+Pomodoro piloté au clavier (cf. les commandes `!pomodoro…` d'`AppCommand`, à qui elle sert de seul
+retour, puisqu'elles n'activent délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux,
+elle n'a rien à dire, et l'y ajouter la transformerait en bruit.
 
 Les cinq pages se comportent pareil, et ça a été vérifié à la main, dans les deux thèmes :
 sélection au clic, ⌫, ↑/↓, clic dans le vide qui relâche, ⌘Z après une suppression. Le glisser

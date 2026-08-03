@@ -171,7 +171,7 @@ struct TodayPageView: View {
   /// La MÊME `TaskRow` que dans une page de liste : édition, suppression, dates, durée, rappels et
   /// sous-tâches viennent avec, sans une ligne de plus ici.
   private func taskRow(
-    for task: TaskItem, showsParent: Bool = true, onSchedule: (() -> Void)? = nil,
+    for task: TaskItem, showsParent: Bool = true,
     offset: CGSize = .zero, draggable: Bool = false, rows: [TaskItem] = []
   ) -> some View {
     // Typés ici : un ternaire entre une closure et `nil` ne s'infère pas au milieu d'une chaîne de
@@ -185,7 +185,6 @@ struct TodayPageView: View {
       moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: false,
       parentLabel: showsParent ? parentLabel(of: task) : nil,
-      onSchedule: onSchedule,
       onBeginEditing: { beginEditing(task) },
       onEndEditing: { endEditing(task) },
       onMove: { move(task, to: $0) },
@@ -268,12 +267,6 @@ struct TodayPageView: View {
     }
   }
 
-  /// Fait passer une tâche de la réserve à la journée. Pas d'heure : comme partout ailleurs dans
-  /// l'app, on ne pose qu'un jour (cf. `hasTime`, écrit mais jamais lu).
-  private func schedule(_ task: TaskItem) {
-    withAnimation(taskInsert) { task.when = startOfToday }
-  }
-
   // MARK: Réserve (tâches sans date)
 
   /// `DisclosureGroup` plutôt qu'un chevron maison : le triangle, son animation, le clic sur le
@@ -296,7 +289,7 @@ struct TodayPageView: View {
                 .padding(.bottom, 2)
               ForEach(group.tasks) { task in
                 // Pas de rattachement sur la ligne : l'en-tête du groupe le porte déjà.
-                taskRow(for: task, showsParent: false, onSchedule: { schedule(task) })
+                taskRow(for: task, showsParent: false)
               }
             }
           }

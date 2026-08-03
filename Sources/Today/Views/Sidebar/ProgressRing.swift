@@ -2,6 +2,10 @@ import SwiftUI
 
 /// Anneau de progression. Taille libre : 12pt devant une to-do list dans la sidebar,
 /// 28pt à côté du titre dans l'en-tête de la vue détail.
+///
+/// Se peint en `.tint` et non en `Color.accentColor` : l'appelant teinte l'anneau d'un
+/// `.tint(list.project?.color?.color)` — la voie NATIVE, sans paramètre à faire descendre à chaque
+/// point d'appel, et qui retombe d'elle-même sur l'accent système quand rien n'est posé.
 struct ProgressRing: View {
   let progress: Double
   var size: CGFloat = 12
@@ -15,7 +19,7 @@ struct ProgressRing: View {
       if showsFill {
         // Rendu Things de l'en-tête : contour TOUJOURS plein bleu, seule la part de
         // camembert intérieure suit la progression.
-        Circle().stroke(Color.accentColor, lineWidth: lineWidth)
+        Circle().stroke(.tint, lineWidth: lineWidth)
         // Montée EN PERMANENCE — y compris à 0 (l'arc est alors dégénéré, elle ne dessine rien) et
         // à 1 (elle remplit le disque). C'est LA condition pour que l'anneau s'anime vraiment.
         //
@@ -25,7 +29,7 @@ struct ProgressRing: View {
         // qui ne fait que bouger la valeur, sans monter ni démonter — faisait vraiment grandir la
         // part. Toujours montée, les deux cas empruntent le même chemin.
         PieWedge(progress: progress)
-          .fill(Color.accentColor)
+          .fill(.tint)
           .rotationEffect(.degrees(-90))
           .padding(lineWidth + 1)
       } else {
@@ -33,7 +37,7 @@ struct ProgressRing: View {
         Circle().stroke(.tertiary, lineWidth: lineWidth)
         Circle()
           .trim(from: 0, to: progress)
-          .stroke(Color.accentColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+          .stroke(.tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
           .rotationEffect(.degrees(-90))
         // Anneau plein = terminé : on remplit le disque pour que ça se lise d'un coup d'œil.
         // Réservé au PETIT anneau : dans la variante `showsFill`, la part de camembert ci-dessus
@@ -41,7 +45,7 @@ struct ProgressRing: View {
         // interpolation qui arrive déjà à bon port.
         if progress >= 1 {
           Circle()
-            .fill(Color.accentColor)
+            .fill(.tint)
             .padding(lineWidth + 1)
             .transition(.scale.combined(with: .opacity))
         }

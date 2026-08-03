@@ -201,10 +201,9 @@ struct AllTasksPageView: View {
 
   // MARK: Lignes de tâche
 
-  /// La MÊME `TaskRow` que partout ailleurs. Dans « Aujourd'hui » : ni date (elle est implicite) ni
-  /// ⊕ (elles y sont déjà) mais le rattachement, puisque la section mélange les provenances.
-  /// Ailleurs : la date compte, le rattachement est celui de la section, et le ⊕ au survol fait
-  /// passer la tâche au jour même sans détour par « Quand… ».
+  /// La MÊME `TaskRow` que partout ailleurs. Dans « Aujourd'hui » : pas de date (elle est
+  /// implicite) mais le rattachement, puisque la section mélange les provenances. Ailleurs : la
+  /// date compte, le rattachement est celui de la section.
   private func taskRow(
     for task: TaskItem, isToday: Bool, offset: CGSize = .zero, rows: [TaskItem] = []
   ) -> some View {
@@ -215,7 +214,6 @@ struct AllTasksPageView: View {
       moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: !isToday,
       parentLabel: isToday ? parentLabel(of: task) : nil,
-      onSchedule: isToday ? nil : { schedule(task) },
       onBeginEditing: { beginEditing(task) },
       onEndEditing: { endEditing(task) },
       onMove: { move(task, to: $0) },
@@ -301,11 +299,6 @@ struct AllTasksPageView: View {
       modelContext.delete(task)
       try? modelContext.save()
     }
-  }
-
-  /// Fait passer une tâche au jour même. Pas d'heure, comme partout ailleurs dans l'app.
-  private func schedule(_ task: TaskItem) {
-    withAnimation(taskInsert) { task.when = Calendar.current.startOfDay(for: Date()) }
   }
 
   /// Création dans la boîte de réception, SANS date — c'est ce qui la distingue du champ

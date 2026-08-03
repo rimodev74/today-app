@@ -7,6 +7,14 @@
 #   git quick "corrige le tri"        → 0.3 devient 0.4, build +1
 #   git quick "refonte majeure" 1.0   → force 1.0, build +1
 #
+# Le message est aussi ce que lit la fenêtre de mise à jour : sa PREMIÈRE ligne résume,
+# les suivantes deviennent des points. Les commits faits depuis la publication précédente
+# s'y ajoutent tout seuls — mais le travail en cours n'est commis qu'après, donc lui n'est
+# décrit que par ce message.
+#   git quick "Sous-tâches et couleurs
+#   Palette de 12 couleurs pour les projets
+#   Sous-tâches réordonnables au glisser"
+#
 # Auto-test de la logique de version : ./Scripts/quick.sh --self-test
 set -euo pipefail
 

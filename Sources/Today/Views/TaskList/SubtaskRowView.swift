@@ -59,19 +59,23 @@ struct SubtaskRowView: View {
     }
   }
 
-  /// Case carrée mais NETTEMENT plus arrondie que celle d'une tâche (rayon 5,5 sur 14 vs 4,5 sur 16),
-  /// sans fond plein. Cochée : contour + ✓ en bleu accent — le même bleu que le FOND d'une tâche
-  /// cochée, mais ici en contour, pour rester distinct.
+  /// Case carrée mais NETTEMENT plus arrondie que celle d'une tâche (rayon 5,5 sur 14 vs 4,5 sur 16).
+  /// Cochée : contour bleu accent + ✓ bleu sur fond léger — assez marqué pour se lire d'un coup
+  /// d'œil dans une liste dépliée, sans le bleu plein d'une tâche parente cochée.
   private var subtaskCheckbox: some View {
     RoundedRectangle(cornerRadius: 5.5, style: .continuous)
       .strokeBorder(
         subtask.isDone ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary),
         lineWidth: 1.5
       )
+      .background {
+        RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+          .fill(Color.accentColor.opacity(subtask.isDone ? 0.14 : 0))
+      }
       .overlay {
         if subtask.isDone {
           Image(systemName: "checkmark")
-            .font(.app(8, weight: .semibold))
+            .font(.app(9, weight: .bold))
             .foregroundStyle(Color.accentColor)
         }
       }

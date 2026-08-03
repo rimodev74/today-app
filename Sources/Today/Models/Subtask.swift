@@ -10,7 +10,7 @@ final class Subtask {
   // instance fraîche de temporaire à permanent, ce qui ferait sauter le focus au pire moment
   // (juste après la création). Un UUID généré une fois ne bouge jamais.
   var uuid: UUID = UUID()
-  var title: String
+  var title: String = ""
   var isDone: Bool = false
   var sortIndex: Int = 0
   var createdAt: Date = Date()

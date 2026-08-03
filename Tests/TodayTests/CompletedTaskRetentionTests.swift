@@ -54,6 +54,9 @@ final class CompletedTaskRetentionTests: XCTestCase {
 
   /// Sans page (sidebar, anneaux) : on retombe sur le seuil minuté. C'est l'approximation assumée —
   /// la tenir ici évite qu'elle reparte en douce dans une seconde implémentation.
+  ///
+  /// Ce repli ne pilote PLUS aucune progression : c'est lui qui vidait les anneaux (cf.
+  /// `ListProgressTests`). Il ne sert qu'à la page d'une liste, qui passe son vrai `pageOpenedAt`.
   func testUntilViewChange_sansPage_retombeSurLeSeuilMinute() {
     XCTAssertFalse(
       CompletedTaskRetention.untilViewChange.hasLeftTheFlow(

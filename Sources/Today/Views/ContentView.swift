@@ -74,6 +74,18 @@ struct ContentView: View {
     dragWidth ?? (sidebarVisible ? sidebarWidth : 0)
   }
 
+  /// Largeur à laquelle le CONTENU est mis en page — distincte de celle qu'on laisse voir.
+  /// HORS drag elle vaut la largeur de repos : replier n'est alors qu'un rognage, rien ne se
+  /// réorganise. C'est ce qui manquait au repli — le contenu était mis en page à
+  /// `max(largeur visible, minSidebarWidth)`, donc il se tassait de 260 à 200 avant de commencer à
+  /// être rogné. Invisible sur ce qui est aligné à gauche, flagrant sur la barre du bas, dont le
+  /// bouton des réglages est collé à droite par un `Spacer` : il glissait vers la gauche pendant
+  /// que tout le reste, lui, était simplement coupé.
+  private var layoutWidth: Double {
+    guard let dragWidth else { return sidebarWidth }
+    return max(dragWidth, Self.minSidebarWidth)
+  }
+
   var body: some View {
     // Layout custom (HStack) MAIS fenêtre à toolbar native → gros rayon système sans inset de sidebar.
     HStack(spacing: 0) {
@@ -83,11 +95,11 @@ struct ContentView: View {
         selection: $selection, searchPresented: $searchPresented,
         pendingTitleFocus: $pendingTitleFocus
       )
-      // Deux cadres : le contenu est TOUJOURS mis en page à `minSidebarWidth` au minimum, le
-      // cadre extérieur (la vraie largeur) le rogne par la droite. Au-dessus du minimum la mise
-      // en page suit la largeur et les titres se coupent en « … » ; en dessous elle est figée et
-      // seul le rognage progresse — la sidebar ne se réorganise jamais pendant le drag.
-      .frame(width: max(effectiveWidth, Self.minSidebarWidth), alignment: .leading)
+      // Deux cadres : le contenu est mis en page à `layoutWidth`, le cadre extérieur (la vraie
+      // largeur) le rogne par la droite. Pendant le drag, au-dessus du minimum la mise en page
+      // suit la largeur et les titres se coupent en « … » ; en dessous elle est figée et seul le
+      // rognage progresse — la sidebar ne se réorganise jamais pendant le drag, ni au repli.
+      .frame(width: layoutWidth, alignment: .leading)
       .frame(width: effectiveWidth, alignment: .leading)
       .clipped()
       // En sombre, les fonds opaques natifs des deux colonnes sont la MÊME valeur (#1E1E1E pour
@@ -482,6 +494,7 @@ private struct SidebarMenu: View {
   private func listRow(_ list: TodoList) -> some View {
     row(.list(list), title: title(list.title)) {
       ProgressRing(progress: list.progress, size: 16)
+        .tint(list.project?.color?.color)
     }
   }
 
@@ -697,6 +710,7 @@ private struct QuickFindPanel: View {
         action: { onSelect(selection) }
       ) {
         ProgressRing(progress: list.progress, size: 16)
+          .tint(list.project?.color?.color)
       }
     case .project(let project):
       QuickFindRow(

@@ -27,6 +27,14 @@ let package = Package(
             // trou (ou où les `@Query` triés n'en dépendent plus).
             swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]
         ),
-        .testTarget(name: "TodayTests", dependencies: ["Today"])
+        // `Fixtures/` contient une BASE RÉELLE par version de schéma livrée, ouverte à chaque
+        // `swift test` par le vrai chemin de l'app (cf. `StoreFixtureTests`). C'est la seule
+        // vérification qui porte sur ce que contiennent les disques plutôt que sur la description
+        // qu'en fait le code — description qui peut diverger, et qui a divergé.
+        .testTarget(
+            name: "TodayTests",
+            dependencies: ["Today"],
+            resources: [.copy("Fixtures")]
+        )
     ]
 )
