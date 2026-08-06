@@ -213,7 +213,7 @@ struct HeaderRow: View {
       if moveTargets.isEmpty {
         Text("Aucune autre liste")
       } else {
-        ForEach(moveTargets) { target in
+        ForEach(moveTargets, id: \.uuid) { target in
           Button(target.title) { onMove(target) }
         }
       }
