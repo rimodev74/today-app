@@ -242,8 +242,8 @@ private struct UpcomingTaskRow: View {
 
       VStack(alignment: .leading, spacing: 1) {
         Text(task.title.isEmpty ? "Sans titre" : task.title)
-        if let parent {
-          Text(parent)
+        if let parent = TaskParentTag(of: task) {
+          Text(parent.title)
             .font(.app(.callout))
             .foregroundStyle(.secondary)
         }
@@ -254,10 +254,5 @@ private struct UpcomingTaskRow: View {
     .padding(.vertical, 4)
     .taskRowSelection(isSelected)
     .contentShape(Rectangle())
-  }
-
-  private var parent: String? {
-    let title = task.project?.title ?? task.list?.title
-    return (title?.isEmpty ?? true) ? nil : title
   }
 }

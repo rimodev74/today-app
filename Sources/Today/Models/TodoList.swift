@@ -86,4 +86,13 @@ final class TodoList {
     ordered.insert(moved, at: nextHeaderIndex - 1)
     for (index, t) in ordered.enumerated() { t.sortIndex = index }
   }
+
+  /// Où une tâche NEUVE doit s'accrocher dans `tasks` (déjà triées par `sortIndex`) : la dernière
+  /// tâche NON cochée, jamais la toute dernière — sans quoi la neuve atterrirait sous les cochées
+  /// que `moveToEndOfSection` repousse en bas, l'inverse du geste qui vient de les y envoyer.
+  /// `nil` s'il n'y a rien de non coché (section neuve ou entièrement terminée) : elle se pose
+  /// alors en tête, avant tout ce qui est coché.
+  static func appendAnchor(among tasks: [TaskItem]) -> TaskItem? {
+    tasks.last(where: { !$0.isCompleted })
+  }
 }

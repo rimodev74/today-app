@@ -121,7 +121,7 @@ struct AllTasksPage {
         id: "today", kind: .today, title: SmartList.today.label,
         // Même règle que la page « Aujourd'hui » : cochées comprises jusqu'au lendemain.
         tasks: SmartList.today.sort(SmartList.today.scoped(tasks)),
-        defaultExpanded: true, dropList: nil),
+        defaultExpanded: false, dropList: nil),
     ]
 
     for project in sortedByKey(

@@ -26,9 +26,9 @@ struct TaskRow: View {
   /// Faux dans « Aujourd'hui » : la page ne montre QUE le jour même, la date répétée sur chaque
   /// ligne n'apprend rien. Elle reste indispensable dans une liste, qui mélange les échéances.
   var showsDate: Bool = true
-  /// Rattachement affiché à droite du titre. `nil` dans une page de liste (on sait déjà où l'on
+  /// Rattachement affiché devant le titre. `nil` dans une page de liste (on sait déjà où l'on
   /// est) ; renseigné dans « Aujourd'hui », qui mélange les provenances.
-  var parentLabel: String? = nil
+  var parentTag: TaskParentTag? = nil
   var onBeginEditing: () -> Void
   var onEndEditing: () -> Void
   var onMove: (TodoList) -> Void
@@ -105,16 +105,17 @@ struct TaskRow: View {
             .foregroundStyle(.secondary)
             .fixedSize()
         }
+        // DEVANT le titre, avec la date et la durée, et pas après lui. Le titre est un `TextField`,
+        // donc glouton : il prend toute la largeur restante, et tout ce qui le suit se retrouve
+        // collé au bord droit de la fenêtre quelle que soit la longueur du texte. C'est ce que
+        // faisait ce libellé — une colonne de gris en dents de scie, détachée des titres qu'elle
+        // qualifie. Ici il rejoint le cluster des attributs de la tâche (quand, combien de temps,
+        // d'où), qui est fixe et se lit d'un bloc avec le titre.
+        // Toujours sur UNE ligne : la ligne garde la hauteur qu'elle a dans une page de liste,
+        // l'ouverture de la carte d'édition reste donc continue.
+        if !isEditing, let parentTag { parentPill(parentTag) }
         titleView
         Spacer(minLength: 0)
-        // À droite plutôt qu'en sous-titre : la ligne garde sa hauteur d'une seule ligne, donc la
-        // même que dans une page de liste — l'ouverture de la carte d'édition reste continue.
-        if !isEditing, let parentLabel {
-          Text(parentLabel)
-            .font(.app(.callout))
-            .foregroundStyle(.secondary)
-            .fixedSize()
-        }
         if !isEditing { trailing }
       }
 
@@ -481,6 +482,34 @@ struct TaskRow: View {
     }
   }
 
+  /// La provenance de la tâche, en pastille : un point de la couleur du projet, puis son nom.
+  ///
+  /// Teintée plutôt que grise parce que c'est ce que la couleur sert déjà à dire ailleurs — c'est
+  /// la même que l'icône du projet dans la sidebar et que ses anneaux de progression. Une page qui
+  /// mélange les provenances devient donc lisible d'un coup d'œil, sans lire les noms.
+  /// Gris quand il n'y a pas de couleur à montrer : une liste hors projet n'en porte pas.
+  ///
+  /// ponytail: pas de largeur maximale — un nom de projet à rallonge rognerait la place du titre.
+  /// Si ça arrive, `.frame(maxWidth:)` sous le `fixedSize` avec `.truncationMode(.tail)`.
+  private func parentPill(_ tag: TaskParentTag) -> some View {
+    // Toutes dynamiques (`PaletteColor` passe par les `systemXxx`, `.primary`/`.secondary` sont
+    // hiérarchiques) : rien à doubler pour le mode sombre.
+    let tint = tag.color?.color
+    return HStack(spacing: 4) {
+      Circle()
+        .fill(tint ?? Color.secondary)
+        .frame(width: 5, height: 5)
+      Text(tag.title)
+        .font(.app(11, weight: .medium))
+        .lineLimit(1)
+    }
+    .foregroundStyle(tint ?? Color.secondary)
+    .padding(.horizontal, 6)
+    .padding(.vertical, 2)
+    .background(tint?.opacity(0.12) ?? Color.primary.opacity(0.06), in: Capsule())
+    .fixedSize()
+  }
+
   private var dateControl: some View {
     Button {
       openDatePicker(task, .when)
@@ -736,6 +765,11 @@ struct TaskRow: View {
   /// Menu partagé par le ••• et le clic droit.
   @ViewBuilder
   private var taskMenu: some View {
+    Button {
+      task.when = Calendar.current.startOfDay(for: Date())
+    } label: {
+      Label("Aujourd'hui", systemImage: "star.fill")
+    }
     Button {
       openDatePicker(task, .when)
     } label: {

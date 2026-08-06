@@ -176,8 +176,11 @@ struct ArchiveRow: View {
 
       VStack(alignment: .leading, spacing: 1) {
         Text(task.title.isEmpty ? "Sans titre" : task.title)
-        if let parent {
-          Text(parent)
+        // D'où venait la tâche : son projet s'il y en a un, sinon sa liste. Sans ce rappel, une
+        // archive n'est qu'un tas de titres sans contexte (« Appeler le client » — pour quel
+        // projet ?). Rien pour la boîte de réception, qui n'apprend rien (cf. `TaskParentTag`).
+        if let parent = TaskParentTag(of: task) {
+          Text(parent.title)
             .font(.app(.callout))
             .foregroundStyle(.secondary)
         }

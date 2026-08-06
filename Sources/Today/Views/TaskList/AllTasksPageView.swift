@@ -141,6 +141,8 @@ struct AllTasksPageView: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Même retrait que les sections de tâches juste au-dessus (cf. `sectionView`).
+        .padding(.horizontal, rowInset)
 
         if calendarExpanded {
           VStack(alignment: .leading, spacing: 6) {
@@ -202,24 +204,29 @@ struct AllTasksPageView: View {
           expansion(of: section).wrappedValue.toggle()
         } label: {
           HStack(spacing: 6) {
-            Image(systemName: "chevron.right")
-              .font(.app(10, weight: .semibold))
-              .rotationEffect(.degrees(open ? 90 : 0))
             Image(systemName: symbol(of: section.kind))
               .font(.app(11))
               // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
               // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
               .foregroundStyle(tint(of: section.kind) ?? Color.secondary)
+              .frame(width: 16)
             Text(section.title)
             Text("\(section.tasks.count)")
               .foregroundStyle(.tertiary)
             Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+              .font(.app(10, weight: .semibold))
+              .rotationEffect(.degrees(open ? 90 : 0))
           }
           .font(.app(.subheadline).weight(.semibold))
           .foregroundStyle(.secondary)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Même retrait que les lignes (`rowInset`, À L'INTÉRIEUR de leur propre padding) : sans
+        // lui, l'icône du bandeau partait du bord de la page pendant que les cases des tâches
+        // restaient décalées de `rowInset` — un désalignement visible d'un coup d'œil.
+        .padding(.horizontal, rowInset)
 
         if open {
           rowsView(of: section, offsets: offsets)
@@ -227,7 +234,7 @@ struct AllTasksPageView: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.top, 14)
+      .padding(.top, section.kind == .today ? 100 : 14)
     } else {
       VStack(alignment: .leading, spacing: 0) {
         rowsView(of: section, offsets: offsets)
@@ -330,7 +337,7 @@ struct AllTasksPageView: View {
       isEditing: focus.isEditing(task),
       moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: !isToday,
-      parentLabel: isToday ? parentLabel(of: task) : nil,
+      parentTag: isToday ? TaskParentTag(of: task) : nil,
       onBeginEditing: { beginEditing(task) },
       onEndEditing: { endEditing(task) },
       onMove: { move(task, to: $0) },
@@ -371,11 +378,6 @@ struct AllTasksPageView: View {
         of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()))
       try? modelContext.save()
     }
-  }
-
-  private func parentLabel(of task: TaskItem) -> String? {
-    let title = task.project?.title ?? task.list?.title
-    return (title?.isEmpty ?? true) ? nil : title
   }
 
   private func select(_ task: TaskItem) {

@@ -177,7 +177,7 @@ struct TodayPageView: View {
       isEditing: focus.isEditing(task),
       moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: false,
-      parentLabel: showsParent ? parentLabel(of: task) : nil,
+      parentTag: showsParent ? TaskParentTag(of: task) : nil,
       onBeginEditing: { beginEditing(task) },
       onEndEditing: { endEditing(task) },
       onMove: { move(task, to: $0) },
@@ -213,11 +213,6 @@ struct TodayPageView: View {
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
     }
-  }
-
-  private func parentLabel(of task: TaskItem) -> String? {
-    let title = task.project?.title ?? task.list?.title
-    return (title?.isEmpty ?? true) ? nil : title
   }
 
   private func select(_ task: TaskItem) {

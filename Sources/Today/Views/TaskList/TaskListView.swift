@@ -1142,16 +1142,22 @@ private struct ListPageView: View {
       return
     }
     let destination = (entry.target ?? tokens?.target).flatMap(resolveQuickEntryTarget) ?? list
-    let task = TaskItem(title: entry.title, when: entry.when ?? tokens?.when, list: destination)
 
     if destination.persistentModelID != list.persistentModelID {
-      // Autre liste : on la range à la fin, il n'y a pas de bloc courant là-bas.
-      task.sortIndex = (destination.orderedTasks.last?.sortIndex ?? -1) + 1
+      // Autre liste : on la range à la fin de ce qui reste à faire, avant les cochées — pas de
+      // bloc courant là-bas, donc sur toute la liste. Calculée AVANT la création : `task.list`
+      // rattacherait sinon la neuve à `destination.tasks` avant qu'on ait lu son ancre.
+      let anchor = TodoList.appendAnchor(among: destination.orderedTasks)?.sortIndex ?? -1
+      for t in destination.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
+      let task = TaskItem(title: entry.title, when: entry.when ?? tokens?.when, list: destination)
+      task.sortIndex = anchor + 1
       modelContext.insertAndSave(task)
     } else {
-      // Insère à la fin du bloc : juste après sa dernière tâche (ou son en-tête si le bloc est vide),
-      // avant le bloc suivant. Les tâches situées après glissent d'un cran.
-      let anchor = block.tasks.last?.sortIndex ?? block.header?.sortIndex ?? -1
+      let task = TaskItem(title: entry.title, when: entry.when ?? tokens?.when, list: destination)
+      // Insère à la fin des tâches non cochées du bloc — avant ses cochées, avant le bloc suivant.
+      // Les tâches situées après glissent d'un cran.
+      let anchor =
+        TodoList.appendAnchor(among: block.tasks)?.sortIndex ?? block.header?.sortIndex ?? -1
       withAnimation(taskInsert) {
         for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
         task.sortIndex = anchor + 1
@@ -1349,7 +1355,8 @@ private struct ListPageView: View {
       return
     }
     let task = TaskItem(title: "", list: list)
-    let anchor = block.tasks.last?.sortIndex ?? block.header?.sortIndex ?? -1
+    let anchor =
+      TodoList.appendAnchor(among: block.tasks)?.sortIndex ?? block.header?.sortIndex ?? -1
     withAnimation(taskInsert) {
       for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
       task.sortIndex = anchor + 1

@@ -1015,9 +1015,14 @@ private struct QuickEntryView: View {
     let text = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, let list = entry.target.flatMap(resolve) ?? list(for: pending.targetID)
     else { return }
+    // Ancre lue AVANT la création : `task.list` rattacherait sinon la neuve à `list.tasks` avant
+    // qu'on ait lu son ancre. À la fin de ce qui reste à faire, avant les cochées — sans quoi une
+    // tâche notée depuis la capsule atterrirait sous des tâches déjà terminées.
+    let anchor = TodoList.appendAnchor(among: list.orderedTasks)?.sortIndex ?? -1
+    for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
     let task = TaskItem(
       title: text, notes: encodedNotes(pending.notes), when: entry.when ?? pending.when, list: list)
-    task.sortIndex = (list.orderedTasks.last?.sortIndex ?? -1) + 1
+    task.sortIndex = anchor + 1
     // Avant l'insertion : SwiftData propage la relation, les sous-tâches entrent avec la tâche.
     for line in pending.subtasks {
       let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
