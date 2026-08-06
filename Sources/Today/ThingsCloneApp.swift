@@ -102,7 +102,11 @@ struct TodayApp: App {
   /// vues, et doit s'adosser au MÊME container que la fenêtre principale.
   static let container: ModelContainer = {
     let schema = Schema(versionedSchema: CurrentSchema.self)
-    let configuration = ModelConfiguration(schema: schema)
+    // URL EXPLICITE, dans un sous-dossier au nom de l'app. Sans elle, SwiftData écrit dans
+    // `~/Library/Application Support/default.store` — à la racine, sous un nom que rien ne réserve
+    // à personne, et qu'une autre application a effectivement écrasé le 5 août 2026 (cf.
+    // `StoreLocation`, qui porte le déménagement de l'ancienne adresse).
+    let configuration = ModelConfiguration(schema: schema, url: StoreLocation.resolve())
     // AVANT toute ouverture : si la forme des modèles a bougé depuis la dernière fois, on met une
     // copie de côté pendant que la base est encore intacte. C'est la seule protection qui joue chez
     // l'utilisateur — le test de compatibilité, lui, ne protège qu'au moment où l'on écrit le code.
@@ -216,6 +220,8 @@ struct TodayApp: App {
       // laissait la fenêtre de réglages en clair (le scheme n'est pas hérité entre Scenes).
       SettingsView()
         .environment(profile)
+        // Le pont avec Rappels se règle ici : l'onglet Tâches doit pouvoir énumérer les listes.
+        .environment(remindersService)
         .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
     // Les raccourcis texte proposent les listes comme destination : cette Scene a besoin du MÊME

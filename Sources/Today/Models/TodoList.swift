@@ -49,10 +49,10 @@ final class TodoList {
   ///
   /// L'anneau a d'abord mesuré le flux VISIBLE — les tâches sorties de la page ne comptaient ni au
   /// numérateur ni au dénominateur — pour qu'une liste au long cours n'affiche pas un disque quasi
-  /// plein devant une page où rien n'est fait. Retiré : vu d'un anneau il n'y a AUCUNE page, donc
-  /// aucun `pageOpenedAt`, et le repli sur le seuil de 1,5 s faisait sortir toute tâche cochée une
-  /// seconde et demie après le clic. Mesuré : 2 faites sur 4 → 0,0. L'anneau montait puis retombait
-  /// à zéro tout seul, partout. Une jauge qui ne retient rien ne mesure rien.
+  /// plein devant une page où rien n'est fait. Retiré : vu d'un anneau il n'y a AUCUNE page, et la
+  /// règle retombait alors sur le seuil de 1,5 s, qui faisait sortir toute tâche cochée une seconde
+  /// et demie après le clic. Mesuré : 2 faites sur 4 → 0,0. L'anneau montait puis retombait à zéro
+  /// tout seul, partout. Une jauge qui ne retient rien ne mesure rien.
   var progress: Double {
     let countable = countableTasks
     guard !countable.isEmpty else { return 0 }

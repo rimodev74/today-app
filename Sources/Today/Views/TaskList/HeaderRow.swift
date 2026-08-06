@@ -151,7 +151,7 @@ struct HeaderRow: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
       } label: {
         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-          .font(.app(13, weight: .semibold))
+          .font(.app(11, weight: .semibold))
           .foregroundStyle(.secondary)
           // Largeur figée : "doc.on.doc" et "checkmark" n'ont pas la même largeur intrinsèque, sans
           // ce cadre la pilule respire d'un pixel ou deux au moment du bascule.

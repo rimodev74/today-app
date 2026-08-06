@@ -1,7 +1,7 @@
 import Foundation
 
 enum CompletedTaskRetention: String, CaseIterable, Identifiable {
-  case untilViewChange
+  case untilNextDay
   case timer
   case never
 
@@ -15,29 +15,25 @@ enum CompletedTaskRetention: String, CaseIterable, Identifiable {
   /// Le réglage vu d'un modèle. `@AppStorage` n'existe que dans une vue — même clé, même défaut.
   static var current: CompletedTaskRetention {
     UserDefaults.standard.string(forKey: storageKey).flatMap(Self.init(rawValue:))
-      ?? .untilViewChange
+      ?? .untilNextDay
   }
 
   var id: String { rawValue }
 
   /// LA règle : une tâche cochée à `completedAt` a-t-elle quitté le flux ?
   ///
-  /// Écrite une seule fois, pour deux appelants qui ne voient pas la même chose. Une page de liste
-  /// sait DEPUIS QUAND elle est ouverte et passe son `pageOpenedAt` ; la sidebar et les anneaux de
-  /// progression, non — ils regardent une tâche sans page autour, et passent `nil`.
-  ///
-  /// `nil` retombe alors sur le seuil du mode minuté, ce qui est une APPROXIMATION assumée du mode
-  /// « jusqu'à ce que je quitte la liste » : l'écart ne dure que les 1,5 s qui suivent une case
-  /// cochée, et le redessin d'un anneau attend de toute façon la prochaine mutation du modèle.
-  /// C'est ce cas-là, et lui seul, qui justifiait deux implémentations ; il est désormais écrit
-  /// dans la règle plutôt que recopié de part et d'autre.
-  func hasLeftTheFlow(completedAt: Date, now: Date, pageOpenedAt: Date?) -> Bool {
+  /// Le mode par défaut se règle sur le CALENDRIER, pas sur la navigation : ce qui a été fait
+  /// aujourd'hui reste sous les yeux jusqu'à demain, quel que soit le nombre d'allers-retours entre
+  /// les onglets. C'est ce qui remplace l'ancien « jusqu'à ce que je quitte la liste », qui faisait
+  /// disparaître le travail de la journée au premier changement de page — et rendait la règle
+  /// dépendante de l'appelant (une page savait depuis quand elle était ouverte, un anneau de
+  /// progression non). Elle ne dépend plus que de deux dates.
+  func hasLeftTheFlow(completedAt: Date, now: Date) -> Bool {
     switch self {
     case .never:
       return false
-    case .untilViewChange:
-      guard let pageOpenedAt else { return now.timeIntervalSince(completedAt) >= Self.timerDelay }
-      return completedAt < pageOpenedAt
+    case .untilNextDay:
+      return completedAt < Calendar.current.startOfDay(for: now)
     case .timer:
       return now.timeIntervalSince(completedAt) >= Self.timerDelay
     }
@@ -45,7 +41,7 @@ enum CompletedTaskRetention: String, CaseIterable, Identifiable {
 
   var label: String {
     switch self {
-    case .untilViewChange: return "Jusqu'à ce que je quitte la liste"
+    case .untilNextDay: return "Jusqu'au lendemain"
     case .timer: return "Automatiquement après 1,5 s"
     case .never: return "Ne jamais les masquer"
     }
@@ -59,11 +55,9 @@ extension TaskItem {
   ///
   /// Rien n'est supprimé : une tâche « partie du flux » ne compte simplement plus dans une
   /// progression, et reste retrouvable dans « Archives ».
-  func hasLeftTheFlow(
-    _ retention: CompletedTaskRetention, now: Date = Date(), pageOpenedAt: Date? = nil
-  ) -> Bool {
+  func hasLeftTheFlow(_ retention: CompletedTaskRetention, now: Date = Date()) -> Bool {
     guard !isHeader, isCompleted, let completedAt else { return false }
-    return retention.hasLeftTheFlow(completedAt: completedAt, now: now, pageOpenedAt: pageOpenedAt)
+    return retention.hasLeftTheFlow(completedAt: completedAt, now: now)
   }
 
 }

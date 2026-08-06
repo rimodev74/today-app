@@ -95,16 +95,16 @@ struct ArchivePageView: View {
 
   private func delete(_ task: TaskItem) {
     focus.forget(task)
-    withAnimation(taskInsert) { modelContext.delete(task) }
-    try? modelContext.save()
+    withAnimation(taskInsert) {
+      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
+    }
   }
 
   private func emptyArchive(_ tasks: [TaskItem]) {
     focus.dismiss()
     withAnimation(taskInsert) {
-      for task in tasks { modelContext.delete(task) }
+      modelContext.deleteTasksAndSave(tasks, forgetReminders: remindersService.forgetReminders)
     }
-    try? modelContext.save()
   }
 }
 

@@ -226,6 +226,181 @@ final class RemindersService {
     try? await setCompleted(task.isCompleted, identifier: id)
   }
 
+  // MARK: Pont continu avec l'app Rappels — les FAITS dont la synchro a besoin
+  // (la décision, elle, est dans `RemindersSync` ; l'orchestration dans `ContentView`).
+
+  /// La liste-pont réglée par l'utilisateur, si elle existe ENCORE : une liste supprimée côté
+  /// Rappels laisse derrière elle un identifiant qui ne pointe plus sur rien, et rien ne prévient.
+  func list(withIdentifier identifier: String?) -> EKCalendar? {
+    guard let identifier, !identifier.isEmpty else { return nil }
+    return writableLists.first { $0.calendarIdentifier == identifier }
+  }
+
+  /// Jour d'échéance du rappel lié — `nil` s'il a disparu, n'a pas d'échéance, ou si l'accès n'est
+  /// pas accordé. C'est la seule chose que `RemindersSync.needsPush` a besoin de savoir du rappel.
+  func reminderDay(for identifier: String) -> Date? {
+    guard authorizationStatus == .fullAccess,
+      let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder
+    else { return nil }
+    return reminder.dueDateComponents.flatMap(Calendar.current.date(from:))
+  }
+
+  /// Le rappel lié a-t-il été SUPPRIMÉ côté Apple ? La seule question dont la réponse autorise à
+  /// effacer une tâche (cf. `RemindersSync.shouldDelete`), et elle demande donc des preuves.
+  ///
+  /// **Absent ne veut pas dire supprimé.** Le 5 août 2026, la version qui répondait simplement
+  /// « EventKit ne le trouve pas » a effacé trois tâches d'une base fraîchement restaurée, en
+  /// quelques minutes et sans un mot. Leurs identifiants pointaient des rappels nettoyés depuis
+  /// longtemps — un fait sur l'HISTOIRE du rappel, jamais un geste de l'utilisateur. Toute
+  /// sauvegarde restaurée porte des identifiants périmés : supprimer là-dessus, c'est punir la
+  /// restauration au moment précis où l'on en avait besoin.
+  ///
+  /// Deux preuves exigées, et chacune écarte un faux positif distinct :
+  /// 1. **vu vivant pendant CETTE session** — sinon on ne sait rien de ce rappel, on sait seulement
+  ///    qu'il n'est pas là. C'est le cas de la base restaurée, et celui d'un accès accordé après
+  ///    coup ;
+  /// 2. **absent DEUX passes de suite** — un compte iCloud qui se resynchronise fait disparaître
+  ///    puis revenir des éléments, et `.EKEventStoreChanged` sonne précisément pendant ces
+  ///    remaniements. Une absence isolée ne tranche rien.
+  ///
+  /// Sans accès, la réponse est toujours `false` : un accès révoqué ferait sinon passer TOUTES les
+  /// tâches liées pour supprimées d'un coup.
+  ///
+  /// Distinct de `reminderDay(for:)`, qui rend déjà `nil` pour un rappel SANS échéance : « pas
+  /// d'échéance » et « plus de rappel » appellent des réponses opposées (réécrire vs supprimer).
+  func reminderVanished(_ identifier: String) -> Bool {
+    guard authorizationStatus == .fullAccess else { return false }
+    guard !(store.calendarItem(withIdentifier: identifier) is EKReminder) else {
+      seenAlive.insert(identifier)
+      missedOnce.remove(identifier)
+      return false
+    }
+    guard seenAlive.contains(identifier) else { return false }
+    guard missedOnce.contains(identifier) else {
+      missedOnce.insert(identifier)
+      return false
+    }
+    // Verdict rendu : on oublie ce rappel. Sans ça, son identifiant resterait dans `missedOnce`
+    // pour toujours — or c'est lui qui dit « une passe de plus est attendue » (cf.
+    // `hasPendingVanishVerdict`), et la synchro se rearmerait indéfiniment pour un dossier clos.
+    missedOnce.remove(identifier)
+    seenAlive.remove(identifier)
+    return true
+  }
+
+  /// Ce rappel a-t-il été vu VIVANT pendant cette session ? La seule chose qui distingue un
+  /// identifiant périmé (base restaurée — à repousser) d'un rappel que l'utilisateur vient de
+  /// supprimer (à laisser mort, cf. `RemindersSync.needsPush`).
+  func reminderWasSeenAlive(_ identifier: String) -> Bool { seenAlive.contains(identifier) }
+
+  /// Une absence attend sa confirmation : il manque UNE passe pour trancher. L'appelant s'en sert
+  /// pour en repasser une (cf. `ContentView.syncWithReminders`) — sans quoi la tâche resterait en
+  /// sursis jusqu'à ce qu'un autre événement réveille la synchro, c'est-à-dire peut-être jamais.
+  var hasPendingVanishVerdict: Bool { !missedOnce.isEmpty }
+
+  /// Les rappels vus VIVANTS depuis le lancement, et ceux qui ont manqué à l'appel une fois.
+  /// En mémoire seulement, et c'est voulu : la question posée est « l'utilisateur vient-il de le
+  /// supprimer ? », qui n'a de sens que dans une session. Les persister rendrait au redémarrage le
+  /// jugement hâtif qu'on vient justement de retirer.
+  private var seenAlive: Set<String> = []
+  private var missedOnce: Set<String> = []
+
+  /// Efface les rappels de tâches qu'on supprime — la suppression dans le sens app → Rappels.
+  ///
+  /// Sans elle, la tâche part mais son rappel RESTE dans la liste-pont, et il n'est alors plus
+  /// rattaché à personne : les sections « Rappels » d'« Aujourd'hui » et d'« À venir », qui ne
+  /// montrent QUE les rappels non liés, se mettent à l'afficher — supprimer une tâche donnait
+  /// l'impression de la faire « passer dans Rappels ». Et si l'import est actif, la passe suivante
+  /// la recrée en tâche, dans la boîte de réception cette fois.
+  ///
+  /// Synchrone et sans demande d'accès (comme `reminderDay(for:)`) : supprimer une tâche ne doit
+  /// ni ouvrir une boîte d'autorisation, ni faire attendre l'animation de la ligne.
+  ///
+  /// Vaut aussi bien pour UNE tâche que pour une suppression EN CASCADE — une liste ou un projet
+  /// emporte ses tâches.
+  ///
+  /// Ce second cas était laissé de côté (le service ne vit pas dans `Models/`, où la cascade est
+  /// écrite), et la conséquence se voyait : les rappels des tâches emportées restaient dans la
+  /// liste-pont,
+  /// rattachés à plus personne. Les sections « Rappels » d'« Aujourd'hui » et d'« À venir », qui ne
+  /// montrent QUE les rappels non liés, se mettaient donc à les afficher — supprimer un projet
+  /// donnait l'impression d'y avoir envoyé ses tâches. Et avec l'import actif, la passe suivante
+  /// les recréait en tâches, dans la boîte de réception cette fois.
+  ///
+  /// C'est l'appelant qui la fournit à `TodoList.delete(from:in:forget:)`, sans valeur par défaut :
+  /// l'omission ne doit pas compiler (même règle que `TaskPageBase.reorder` et `newTask`).
+  /// Efface des rappels par IDENTIFIANT, sans jamais toucher à un `@Model`.
+  ///
+  /// C'est ce qui la rend utilisable APRÈS une suppression en cascade, quand les tâches n'existent
+  /// plus : une chaîne de caractères survit à ce que SwiftData efface, un objet non.
+  ///
+  /// **Et il FAUT que ce soit après.** Le 6 août 2026, effacer les rappels au milieu de la
+  /// suppression d'un projet faisait planter l'app à tous les coups, dans SwiftData, sur le
+  /// `save()` de la cascade. La chaîne : `store.remove` écrit dans EventKit → EventKit poste
+  /// `.EKEventStoreChanged` → `ContentView` relance sa synchro → celle-ci relit et RÉENREGISTRE le
+  /// même contexte SwiftData, en plein milieu de la cascade qu'on était en train d'écrire. Deux
+  /// écritures imbriquées sur le même contexte, et l'assertion tombe.
+  ///
+  /// Sortir EventKit de la fenêtre de mutation supprime la classe entière de problème : quand ces
+  /// lignes s'exécutent, SwiftData a fini et enregistré.
+  func forgetReminders(_ identifiers: [String]) {
+    guard authorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
+    for identifier in identifiers {
+      guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
+        continue
+      }
+      try? store.remove(reminder, commit: true)
+    }
+  }
+
+  /// Les identifiants de rappel de ces tâches — à lire AVANT de les supprimer, et à passer ensuite
+  /// à `forgetReminders(_:)`.
+  nonisolated static func reminderIdentifiers(of tasks: [TaskItem]) -> [String] {
+    tasks.compactMap(\.reminderIdentifier)
+  }
+
+  /// Rappels non complétés et DATÉS de `list`, titre non vide — la source de l'import.
+  ///
+  /// `predicateForIncompleteReminders` accepte une fenêtre ouverte des deux côtés, et ramène alors
+  /// aussi les rappels SANS échéance : on les écarte, l'import étant le miroir du push, qui
+  /// n'envoie que des tâches datées. Le titre est écarté ICI et pas chez l'appelant : `title` est
+  /// `null_unspecified` côté EventKit (donc importé en `String!`), et tout ce qui sort de cette
+  /// porte en a un — la vue n'a aucune garde à répéter.
+  func datedReminders(in list: EKCalendar) async -> [EKReminder] {
+    guard authorizationStatus == .fullAccess else { return [] }
+    let predicate = store.predicateForIncompleteReminders(
+      withDueDateStarting: nil, ending: nil, calendars: [list])
+    let fetched = await withCheckedContinuation { continuation in
+      store.fetchReminders(matching: predicate) { reminders in
+        continuation.resume(returning: UncheckedBox(reminders ?? []))
+      }
+    }.value
+    return fetched.filter {
+      $0.dueDateComponents != nil && !(($0.title as String?) ?? "").isEmpty
+    }
+  }
+
+  /// Exécute une passe de synchro, et une seule à la fois.
+  ///
+  /// Deux raisons, pas une : `.EKEventStoreChanged` sonne à CHACUNE de nos propres écritures (donc
+  /// une passe qui écrit se rappelle elle-même), et chaque fenêtre ouverte a son `ContentView` qui
+  /// l'écoute. Sans ce verrou, deux passes concurrentes importeraient le même rappel deux fois —
+  /// chacune l'a lu avant que l'autre n'ait inséré sa tâche. Ce service vit au niveau de l'app, le
+  /// verrou couvre donc bien toutes les fenêtres ; un `@State` de vue n'en aurait couvert qu'une.
+  /// Rend `false` quand une passe tournait déjà et que `body` n'a donc PAS été exécuté — à charge
+  /// de l'appelant de repasser plus tard. Sans ce retour, un changement extérieur tombé au milieu
+  /// d'une passe disparaissait sans un mot (cf. `ContentView.syncWithReminders`, qui se rearme).
+  @discardableResult
+  func withSyncLock(_ body: () async -> Void) async -> Bool {
+    guard !isSyncing else { return false }
+    isSyncing = true
+    await body()
+    isSyncing = false
+    return true
+  }
+
+  private var isSyncing = false
+
   /// Reporte l'état de complétion de la tâche sur le rappel associé (app → Rappels).
   /// Sans effet si aucun rappel n'existe encore, ou s'il a été supprimé côté Rappels.
   func setCompleted(_ completed: Bool, identifier: String) async throws {

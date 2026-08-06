@@ -22,12 +22,34 @@ extension TodoList {
   /// effacé — SwiftData sert alors l'ancien instantané au lieu de planter, et on tape dans le vide.
   /// Écriture explicite comme partout dans l'app : l'autosave laissait une fenêtre où la cascade
   /// (une liste emporte ses tâches) n'était pas encore sur le disque.
-  func delete(from selection: Binding<SidebarSelection?>, in context: ModelContext) {
+  /// `forget` reçoit les tâches que la cascade va emporter, AVANT qu'elles ne disparaissent : c'est
+  /// la seule fenêtre où leurs rappels Apple sont encore lisibles. Sans lui, les rappels restaient
+  /// derrière, orphelins, et réapparaissaient dans les sections « Rappels » de l'app (cf.
+  /// `RemindersService.forgetReminders(_:)`).
+  ///
+  /// **Sans valeur par défaut, délibérément.** Ce code vit dans `Models/`, qui ne connaît pas le
+  /// service ; le brancher revient donc à ne pas l'oublier sur CHACUN des quatre appelants. Un
+  /// défaut à `{ _ in }` aurait laissé l'oubli compiler sans un mot — exactement le défaut que
+  /// `TaskPageBase.reorder` et `newTask` documentent, et qui s'est déjà produit deux fois ici.
+  func delete(
+    from selection: Binding<SidebarSelection?>, in context: ModelContext,
+    forgetReminders: ([String]) -> Void
+  ) {
+    // Des IDENTIFIANTS, pas des tâches : de simples chaînes, qui survivent à ce que la cascade
+    // efface. Lues ici, tant que tout est debout.
+    let doomedReminders = tasks.compactMap(\.reminderIdentifier)
     if selection.wrappedValue == .list(self) {
       selection.wrappedValue = project.map(SidebarSelection.project) ?? .smartList(.all)
     }
-    context.delete(self)
-    try? context.save()
+    // `deleteCascadeAndSave` et pas `delete` + `save` : une liste emporte ses tâches, qui emportent
+    // leurs sous-tâches, et l'`UndoManager` branché sur le contexte fait tomber SwiftData pendant
+    // l'enregistrement. Le pourquoi, avec la mesure, est en tête du helper.
+    context.deleteCascadeAndSave(self)
+    // APRÈS l'enregistrement, jamais pendant : effacer un rappel fait écrire EventKit, qui poste sa
+    // notification de changement, qui relance la synchro, qui réenregistre CE contexte. Écrire dans
+    // un contexte pendant qu'on l'enregistre n'a rien à faire là — mais ce n'est PAS ce qui faisait
+    // planter l'app le 6 août 2026 : la vraie cause était l'annulation, cf. `deleteCascadeAndSave`.
+    forgetReminders(doomedReminders)
   }
 }
 

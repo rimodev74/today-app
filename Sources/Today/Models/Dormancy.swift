@@ -14,8 +14,19 @@ enum Dormancy {
   static let floorDays = 56
   static let minOpacity = 0.45
 
+  /// Le calendrier, résolu UNE fois. `Calendar.current` n'est pas un accès mémoire : il reconstruit
+  /// un calendrier depuis les réglages système à chaque lecture. Or `days(since:)` est appelé par
+  /// `TaskItem.dormancyFade`, c'est-à-dire par CHAQUE ligne à CHAQUE rendu — plusieurs fois par
+  /// image pendant une animation. La valeur, elle, ne change qu'au changement de région ou de
+  /// fuseau, ce qui ne se produit pas en cours de geste.
+  ///
+  /// ponytail: figé pour la durée du processus. Un changement de calendrier en cours d'exécution ne
+  /// serait pris en compte qu'au relancement — sans conséquence ici, où l'on ne compte que des
+  /// jours écoulés pour faire pâlir une ligne.
+  private static let calendar = Calendar.current
+
   static func days(since date: Date, now: Date = Date()) -> Int {
-    Calendar.current.dateComponents([.day], from: date, to: now).day ?? 0
+    calendar.dateComponents([.day], from: date, to: now).day ?? 0
   }
 
   /// Opacité de la ligne : pleine jusqu'au seuil, puis décroissance linéaire jusqu'au plancher.

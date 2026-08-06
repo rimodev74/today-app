@@ -29,6 +29,22 @@ Clone natif macOS de [Things](https://culturedcode.com/things/) (Cultured Code),
 - Monétisation / StoreKit
 - (autres features à définir par l'utilisateur)
 
+### Prochain chantier acté (6 août 2026)
+
+**Glisser une tâche vers une ligne de la SIDEBAR pour la rattacher à une liste ou un projet.**
+
+Le besoin : répartir l'inbox sans passer à chaque fois par clic droit ▸ *Déplacer vers…*. C'est le
+geste du système (Finder, Mail, Things), donc rien à apprendre.
+
+La sidebar plutôt qu'un glisser entre les sections de « Tâches », et c'est un choix, pas un repli :
+la cible ne défile pas, elle liste TOUTES les destinations, et le geste vaut depuis n'importe quelle
+page. Le glisser entre sections a été essayé et retiré — le pourquoi est dans `CLAUDE.md`
+(Pièges, et « Déjà essayé et REJETÉ »).
+
+Obstacle connu, à mesurer avant de s'engager : la ligne qu'on tire est dessinée à l'intérieur de la
+page et serait coupée net à son bord. Il faut faire sortir son calque de la page et lire le point de
+relâchement dans un repère commun aux deux.
+
 ## Architecture technique (décisions actées)
 
 - **UI** : SwiftUI (macOS 14+), AppKit ponctuel si besoin de comportements fins (ex: NSTextView, drag & drop avancé)

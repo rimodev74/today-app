@@ -61,20 +61,22 @@ struct TaskRow: View {
   // session d'édition démarre entre-temps (réouverture rapide).
   @State private var showEditor = false
   @State private var editSession = 0
-  // Icône « note » au survol (tâche sans notes) : true entre le clic sur l'icône et l'ouverture de
-  // l'édition, pour que le focus atterrisse dans les notes plutôt que dans le titre (cf.
-  // `.onChange(of: isEditing)`). Retombe à false à la fin de CETTE édition, pas seulement après usage
-  // — sinon une édition suivante ouverte autrement (double-clic) hériterait du focus notes.
-  @State private var focusNotesOnAppear = false
   @State private var showReminderSheet = false
+
   // UN SEUL popover à la fois. Deux `.popover(isPresented:)` sur la même vue = comportement
   // indéfini sur macOS (le second plantait à l'ouverture de l'échéance). Un seul `.popover(item:)`
   // dont le contenu dépend du champ édité.
-  @State private var activePicker: DateField?
+  @State private var activePicker: TaskDateField?
 
-  private enum DateField: String, Identifiable {
+  enum TaskDateField: String, Identifiable {
     case when, deadline
     var id: String { rawValue }
+  }
+
+  /// Ouvre un panneau de date. Un seul point d'entrée pour les trois chemins (icône au survol,
+  /// menu ▸ *Quand…*, carte d'édition) — sans quoi ils divergeraient au premier réglage ajouté.
+  private func openDatePicker(_ task: TaskItem, _ field: TaskDateField) {
+    activePicker = field
   }
 
   /// UN SEUL arbre de vues, jamais un if/else entre deux racines : c'est ce qui rend la
@@ -92,7 +94,7 @@ struct TaskRow: View {
           Task { await remindersService.pushCompletion(for: task) }
           onCompletionChanged()
         }
-        if !isEditing, showsDate { dateTag }
+        if !isEditing { dateTag }
         // Durée estimée, à gauche du titre comme la date : ce sont les deux faces d'une même
         // décision (quand, et pour combien de temps). Rien tant que rien n'est estimé — la page
         // « Aujourd'hui » est le seul endroit qui réclame l'absence de durée.
@@ -177,8 +179,15 @@ struct TaskRow: View {
     // SwiftData notifie le changement de relation hors de la transaction, la carte sautait donc à sa
     // nouvelle hauteur. On anime ici sur le compte, qui, lui, est observé au rendu.
     .animation(taskFlow, value: task.subtasks.count)
-    // Borne le contenu aux limites de la ligne pendant que la carte s'ouvre/se referme.
-    .clipped()
+    // PAS de `.clipped()` ici. Il y en avait un, « pour borner le contenu pendant que la carte
+    // s'ouvre » — écrit quand une ligne avait une hauteur FIXE. Depuis que le titre est un
+    // `TextField(axis: .vertical)`, la hauteur d'une ligne dépend du repli de son texte, donc de la
+    // largeur qui lui reste : cocher une tâche la fait descendre (`moveToEndOfSection`), la colonne
+    // d'icônes de survol change la largeur utile au passage, le texte se replie autrement — et le
+    // clip COUPAIT ce qui dépassait pendant toute l'animation. Le seul contenu qui a vraiment besoin
+    // d'être borné, c'est la fenêtre de révélation de l'éditeur, et elle porte déjà son propre
+    // `.clipped()` sur son `frame(height: editorReveal)` (cf. plus haut). Celui-ci n'ajoutait que
+    // le défaut.
     // Décrue : une tâche que personne ne réveille s'efface. Posé sur le CONTENU seulement (avant
     // `.background`), pour que le fond de sélection reste franc — c'est la tâche qui pâlit, pas
     // le fait qu'elle soit sélectionnée. Pleine opacité dès qu'on l'édite : on la touche, elle
@@ -200,16 +209,45 @@ struct TaskRow: View {
     // bascule aussi en édition, via `RightClickObserver` posé par la page (cf. ce type).
     .onHover { hovering = $0 }
     .contextMenu { taskMenu }
-    // Les deux sélecteurs de date sont posés sur la ligne (pas sur un bouton du menu, qui
-    // disparaît hors survol) : ils ont ainsi toujours une ancre valide, en repos comme en édition.
+    // Les deux panneaux de date, posés sur la ligne (pas sur un bouton du menu, qui disparaît hors
+    // survol) : ils ont ainsi toujours une ancre valide, en repos comme en édition.
+    //
+    // Ils se referment DERRIÈRE le choix (cf. `WhenPicker.dayBinding`) : écrire une date retrie la
+    // liste, donc déplace la rangée qui sert d'ancre — et une fenêtre enfant ré-affichée sur une
+    // ancre qui bouge est ce qui plantait (`NSPopover showRelativeToRect:` → `addChildWindow` →
+    // `NSRemoteView`, trois rapports le 5 août 2026).
     .popover(item: $activePicker, arrowEdge: .trailing) { field in
       switch field {
-      case .when: whenPicker
-      case .deadline: deadlinePicker
+      case .when: WhenPicker(task: task) { activePicker = nil }
+      case .deadline: DeadlinePicker(task: task) { activePicker = nil }
       }
     }
     .sheet(isPresented: $showReminderSheet) {
       SchedulePlannerView(task: task, remindersService: remindersService)
+    }
+    // Le défilement referme le panneau : la rangée qui lui sert d'ancre s'en va sous lui. Monté
+    // seulement quand il y en a un d'ouvert — un moniteur par rangée en permanence ferait passer
+    // chaque cran de molette par toute la page.
+    .background {
+      if activePicker != nil {
+        ScrollDismissObserver { activePicker = nil }
+      }
+    }
+    // Une feuille est une fenêtre, et elle survit au démontage de la rangée qui l'a ouverte — or
+    // les pages de liste sont en `LazyVStack` (une rangée qui sort de l'écran est démontée), et la
+    // tâche elle-même peut partir d'ailleurs (⌘Z, synchro Rappels). `SchedulePlannerView` tient la
+    // tâche en `@Bindable` : laissée ouverte, elle lirait un modèle effacé. On referme en partant.
+    //
+    // Les panneaux de date, eux, ne sont plus ici : c'est le socle qui les présente, et il ne se
+    // démonte pas quand une rangée s'en va (cf. `TaskDatePickerRequest`).
+    // Ces deux états pilotent une FENÊTRE, hors de l'arbre de vues : ils survivraient au démontage
+    // de la rangée. Or les pages de liste sont en `LazyVStack` (une rangée qui sort de l'écran est
+    // démontée), et la tâche elle-même peut partir d'ailleurs (⌘Z, synchro Rappels) — les contenus
+    // la tiennent en `@Bindable` et liraient un modèle effacé. On referme donc en partant. Le
+    // survol, la sélection, l'édition meurent avec la rangée : rien à faire pour eux.
+    .onDisappear {
+      activePicker = nil
+      showReminderSheet = false
     }
     // Sélection / édition / réordonnancement sont pilotés par le geste UNIQUE posé par la page
     // (cf. `dragGesture(for:)`), pour que la sélection réagisse au mouseDown sans voler le drag.
@@ -228,7 +266,7 @@ struct TaskRow: View {
     // Tâche cochée : le dépliant se referme tout seul — le détail de ce qui reste à faire n'a plus
     // d'intérêt une fois la tâche finie. Le rouvrir reste possible d'un clic sur le chevron.
     .onChange(of: task.isCompleted) { _, done in
-      if done { withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded = false } }
+      if done { withAnimation(disclosureFlow) { subtasksExpanded = false } }
     }
     .onChange(of: isEditing) { _, editing in
       if editing {
@@ -236,13 +274,14 @@ struct TaskRow: View {
         // pendant la fermeture animée).
         editSession += 1
         showEditor = true
-        titleFocused = !focusNotesOnAppear
+        // Toujours le titre : c'est le seul champ qu'on ouvre. Il y avait une exception quand
+        // l'édition partait de l'icône « note » du survol, retirée depuis.
+        titleFocused = true
         // Réouverture alors que le corps est encore monté (fermeture en cours) : `onAppear` ne
         // rejoue pas, on redéploie ici. La 1re ouverture passe, elle, par la mesure (onPreferenceChange).
         if editorHeight > 0 { withAnimation(taskFlow) { editorReveal = editorHeight } }
       } else {
         titleFocused = false
-        focusNotesOnAppear = false
         // Fermeture ANIMÉE : la fenêtre rétrécit (le clipping ravale notes + icônes, laissés
         // affichés), puis on démonte le corps une fois à 0 — sauf si une nouvelle session a redémarré.
         editSession += 1
@@ -273,22 +312,55 @@ struct TaskRow: View {
   /// gestion clavier cohérente : un champ recréé à l'édition d'une tâche complétée avait un field
   /// editor « frais » qui avalait le premier Échap, d'où le double appui pour fermer.
   /// Le barré (qu'un `TextField` ne rend pas sur son contenu) est tracé en overlay au repos.
+  ///
+  /// `axis: .vertical` : un titre trop long pour la ligne REVIENT à la ligne au lieu de déborder du
+  /// viewport (`TextField` à axe horizontal ne fait jamais ça, il défile en interne sans jamais
+  /// grandir). Pas de `lineLimit` : la tâche s'affiche en entier, quelle que soit sa longueur.
+  /// Enter n'insère jamais de retour à la ligne dans un titre — un champ vertical le ferait par
+  /// défaut (le field editor absorbe Entrée avant `onSubmit`, qui ne se déclenche plus dans ce
+  /// mode), d'où l'interception : Entrée termine TOUJOURS l'édition, comme avant.
   private var titleView: some View {
-    TextField("Nouvelle tâche", text: $task.title)
+    TextField("Nouvelle tâche", text: $task.title, axis: .vertical)
       .textFieldStyle(.plain)
       .font(.app(.body))
       .foregroundStyle(titleColor)
       .focused($titleFocused)
       .allowsHitTesting(isEditing)
-      .onSubmit(onEndEditing)
+      // `allowsHitTesting` ne ferme que la porte de la SOURIS. Le champ restait dans la boucle de
+      // tabulation d'AppKit, donc « attrapable » au clavier — et AppKit attrape tout seul : quand
+      // une fenêtre auxiliaire se referme (le panneau de date), il repose le premier répondeur sur
+      // le premier champ texte venu de la fenêtre. Résultat mesuré le 5 août 2026 : le curseur
+      // atterrissait dans le titre d'une tâche AU HASARD, éditable sans que la ligne soit en
+      // édition — donc sans le `withAnimation`, sans la carte ouverte, et sans que ⌫ ni ↑/↓ ne
+      // sachent qu'un champ avait la main.
+      //
+      // C'est le même défaut que `WindowConfigurator` neutralise au lancement avec
+      // `makeFirstResponder(nil)` : lui traite le symptôme une fois, celui-ci ferme la porte.
+      .focusable(isEditing)
+      .onKeyPress(phases: .down) { press in
+        guard press.key == .return else { return .ignored }
+        onEndEditing()
+        return .handled
+      }
+      // Le champ s'efface DERRIÈRE le barré, il ne disparaît pas. Un `if` entre `Text` et
+      // `TextField` échangerait deux identités de vue (shimmer + field editor neuf, cf. plus haut) ;
+      // l'opacité garde la même vue, le même focus, la même hauteur. Sans ça, les deux textes se
+      // superposaient — le champ affichant toujours le sien sous celui de l'overlay, et les deux ne
+      // se repliant pas forcément aux mêmes endroits sur un titre long.
+      .opacity(isStruck ? 0 : 1)
       .overlay(alignment: .leading) {
-        if task.isCompleted && !isEditing {
-          // Trait de barré, dimensionné par un Text fantôme de même contenu/police.
-          Text(task.title).font(.app(.body)).hidden()
-            .overlay(Rectangle().frame(height: 1).foregroundStyle(.secondary))
+        if isStruck {
+          // Un `Text` réel plutôt que le `TextField` : lui seul rend `.strikethrough`, et il
+          // revient à la ligne comme le champ qu'il recouvre — un simple trait tracé à la main
+          // n'aurait barré qu'une ligne sur un titre replié en plusieurs.
+          Text(task.title).font(.app(.body)).foregroundStyle(titleColor).strikethrough()
         }
       }
   }
+
+  /// Le titre se rend barré : tâche cochée, et pas en cours d'édition (on édite un titre lisible,
+  /// jamais un titre barré).
+  private var isStruck: Bool { task.isCompleted && !isEditing }
 
   private var titleColor: HierarchicalShapeStyle {
     task.isCompleted ? .secondary : (task.title.isEmpty ? .tertiary : .primary)
@@ -337,8 +409,7 @@ struct TaskRow: View {
           guard !shiftHeld else { return false }
           onEndEditing()
           return true
-        },
-        autoFocus: focusNotesOnAppear
+        }
       )
       .fixedSize(horizontal: false, vertical: true)
     }
@@ -386,74 +457,40 @@ struct TaskRow: View {
   // MARK: Date
 
   /// Tag de jour planifié (`when`), à GAUCHE du titre (cf. Things) : petit fond gris arrondi,
-  /// « 31 juil. ». Distinct de l'échéance (drapeau, à droite). Rien si aucune date.
+  /// « 31 juil. », « 31 juil. 14:30 » si la tâche porte une heure. Distinct de l'échéance (drapeau,
+  /// à droite). Rien si aucune date.
+  ///
+  /// Sur une page qui ne montre pas les dates (« Aujourd'hui », où le jour est implicite), l'HEURE
+  /// reste affichée seule : c'est la seule chose que la page ne dit pas déjà, et c'est justement ce
+  /// qui ordonne une journée.
   @ViewBuilder
   private var dateTag: some View {
     if let when = task.when {
-      TokenPill(text: when.formatted(.dateTime.day().month(.abbreviated)))
+      let time = task.whenMinutes.map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
+      if showsDate {
+        // Le formatage de la date est calculé ICI, à l'intérieur du `if` qui l'affiche. Il était
+        // au-dessus, donc fait pour TOUTES les lignes de TOUTES les pages, y compris celles qui
+        // n'affichent pas la date (« Aujourd'hui », où le jour est implicite) — puis jeté. Une mise
+        // en forme de date n'est pas gratuite, et une ligne se redessine plusieurs fois par image
+        // pendant une animation.
+        let day = when.formatted(.dateTime.day().month(.abbreviated))
+        TokenPill(text: [day, time].compactMap { $0 }.joined(separator: " "))
+      } else if let time {
+        TokenPill(text: time)
+      }
     }
   }
 
   private var dateControl: some View {
     Button {
-      activePicker = .when
+      openDatePicker(task, .when)
     } label: {
       actionIcon("calendar", active: task.when != nil)
     }
     .buttonStyle(.plain)
   }
 
-  /// Contenu du sélecteur « Quand » (jour planifié). Posé en popover sur la ligne.
-  private var whenPicker: some View {
-    VStack(spacing: 10) {
-      DatePicker(
-        "",
-        // La tâche n'a pas forcément de date : le picker en exige une. Aujourd'hui
-        // sert de point de départ, écrit seulement si l'utilisateur choisit.
-        selection: Binding(get: { task.when ?? Date() }, set: { task.when = $0 }),
-        displayedComponents: .date
-      )
-      .datePickerStyle(.graphical)
-      .labelsHidden()
-
-      if task.when != nil {
-        Divider()
-        Button("Retirer la date") {
-          task.when = nil
-          activePicker = nil
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-      }
-    }
-    .padding(12)
-  }
-
   // MARK: Échéance
-
-  /// Contenu du sélecteur « Échéance » (deadline). Même gabarit que `whenPicker`.
-  private var deadlinePicker: some View {
-    VStack(spacing: 10) {
-      DatePicker(
-        "",
-        selection: Binding(get: { task.deadline ?? Date() }, set: { task.deadline = $0 }),
-        displayedComponents: .date
-      )
-      .datePickerStyle(.graphical)
-      .labelsHidden()
-
-      if task.deadline != nil {
-        Divider()
-        Button("Retirer l'échéance") {
-          task.deadline = nil
-          activePicker = nil
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-      }
-    }
-    .padding(12)
-  }
 
   /// Badge d'échéance à droite de la ligne (cf. Things) : un drapeau + une date relative,
   /// rouge une fois l'échéance atteinte ou passée, gris sinon.
@@ -536,7 +573,7 @@ struct TaskRow: View {
     let total = task.subtasks.count
     let done = task.subtasks.filter(\.isDone).count
     return Button {
-      withAnimation(.easeInOut(duration: 0.2)) { subtasksExpanded.toggle() }
+      withAnimation(disclosureFlow) { subtasksExpanded.toggle() }
     } label: {
       HStack(spacing: 6) {
         SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
@@ -595,23 +632,12 @@ struct TaskRow: View {
 
   // MARK: Actions au survol / clic droit
 
-  /// Icône discrète révélée au survol quand la tâche n'a pas encore de notes : sans elle,
-  /// l'existence même du champ notes (caché derrière un double-clic) n'est pas devinable. Un clic
-  /// ouvre directement l'édition avec le focus posé dans les notes (cf. `focusNotesOnAppear`).
-  /// Le fondu au survol est porté par le groupe de droite (cf. `trailing`), pas ici.
-  private var noteHint: some View {
-    Button {
-      focusNotesOnAppear = true
-      onBeginEditing()
-    } label: {
-      Image(systemName: "note.text")
-        .font(.app(13, weight: .regular))
-        .foregroundStyle(.secondary)
-        .frame(width: 22, height: 22)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-  }
+  // L'icône « note » a été RETIRÉE du survol. Elle existait pour rendre le champ notes devinable,
+  // mais son geste — ouvrir l'édition de la tâche — est déjà celui du clic sur la ligne, et le
+  // double emploi se voyait : posée à côté de l'icône calendrier, qui elle fait quelque chose de
+  // précis SANS ouvrir l'édition, elle donnait deux icônes voisines dont une seule tenait la
+  // promesse de son affordance. Le champ notes reste atteignable par le clic sur la ligne et par
+  // le menu ▸ ••• , et son aperçu (`notePreview`) dit déjà qu'il y a quelque chose à lire.
 
   /// Aperçu de la note au repos : sa première ligne en gris, tronquée. Rappelle le CONTENU de la
   /// note sans l'ouvrir — une simple icône dirait juste « il y en a une », pas ce qu'elle contient.
@@ -626,8 +652,29 @@ struct TaskRow: View {
       .padding(.leading, 26)
   }
 
-  /// Colonne réservée EN PERMANENCE aux icônes de survol (note + •••), vide ou non. C'est elle qui
-  /// garantit que le résumé des sous-tâches ne bouge pas quand la souris entre dans la ligne.
+  /// Icône « calendrier » au survol : elle ouvre le sélecteur « Quand » SUR-LE-CHAMP, sans passer
+  /// par l'édition. C'est le geste que son affordance promet — avant, l'icône n'existait que dans
+  /// la carte d'édition, donc dater une tâche demandait d'abord de l'ouvrir, puis de recliquer au
+  /// même endroit. C'est le MÊME panneau que le menu ▸ *Quand…* et que celui de la carte d'édition :
+  /// les trois chemins passent par `openTaskDatePicker`, un seul panneau, présenté par la page.
+  private var dateHint: some View {
+    Button {
+      openDatePicker(task, .when)
+    } label: {
+      Image(systemName: "calendar")
+        .font(.app(13, weight: .regular))
+        .foregroundStyle(task.when != nil ? Color.accentColor : Color.secondary)
+        .frame(width: 22, height: 22)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help("Quand…")
+  }
+
+  /// Colonne réservée EN PERMANENCE aux icônes de survol (calendrier + •••), vide ou non. C'est
+  /// elle qui garantit que le résumé des sous-tâches ne bouge pas quand la souris entre dans la
+  /// ligne. Deux icônes : la même largeur qu'avant l'ajout du calendrier, qui a simplement pris la
+  /// place de l'icône « note » retirée.
   private static let hoverActionsWidth: CGFloat = 54
 
   /// Zone de droite, collée au bord. Deux régimes, et la frontière est l'INTERACTIVITÉ :
@@ -647,7 +694,7 @@ struct TaskRow: View {
       ZStack(alignment: .trailing) {
         deadlineBadge.offset(x: hovering ? -Self.hoverActionsWidth : 0)
         HStack(spacing: 6) {
-          if task.notes.isEmpty { noteHint }
+          dateHint
           Menu {
             taskMenu
           } label: {
@@ -690,7 +737,7 @@ struct TaskRow: View {
   @ViewBuilder
   private var taskMenu: some View {
     Button {
-      activePicker = .when
+      openDatePicker(task, .when)
     } label: {
       Label("Quand…", systemImage: "calendar")
     }
@@ -721,7 +768,7 @@ struct TaskRow: View {
         task.project == nil ? "Assigner la tâche" : "Déplacer vers…", systemImage: "arrow.right")
     }
     Button {
-      activePicker = .deadline
+      openDatePicker(task, .deadline)
     } label: {
       Label("Échéance…", systemImage: "flag")
     }

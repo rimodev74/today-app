@@ -78,6 +78,18 @@ let taskInsert = Animation.spring(response: 0.32, dampingFraction: 1)
 /// parcourue change ce qu'on lit du même ressort, d'où deux amortissements et pas deux courbes
 /// inventées séparément. Même raisonnement que `ProgressRing.ringFlow`.
 let boardFlow = Animation.spring(response: 0.32, dampingFraction: 1)
+/// TOUT dépliant de l'app : chevron qui tourne et contenu qui apparaît/disparaît — repli d'un
+/// projet dans la sidebar, section d'« Aujourd'hui » ou de « Tâches », archives d'une liste,
+/// sous-tâches d'une ligne. Quatre valeurs coexistaient (`.snappy(0.2)`, `.snappy(0.22)`,
+/// `.easeInOut(0.2)`, et le défaut de `DisclosureGroup`) : le même geste ne se sentait pas pareil
+/// d'un endroit à l'autre. Toujours en `withAnimation(disclosureFlow) { … }` autour de l'écriture
+/// de l'état — jamais un `.animation(value:)` posé sur la vue : un `DisclosureGroup` change son
+/// binding depuis son propre bouton AppKit, hors de notre code, et `.animation(value:)` n'attrape
+/// pas cette transaction-là (testé : résultat instantané et saccadé). Pour un `DisclosureGroup`,
+/// passer un `Binding` maison dont le `set` fait le `withAnimation` (cf.
+/// `AllTasksPageView.expansion(of:)`).
+let disclosureFlow = Animation.snappy(duration: 0.2)
+
 /// Le repos d'un réordonnancement : écartement des voisines pendant le geste, et retour des
 /// décalages à zéro au relâchement. Une seule valeur pour les deux, et pour toutes les pages —
 /// deux courbes différentes se verraient au passage d'un onglet à l'autre.
@@ -219,25 +231,8 @@ struct TaskRowFrameKey: PreferenceKey {
 /// répondre à la seule question que les lignes ne peuvent pas trancher — « sur quelle section VIDE
 /// vient-on de lâcher ? ». Elle est aussi stable pendant un geste : les décalages sont appliqués
 /// aux rangées, à l'intérieur, et un `.offset` d'enfant ne déplace pas le cadre de son parent.
-struct SectionBandKey: PreferenceKey {
-  static let defaultValue: [String: CGRect] = [:]
-  static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-    value.merge(nextValue()) { _, new in new }
-  }
-}
 
 extension View {
-  /// À poser sur chaque SECTION d'une page qui en a. Sans elle, une section vide est indésignable :
-  /// elle n'a aucune ligne à interroger, donc un dépôt dessus se rabat sur la section du dessus.
-  func measureSectionBand(_ id: String) -> some View {
-    background {
-      GeometryReader { proxy in
-        Color.clear.preference(
-          key: SectionBandKey.self, value: [id: proxy.frame(in: .named(taskPageSpace))])
-      }
-    }
-  }
-
   /// À poser sur CHAQUE ligne d'une page qui utilise `taskPageBase`. Sans elle, la page garde son
   /// clavier mais reste aveugle : le clic dans le vide ne peut pas savoir qu'il est dans le vide.
   func measureTaskRow(_ task: TaskItem) -> some View {
@@ -374,6 +369,16 @@ struct TaskPageBase: ViewModifier {
 
   private var rows: [TaskItem] { blocks().displayedRows }
 
+  /// Clic droit sur une tâche → la sélectionne.
+  private func selectAtRightClick(_ point: CGPoint) {
+    guard
+      let task = rows.first(where: {
+        rowFrames[$0.persistentModelID]?.contains(point) == true
+      })
+    else { return }
+    withAnimation(taskSelectFade) { focus.select(task) }
+  }
+
   /// Un clic quelque part dans la fenêtre : hors de toute ligne, il relâche la sélection.
   ///
   /// La garde `isIdle` n'est pas une optimisation. Ce moniteur voit TOUS les `mouseDown` de la
@@ -401,6 +406,11 @@ struct TaskPageBase: ViewModifier {
       .coordinateSpace(name: taskPageSpace)
       .onPreferenceChange(TaskRowFrameKey.self) { frames in
         guard let reorder else {
+          // Test d'égalité, pour la raison que la ligne du dessous énonce déjà : réécrire une
+          // valeur identique invalide la vue quand même. Le repli sans glissement n'avait pas ce
+          // garde-fou — donc les pages qui l'utilisent (une liste, « À venir », « Archives ») se
+          // réinvalidaient à chaque mise en page, en continu, sans que rien ne bouge à l'écran.
+          guard ownFrames != frames else { return }
           ownFrames = frames
           return
         }
@@ -410,6 +420,7 @@ struct TaskPageBase: ViewModifier {
         reorder.wrappedValue.measured(frames)
       }
       .background(LeftClickOutsideObserver(onClick: releaseSelectionIfOutside))
+      .background(RightClickObserver(onRightClick: selectAtRightClick))
       // Une tâche restée VIDE quand son édition se referme s'en va (cf. `TaskItem.isBlank`).
       //
       // Posé sur la SORTIE d'édition, et pas dans les `endEditing` des pages : elles ne sont qu'un

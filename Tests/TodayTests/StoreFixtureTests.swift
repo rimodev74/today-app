@@ -31,7 +31,7 @@ import XCTest
 /// Les fichiers déjà là ne se retouchent JAMAIS. Une fixture modifiée ne prouve plus rien.
 final class StoreFixtureTests: XCTestCase {
   /// Toutes les formes qui ont existé sur un disque, de la plus ancienne à la courante.
-  private static let shipped = ["v1_0_0", "v2_0_0", "v3_0_0", "v4_0_0"]
+  private static let shipped = ["v1_0_0", "v2_0_0", "v3_0_0", "v4_0_0", "v5_0_0"]
 
   /// Copie la fixture ailleurs AVANT de l'ouvrir : `openStore` MIGRE le fichier qu'on lui donne.
   /// Ouvrir la fixture en place la réécrirait à la forme courante — au deuxième `swift test` elle

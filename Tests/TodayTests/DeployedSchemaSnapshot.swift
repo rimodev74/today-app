@@ -21,6 +21,8 @@ import SwiftData
 /// - `uuid` sur `Project`, `TodoList` et `TaskItem` + valeurs par défaut partout, 3 août 2026 —
 ///   4.0.0, préparation de la synchro entre appareils. Ajout pur, mais étape `.custom` : les
 ///   identités existantes doivent être TIRÉES une par une (cf. `TodayMigrationPlan`).
+/// - `TaskItem.whenMinutes`, 5 août 2026 — l'heure d'une tâche datée, ajout PUR (optionnel), étape
+///   `.lightweight`. Une tâche d'avant n'avait pas d'heure et n'en a toujours pas : `nil` partout.
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -36,7 +38,7 @@ import SwiftData
 /// ces classes relisent sans perte un fichier écrit par les modèles de premier niveau, relations
 /// comprises.
 enum DeployedSchemaSnapshot: VersionedSchema {
-  static let versionIdentifier = Schema.Version(4, 0, 0)
+  static let versionIdentifier = Schema.Version(5, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
@@ -80,6 +82,7 @@ enum DeployedSchemaSnapshot: VersionedSchema {
     var sortIndex: Int = 0
     var smartOrder: Int = 0
     var when: Date?
+    var whenMinutes: Int?
     var deadline: Date?
     var priorityRaw: Int = 0
     var estimateMinutes: Int = 0

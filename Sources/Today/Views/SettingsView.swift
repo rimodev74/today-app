@@ -226,11 +226,16 @@ private struct ActionPicker: View {
       }
       Section("Destination") {
         ForEach(destinations) { list in
-          Text(list.title).tag("#" + list.title)
+          // Un jeton ne porte jamais d'espace (cf. `QuickEntry.fold`) : une liste au nom composé
+          // ("Bugs / Modifications") écrirait sinon ses mots suivants tels quels dans le champ au
+          // lieu de se résoudre en destination.
+          Text(list.title).tag("#" + list.title.filter { !$0.isWhitespace })
         }
       }
       Section("Application") {
-        ForEach(AppCommand.allCases) { command in
+        // Le minuteur a sa propre section, dans l'onglet Pomodoro — les proposer ici aussi
+        // ferait deux endroits pour régler le même raccourci.
+        ForEach(AppCommand.allCases.filter { !$0.isPomodoro }) { command in
           Text(command.label).tag(command.token)
         }
       }
@@ -273,10 +278,20 @@ private struct KeyShortcutsSection: View {
   private static let keyWidth: CGFloat = 104
   private static let columns: CGFloat = 10
 
+  /// Le minuteur a sa propre section (onglet Pomodoro, même stockage) : ses rangées restent hors
+  /// de cette liste pour ne pas se régler à deux endroits, mais `set` les préserve — un ajout ou un
+  /// retrait ICI ne doit pas effacer ce que l'onglet Pomodoro a posé.
   private var shortcuts: Binding<[KeyShortcut]> {
     Binding(
-      get: { KeyShortcut.decode(keyData) },
-      set: { keyData = KeyShortcut.encode($0) })
+      get: { KeyShortcut.decode(keyData).filter { !isPomodoro($0.expansion) } },
+      set: { edited in
+        let pomodoro = KeyShortcut.decode(keyData).filter { isPomodoro($0.expansion) }
+        keyData = KeyShortcut.encode(pomodoro + edited)
+      })
+  }
+
+  private func isPomodoro(_ token: String) -> Bool {
+    AppCommand(token: token)?.isPomodoro ?? false
   }
 
   private var quickEntryCombo: Binding<KeyCombo?> {
@@ -389,10 +404,19 @@ private struct TextShortcutsSection: View {
   private static let triggerWidth: CGFloat = 96
   private static let columns: CGFloat = 12
 
+  /// Même règle que côté combinaisons de touches (cf. `KeyShortcutsSection.shortcuts`) : les
+  /// abréviations du minuteur restent réglables uniquement depuis l'onglet Pomodoro.
   private var shortcuts: Binding<[TextShortcut]> {
     Binding(
-      get: { TextShortcut.decode(shortcutData) },
-      set: { shortcutData = TextShortcut.encode($0) })
+      get: { TextShortcut.decode(shortcutData).filter { !isPomodoro($0.expansion) } },
+      set: { edited in
+        let pomodoro = TextShortcut.decode(shortcutData).filter { isPomodoro($0.expansion) }
+        shortcutData = TextShortcut.encode(pomodoro + edited)
+      })
+  }
+
+  private func isPomodoro(_ token: String) -> Bool {
+    AppCommand(token: token)?.isPomodoro ?? false
   }
 
   var body: some View {
@@ -532,11 +556,11 @@ private struct AddRowButton: View {
 
 private struct TasksSettingsTab: View {
   @AppStorage(CompletedTaskRetention.storageKey) private var retentionRaw = CompletedTaskRetention
-    .untilViewChange.rawValue
+    .untilNextDay.rawValue
   @AppStorage(TodoList.autoSortCompletedStorageKey) private var autoSortCompleted = true
 
   var body: some View {
-    SettingsPane {
+    SettingsPane(height: 470) {
       Section("Tâches cochées") {
         Picker("Conserver", selection: $retentionRaw) {
           ForEach(CompletedTaskRetention.allCases) { option in
@@ -546,7 +570,88 @@ private struct TasksSettingsTab: View {
 
         Toggle("Descendre en bas de la liste", isOn: $autoSortCompleted)
       }
+
+      RemindersSyncSection()
     }
+  }
+}
+
+/// Le pont avec l'app Rappels : UNE liste, et deux sens qu'on active séparément.
+///
+/// La même liste dans les deux sens, et c'est le réglage qui porte tout le reste : elle borne
+/// l'import à ce que l'utilisateur a désigné. Sans elle, activer l'import aspirerait tout ce que
+/// contient Rappels — les courses, les rappels d'anniversaire, les listes partagées — dans une app
+/// de travail. Les deux bascules restent inertes tant qu'aucune liste n'est choisie, et la vue le
+/// DIT plutôt que de le laisser deviner : un réglage qui peut s'oublier en silence est un bug en
+/// attente.
+private struct RemindersSyncSection: View {
+  @Environment(RemindersService.self) private var remindersService
+  @AppStorage(RemindersSync.pushStorageKey) private var push = false
+  @AppStorage(RemindersSync.importStorageKey) private var importReminders = false
+  @AppStorage(RemindersSync.listStorageKey) private var listID = ""
+  @AppStorage(RemindersSync.dueHourStorageKey) private var dueHour = RemindersSync.dueHour
+  @State private var accessDenied = false
+
+  var body: some View {
+    Section("Rappels Apple") {
+      if accessDenied {
+        Text(RemindersError.accessDenied.errorDescription ?? "")
+          .font(.app(.caption)).foregroundStyle(.secondary)
+        Button("Ouvrir les Réglages Système") {
+          let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders")!
+          NSWorkspace.shared.open(url)
+        }
+      } else {
+        Picker("Liste", selection: $listID) {
+          Text("Aucune").tag("")
+          ForEach(remindersService.writableLists, id: \.calendarIdentifier) { list in
+            Text(list.title).tag(list.calendarIdentifier)
+          }
+        }
+
+        Toggle("Créer un rappel pour les tâches datées", isOn: $push)
+        Toggle("Importer les rappels datés comme tâches", isOn: $importReminders)
+
+        if push {
+          // L'heure des tâches qui n'en ont pas : une tâche peut porter la sienne (cf.
+          // `WhenPicker`), et c'est elle qui prime alors. Sans aucune des deux, le rappel échoirait
+          // à minuit et sonnerait la veille au soir.
+          // ponytail: heures pleines seulement — les minutes demanderaient de stocker un minutage
+          // plutôt qu'une heure, à faire si 8 h 30 manque vraiment comme DÉFAUT (une tâche, elle,
+          // sait déjà se poser à 8 h 30).
+          Picker("Heure par défaut", selection: $dueHour) {
+            ForEach(0..<24, id: \.self) { hour in
+              Text(String(format: "%02d:00", hour)).tag(hour)
+            }
+          }
+          Text(
+            "Pour les tâches sans heure à elles. Les rappels déjà créés gardent la leur : "
+              + "seuls les prochains suivent ce réglage."
+          )
+          .font(.app(.caption)).foregroundStyle(.secondary)
+        }
+
+        if listID.isEmpty && (push || importReminders) {
+          // Le triangle plutôt que le texte seul : une bascule allumée a l'air de marcher, et un
+          // gris secondaire sous elle se lit comme une note de bas de page. L'icône est ce qui dit
+          // que le réglage est INCOMPLET. `.orange` en dur est correct ici — c'est la couleur
+          // système de l'avertissement, la même dans les deux thèmes (contrairement à un fond de
+          // maquette, qui lui se doublerait).
+          Label {
+            Text("Choisis une liste : sans elle, rien ne circule dans un sens ni dans l'autre.")
+              .font(.app(.caption)).foregroundStyle(.secondary)
+          } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange)
+          }
+        }
+      }
+    }
+    // L'accès est demandé à l'ouverture de l'onglet, pas au premier basculement : `writableLists`
+    // est VIDE tant qu'il n'est pas accordé, et le Picker n'aurait affiché que « Aucune » — soit
+    // un réglage qui a l'air cassé plutôt qu'un réglage qui demande la permission.
+    .task { accessDenied = ((try? await remindersService.requestAccess()) == nil) }
   }
 }
 
@@ -556,9 +661,9 @@ private struct PomodoroSettingsTab: View {
     .defaultAlertSound
 
   var body: some View {
-    // Trois sections dont une de cinq rangées : mesuré à l'écran, il faut 610 pour que « Minuteur »
-    // ne passe pas sous le bord haut. La hauteur commune (360) en cachait la moitié.
-    SettingsPane(height: 610) {
+    // ponytail: 640 est une estimation (pas re-mesurée à l'écran comme les 610 d'origine) — à
+    // ajuster si les deux sections de raccourcis débordent une fois quelques lignes ajoutées.
+    SettingsPane(height: 640) {
       Section("Minuteur") {
         Toggle("Enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
       }
@@ -575,82 +680,210 @@ private struct PomodoroSettingsTab: View {
         }
       }
 
-      PomodoroShortcutsSection()
+      PomodoroKeyShortcutsSection()
+      PomodoroTextShortcutsSection()
     }
   }
 }
 
-/// Les cinq commandes du minuteur, chacune avec ses DEUX déclencheurs possibles : une combinaison de
-/// touches (qui répond app en arrière-plan) ou une abréviation tapée dans la capsule. Aucun des deux
-/// n'est obligatoire, et les deux peuvent coexister sur la même action.
+/// Le pendant, pour les cinq commandes du minuteur, de `KeyShortcutsSection` (onglet Raccourcis) :
+/// MÊME patron — une ligne par raccourci, chacune choisit sa propre action, ajout/retrait libres —
+/// plutôt qu'un tableau à 5 lignes fixes. Le tableau fixe avait fini par cohabiter avec une section
+/// de synonymes greffée dessus (le 4 août 2026) : deux façons de lire « une combinaison pour une
+/// action » dans la même fenêtre, la confusion signalée. Reprendre le patron déjà clair de l'onglet
+/// Raccourcis, restreint aux actions du minuteur via `PomodoroActionPicker`, n'en laisse qu'une.
 ///
-/// Rien n'est stocké ici : les deux colonnes écrivent dans les listes de l'onglet Raccourcis, à la
-/// ligne qui porte le jeton de la commande (cf. `setCombo(_:for:)`). Un raccourci Pomodoro réglé ici
-/// s'y affiche, et réciproquement — c'est la même ligne, pas une copie.
-private struct PomodoroShortcutsSection: View {
+/// Même stockage que l'onglet Raccourcis (`KeyShortcut.storageKey`) : un raccourci Pomodoro réglé ici
+/// répondrait aussi à un onglet Raccourcis qui l'afficherait — il ne l'affiche plus (cf.
+/// `KeyShortcutsSection.shortcuts`, qui filtre l'inverse), mais rien n'empêcherait de le remontrer un
+/// jour sans migration.
+private struct PomodoroKeyShortcutsSection: View {
   @AppStorage(KeyShortcut.storageKey) private var keyData = Data()
-  @AppStorage(TextShortcut.storageKey) private var textData = Data()
+  @State private var hovered: KeyShortcut.ID?
 
   private static let keyWidth: CGFloat = 104
-  private static let triggerWidth: CGFloat = 96
   private static let columns: CGFloat = 10
+
+  private var shortcuts: Binding<[KeyShortcut]> {
+    Binding(
+      get: { KeyShortcut.decode(keyData).filter { isPomodoro($0.expansion) } },
+      set: { edited in
+        var all = KeyShortcut.decode(keyData)
+        all.removeAll { isPomodoro($0.expansion) }
+        keyData = KeyShortcut.encode(all + edited)
+      })
+  }
+
+  private func isPomodoro(_ token: String) -> Bool {
+    AppCommand(token: token)?.isPomodoro ?? false
+  }
 
   var body: some View {
     Section {
-      headers
-      ForEach(AppCommand.pomodoroCommands) { command in
-        HStack(spacing: Self.columns) {
-          Text(command.label)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          HotKeyRecorder(combo: combo(for: command), width: Self.keyWidth)
-          TextField("", text: trigger(for: command), prompt: Text("aucune"))
-            .textFieldStyle(.roundedBorder)
-            .frame(width: Self.triggerWidth)
-        }
+      if shortcuts.wrappedValue.isEmpty {
+        Text("Aucune combinaison")
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        columnHeaders
       }
+      ForEach(shortcuts) { $shortcut in row($shortcut) }
+      addButton
     } header: {
-      Text("Raccourcis")
+      Text("Saisie rapide")
     } footer: {
-      Text(
-        """
-        Une combinaison agit même quand Today est en arrière-plan. Une abréviation se tape dans la \
-        capsule de saisie rapide, puis ⇥ ou ↩ — elle ne laisse aucune tâche derrière elle.
-        """
-      )
-      .foregroundStyle(.secondary)
+      Text("Une combinaison agit même quand Today est en arrière-plan.")
+        .foregroundStyle(.secondary)
     }
     // Les combinaisons sont enregistrées auprès du système : sans réenregistrement, l'ancienne
     // répondrait encore (même raison qu'à l'onglet Raccourcis).
     .onChange(of: keyData) { GlobalHotKey.shared.reload() }
   }
 
-  private var headers: some View {
+  private var columnHeaders: some View {
     HStack(spacing: Self.columns) {
-      Text("Action").frame(maxWidth: .infinity, alignment: .leading)
-      Text("Touches").frame(width: Self.keyWidth, alignment: .center)
-      Text("Capsule").frame(width: Self.triggerWidth, alignment: .center)
+      Text("Action")
+        .padding(.leading, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Text("Touches")
+        .frame(width: Self.keyWidth, alignment: .center)
+      Color.clear.frame(width: RemoveButton.width, height: 0)
     }
     .font(.caption)
     .foregroundStyle(.secondary)
   }
 
-  private func combo(for command: AppCommand) -> Binding<KeyCombo?> {
+  private func row(_ shortcut: Binding<KeyShortcut>) -> some View {
+    let id = shortcut.wrappedValue.id
+    return HStack(spacing: Self.columns) {
+      PomodoroActionPicker(token: shortcut.expansion)
+      HotKeyRecorder(combo: shortcut.key, width: Self.keyWidth)
+      RemoveButton(isHighlighted: hovered == id) {
+        withAnimation(.snappy(duration: 0.2)) {
+          shortcuts.wrappedValue.removeAll { $0.id == id }
+        }
+      }
+    }
+    .onHover { inside in
+      if inside {
+        hovered = id
+      } else if hovered == id {
+        hovered = nil
+      }
+    }
+    .animation(.easeOut(duration: 0.12), value: hovered)
+  }
+
+  private var addButton: some View {
+    AddRowButton("Ajouter une combinaison") {
+      shortcuts.wrappedValue.append(KeyShortcut(expansion: AppCommand.pomodoroStart.token))
+    }
+    .disabled(shortcuts.wrappedValue.contains { $0.key == nil })
+  }
+}
+
+/// Le pendant, pour les cinq commandes du minuteur, de `TextShortcutsSection` — même raison et même
+/// patron que `PomodoroKeyShortcutsSection` ci-dessus, côté abréviations tapées dans la capsule.
+private struct PomodoroTextShortcutsSection: View {
+  @AppStorage(TextShortcut.storageKey) private var textData = Data()
+  @State private var hovered: TextShortcut.ID?
+
+  private static let triggerWidth: CGFloat = 96
+  private static let columns: CGFloat = 12
+
+  private var shortcuts: Binding<[TextShortcut]> {
     Binding(
-      get: { KeyShortcut.decode(keyData).combo(for: command.token) },
-      set: {
-        var list = KeyShortcut.decode(keyData)
-        list.setCombo($0, for: command.token)
-        keyData = KeyShortcut.encode(list)
+      get: { TextShortcut.decode(textData).filter { isPomodoro($0.expansion) } },
+      set: { edited in
+        var all = TextShortcut.decode(textData)
+        all.removeAll { isPomodoro($0.expansion) }
+        textData = TextShortcut.encode(all + edited)
       })
   }
 
-  private func trigger(for command: AppCommand) -> Binding<String> {
-    Binding(
-      get: { TextShortcut.decode(textData).trigger(for: command.token) },
-      set: {
-        var list = TextShortcut.decode(textData)
-        list.setTrigger($0, for: command.token)
-        textData = TextShortcut.encode(list)
-      })
+  private func isPomodoro(_ token: String) -> Bool {
+    AppCommand(token: token)?.isPomodoro ?? false
+  }
+
+  var body: some View {
+    Section {
+      if shortcuts.wrappedValue.isEmpty {
+        Text("Aucune abréviation")
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        columnHeaders
+      }
+      ForEach(shortcuts) { $shortcut in row($shortcut) }
+      addButton
+    } header: {
+      Text("Actions Spotlight")
+    } footer: {
+      Text("Tapez l'abréviation puis ⇥, dans la saisie rapide comme dans une liste.")
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var columnHeaders: some View {
+    HStack(spacing: Self.columns) {
+      Text("Raccourci")
+        .padding(.leading, 5)
+        .frame(width: Self.triggerWidth, alignment: .leading)
+      Text("Action")
+        .padding(.leading, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Color.clear.frame(width: RemoveButton.width, height: 0)
+    }
+    .font(.caption)
+    .foregroundStyle(.secondary)
+  }
+
+  private func row(_ shortcut: Binding<TextShortcut>) -> some View {
+    let id = shortcut.wrappedValue.id
+    return HStack(spacing: Self.columns) {
+      AlignedTextField(text: shortcut.trigger)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.2)))
+        .frame(width: Self.triggerWidth)
+      PomodoroActionPicker(token: shortcut.expansion)
+      RemoveButton(isHighlighted: hovered == id) {
+        withAnimation(.snappy(duration: 0.2)) {
+          shortcuts.wrappedValue.removeAll { $0.id == id }
+        }
+      }
+    }
+    .onHover { inside in
+      if inside {
+        hovered = id
+      } else if hovered == id {
+        hovered = nil
+      }
+    }
+    .animation(.easeOut(duration: 0.12), value: hovered)
+  }
+
+  private var addButton: some View {
+    AddRowButton("Ajouter une abréviation") {
+      shortcuts.wrappedValue.append(
+        TextShortcut(trigger: "", expansion: AppCommand.pomodoroStart.token))
+    }
+    .disabled(
+      shortcuts.wrappedValue.contains { $0.trigger.trimmingCharacters(in: .whitespaces).isEmpty })
+  }
+}
+
+/// Le même menu qu'`ActionPicker`, réduit aux cinq actions du minuteur : les seules concernées ici.
+private struct PomodoroActionPicker: View {
+  @Binding var token: String
+
+  var body: some View {
+    Picker("", selection: $token) {
+      ForEach(AppCommand.pomodoroCommands) { command in
+        Text(command.label).tag(command.token)
+      }
+    }
+    .labelsHidden()
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }

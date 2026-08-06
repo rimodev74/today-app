@@ -10,6 +10,9 @@ struct SidebarView: View {
   @Binding var pendingTitleFocus: PersistentIdentifier?
 
   @Environment(\.modelContext) private var modelContext
+  /// Supprimer une liste ou un projet emporte ses tâches ; leurs rappels Apple doivent partir avec
+  /// elles (cf. `TodoList.delete(from:in:forget:)`).
+  @Environment(RemindersService.self) private var remindersService
   @Query private var allTasks: [TaskItem]
   @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
   private var projects: [Project]
@@ -263,10 +266,17 @@ struct SidebarView: View {
       ForEach(sortedProjects) { project in
         projectRow(project, offsets: offsets)
         if !project.isCollapsed {
-          ForEach(project.orderedLists) { list in
-            listRow(list, offsets: offsets)
+          // Petit fondu à l'ouverture, EXPLICITE — cf. convention dans CLAUDE.md : un retrait/insertion
+          // réel se fond par défaut, mais laissé au défaut implicite de SwiftUI, un ancêtre qui pose
+          // un jour `.transition(.identity)` l'éteindrait sans qu'on le voie. Le `Group` porte la
+          // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
+          Group {
+            ForEach(project.orderedLists) { list in
+              listRow(list, offsets: offsets)
+            }
+            addListRow(project, offsets: offsets)
           }
-          addListRow(project, offsets: offsets)
+          .transition(.opacity)
         }
       }
     }
@@ -353,7 +363,7 @@ struct SidebarView: View {
           .contentShape(Rectangle())
           .highPriorityGesture(
             TapGesture().onEnded {
-              withAnimation(.snappy(duration: 0.2)) { toggleCollapse(project) }
+              withAnimation(disclosureFlow) { toggleCollapse(project) }
             }
           )
       }
@@ -682,6 +692,17 @@ struct SidebarView: View {
     // d'afficher une liste qui n'existe plus — un fantôme lisible (SwiftData sert l'ancien
     // instantané au lieu de planter) sur lequel taper créait des tâches dans le vide.
     let doomed = Set(project.lists.map(\.persistentModelID))
+    // TOUT ce qu'on aura besoin de lire dans SwiftData est lu ICI, avant la moindre mutation.
+    //
+    // La cascade la plus large de l'app : un projet emporte ses listes, qui emportent leurs tâches.
+    // Leurs rappels Apple doivent partir avec elles — sans ça ils restent dans la liste-pont sans
+    // être rattachés à personne, et reviennent s'afficher dans les sections « Rappels » de l'app
+    // comme si les tâches y avaient été envoyées.
+    //
+    // On ne retient que les IDENTIFIANTS des rappels, pas les tâches : de simples chaînes, qui
+    // survivent à ce que la cascade efface. Lues ici, tant que tout est debout.
+    let doomedReminders = RemindersService.reminderIdentifiers(of: project.lists.flatMap(\.tasks))
+
     let hitsSelection: Bool =
       switch selection {
       case .project(let p): p.persistentModelID == project.persistentModelID
@@ -689,12 +710,22 @@ struct SidebarView: View {
       default: false
       }
     if hitsSelection { selection = .smartList(.all) }
-    modelContext.delete(project)
-    try? modelContext.save()
+    // `deleteCascadeAndSave` et pas `delete` + `save` : c'est la cascade la plus profonde de l'app,
+    // et l'`UndoManager` branché sur le contexte la fait tomber pendant l'enregistrement. Le
+    // pourquoi, avec la mesure, est en tête du helper.
+    modelContext.deleteCascadeAndSave(project)
+    // EventKit APRÈS, jamais pendant : effacer un rappel fait poster `.EKEventStoreChanged`, qui
+    // relance la synchro, qui réenregistre le MÊME contexte SwiftData. Écrire dans un contexte
+    // pendant qu'on l'enregistre n'a rien à faire là — mais que ce soit clair : ce n'est PAS ce qui
+    // faisait planter l'app le 6 août 2026. Cette piste-là a été suivie et corrigée d'abord, et le
+    // crash est resté identique, à la ligne près. La vraie cause était l'annulation, cf.
+    // `deleteCascadeAndSave`.
+    remindersService.forgetReminders(doomedReminders)
   }
 
   private func delete(_ list: TodoList) {
-    list.delete(from: $selection, in: modelContext)
+    list.delete(
+      from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
   }
 
   /// Suppression directe si l'élément est vide (liste sans tâche, projet sans liste), sinon

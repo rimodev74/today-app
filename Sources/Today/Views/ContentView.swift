@@ -26,6 +26,17 @@ struct ContentView: View {
   /// plus bas, qui le donne au contexte SwiftData).
   @Environment(\.undoManager) private var undoManager
 
+  /// Le pont avec l'app Rappels, réglé dans *Réglages ▸ Tâches* (cf. `RemindersSyncSection`).
+  /// Lu ici parce que c'est ici que la synchro tourne, et nulle part ailleurs.
+  @AppStorage(RemindersSync.pushStorageKey) private var remindersPush = false
+  @AppStorage(RemindersSync.importStorageKey) private var remindersImport = false
+  @AppStorage(RemindersSync.listStorageKey) private var remindersListID = ""
+  @AppStorage(RemindersSync.dueHourStorageKey) private var remindersDueHour = RemindersSync.dueHour
+
+  /// La passe de synchro EN ATTENTE — annulée et rearmée à chaque notification (cf.
+  /// `syncWithReminders`). C'est ce qui empêche l'app de se réveiller pour son propre bruit.
+  @State private var syncPass: Task<Void, Never>?
+
   @State private var selection: SidebarSelection? = .smartList(.today)
   @State private var searchPresented = false
   /// Liste dont le TITRE (gros en-tête de la page) doit passer en édition : posée par la sidebar à
@@ -208,12 +219,22 @@ struct ContentView: View {
     // Retour de complétion Rappels → app : EventKit prévient de tout changement du store ;
     // le retour au premier plan couvre le rappel coché pendant que l'app était en arrière-plan.
     .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
-      syncCompletionsFromReminders()
+      syncWithReminders()
+    }
+    // Et le sens app → Rappels, qui n'avait AUCUN déclencheur : dater une tâche n'écrit que dans
+    // SwiftData, donc ne poste pas `.EKEventStoreChanged`. La tâche partait quand même — mais
+    // seulement au prochain réveil venu d'ailleurs (un remaniement iCloud, un retour au premier
+    // plan), soit une quinzaine de secondes en moyenne, mesurées à l'usage le 6 août 2026.
+    // `ModelContext.didSave` est le pendant exact de la notification d'EventKit, côté nous.
+    .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+      syncWithReminders()
     }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     {
-      _ in syncCompletionsFromReminders()
+      _ in syncWithReminders()
     }
+    // Ce qui s'installe se démonte : la passe en attente survivrait à la fermeture de la fenêtre.
+    .onDisappear { syncPass?.cancel() }
     // Une vraie toolbar (transparente) : c'est elle qui donne le gros rayon « moderne ».
     // L'item doit exister pour que macOS attache un NSToolbar réel, mais ce n'est PAS un
     // bouton (macOS applique un fond "glass" à tout contrôle bouton dans la toolbar) :
@@ -329,17 +350,176 @@ struct ContentView: View {
       .offset(x: effectiveWidth - 1)
   }
 
-  /// Recopie la complétion des rappels liés sur leurs tâches (Rappels → app). L'inverse (app →
-  /// Rappels) n'est pas branché ici, donc pas de boucle : on ne réécrit que `isCompleted`.
+  /// Le point de synchro avec l'app Rappels, et le SEUL : les deux sens partent d'ici, réveillés
+  /// par `.EKEventStoreChanged` et par le retour au premier plan (cf. plus haut).
+  ///
+  /// Les complétions passent toujours ; les deux autres passes sont des réglages, et demandent une
+  /// liste-pont désignée — sans elle il n'y a ni destination pour le push, ni source bornée pour
+  /// l'import (cf. `RemindersSync.listStorageKey`).
+  ///
+  /// Import AVANT push, et ce n'est pas indifférent : une tâche qui vient d'être importée porte
+  /// déjà le jour de son rappel, la passe de push la trouve donc à jour et ne la réécrit pas. Dans
+  /// l'autre ordre le résultat serait le même — c'est `RemindersSync.needsPush` qui garantit
+  /// l'arrêt, pas l'ordre — mais l'enchaînement se lit dans le sens où il converge.
+  ///
+  /// **Temporisé d'une seconde, et TOUT est sous le verrou.** `.EKEventStoreChanged` sonne à chacune
+  /// de NOS propres écritures : une passe qui pousse dix rappels poste dix notifications, et le fil
+  /// principal les livre PENDANT la passe (chaque `await` lui rend la main). Le verrou écartait bien
+  /// les passes complètes, mais `syncCompletionsFromReminders()` tournait en dehors — donc dix fois
+  /// de plus, chacune posant un `calendarItem(withIdentifier:)` synchrone par tâche liée. Le coût
+  /// était le carré du nombre de tâches, sur le fil qui dessine.
+  ///
+  /// La temporisation résout les deux d'un coup : le bruit qu'on fait soi-même retombe avant que la
+  /// passe suivante ne parte, et une rafale de notifications n'en déclenche qu'une.
+  ///
+  /// Si le verrou est PRIS quand la passe se réveille, elle se rearme au lieu d'abandonner : sans
+  /// ça, un vrai changement extérieur arrivé pendant une passe serait perdu jusqu'au prochain retour
+  /// au premier plan.
+  private func syncWithReminders() {
+    syncPass?.cancel()
+    syncPass = Task {
+      try? await Task.sleep(for: .seconds(1))
+      guard !Task.isCancelled else { return }
+      let ran = await remindersService.withSyncLock {
+        syncCompletionsFromReminders()
+        guard remindersPush || remindersImport,
+          let list = remindersService.list(withIdentifier: remindersListID)
+        else { return }
+        deleteTasksWhoseReminderIsGone()
+        if remindersImport { await importReminders(from: list) }
+        if remindersPush { await pushDatedTasks(to: list) }
+      }
+      guard !Task.isCancelled else { return }
+      // Deux raisons d'en repasser une : le verrou nous a refusé l'entrée, ou une absence attend sa
+      // confirmation. La seconde est ce qui rend la suppression depuis Rappels effective en ~2 s au
+      // lieu de « au prochain événement, peut-être ». Les deux convergent : `hasPendingVanishVerdict`
+      // retombe dès que le verdict tombe, dans un sens comme dans l'autre.
+      if !ran || remindersService.hasPendingVanishVerdict { syncWithReminders() }
+    }
+  }
+
+  /// Rappels → app : une tâche dont le rappel a été SUPPRIMÉ côté Apple est supprimée ici aussi.
+  ///
+  /// Sans elle, le push la voyait « sans rappel » — exactement le même fait qu'une tâche jamais
+  /// poussée (cf. `RemindersSync.needsPush`, qui traite `nil` comme « (re)créer ») — et la recréait
+  /// dans la seconde. Supprimer un rappel n'avait donc aucun effet visible : il repoussait aussitôt.
+  ///
+  /// AVANT le push, sans quoi la passe suivante recréerait le rappel de la tâche qu'on s'apprête à
+  /// effacer. Le périmètre exact, lui, est dans `RemindersSync.shouldDelete`.
+  ///
+  /// **C'est le seul endroit de l'app qui détruit des données sans que l'utilisateur l'ait
+  /// demandé**, et il l'a fait pour de vrai : le 5 août 2026, trois tâches d'une base fraîchement
+  /// restaurée sont parties en quelques minutes, parce que « EventKit ne trouve pas ce rappel »
+  /// suffisait alors à conclure « l'utilisateur l'a supprimé ». Le niveau de preuve exigé est
+  /// désormais dans `RemindersService.reminderVanished(_:)` : vu vivant pendant CETTE session, puis
+  /// absent deux passes de suite. Tout le reste ne supprime rien.
+  ///
+  /// Les gardes d'ensemble tiennent toujours, en amont : sans accès accordé `reminderVanished`
+  /// répond `false` pour tout le monde, et l'appelant a déjà exigé que la liste-pont se RÉSOLVE
+  /// encore — un compte iCloud momentanément absent la fait disparaître de `writableLists`, et la
+  /// synchro s'arrête avant d'arriver ici.
+  /// **`deleteCascadeAndSave` et pas `delete` + `save`, alors qu'on ne supprime qu'une tâche.**
+  /// C'est le seul endroit de l'app qui supprime HORS du chemin de l'affichage : la tâche vient
+  /// d'un fetch, personne n'a rendu sa ligne, et surtout personne n'a lu ses SOUS-TÂCHES. Or c'est
+  /// leur instantané qui manque à SwiftData quand l'`UndoManager` est branché — mesuré le 6 août
+  /// 2026, `CascadeDeleteTests` le garde. Une tâche à sous-tâches dont le rappel disparaissait
+  /// faisait donc tomber le processus, sans que rien dans le code ne le laisse voir.
+  ///
+  /// Perdre ⌘Z ici ne coûte rien : annuler « un rappel a été supprimé dans une autre app » ne veut
+  /// rien dire, et la tâche reviendrait pour repartir à la passe suivante.
+  private func deleteTasksWhoseReminderIsGone() {
+    for task in linkedTasks() {
+      // `reminderVanished` est appelé pour CHAQUE tâche liée, y compris celles qu'on ne supprimera
+      // pas : c'est lui qui tient la mémoire « vu vivant », et elle ne vaut que si on la nourrit.
+      guard let identifier = task.reminderIdentifier,
+        RemindersSync.shouldDelete(task, vanished: remindersService.reminderVanished(identifier))
+      else { continue }
+      modelContext.deleteCascadeAndSave(task)
+    }
+  }
+
+  /// Rappels → app : chaque rappel daté de la liste-pont qui n'est rattaché à aucune tâche en
+  /// devient une, dans « Tâches » (l'Inbox). C'est `reminderIdentifier` qui l'empêche de revenir à
+  /// la passe suivante — et accessoirement qui le fait disparaître des sections « Rappels »
+  /// d'« Aujourd'hui » et d'« À venir », qui n'y montrent que les rappels NON liés.
+  ///
+  /// ponytail: une tâche importée puis supprimée dans l'app revient à la synchro suivante, tant
+  /// que son rappel existe côté Apple. Supprimer des deux côtés est la marche à suivre ; retenir
+  /// les identifiants effacés demanderait un champ de plus au schéma, donc une montée de version.
+  private func importReminders(from list: EKCalendar) async {
+    let reminders = await remindersService.datedReminders(in: list)
+    guard !reminders.isEmpty else { return }
+
+    let linked = Set(linkedTasks().compactMap(\.reminderIdentifier))
+    let inbox =
+      (try? modelContext.fetch(
+        FetchDescriptor<TodoList>(predicate: #Predicate { $0.isInbox })))?.first
+    // Calculé une fois puis incrémenté : `inbox.tasks` ne verra les insertions qu'après
+    // enregistrement, le relire par tour donnerait le même rang à tout le lot.
+    var nextIndex = (inbox?.tasks.map(\.sortIndex).max() ?? -1) + 1
+
+    var changed = false
+    for reminder in reminders where !linked.contains(reminder.calendarItemIdentifier) {
+      guard let due = reminder.dueDateComponents.flatMap(Calendar.current.date(from:))
+      else { continue }
+      // Le jour dans `when`, l'heure dans `whenMinutes` — jamais mêlés (cf. `TaskItem.when`).
+      // L'heure du rappel arrive donc DANS la tâche depuis la 5.0.0 : l'aller-retour ne perd plus
+      // rien, et la passe de push la retrouve identique, donc ne réécrit pas.
+      let task = TaskItem(
+        title: reminder.title, when: Calendar.current.startOfDay(for: due), list: inbox)
+      let time = Calendar.current.dateComponents([.hour, .minute], from: due)
+      task.whenMinutes = (time.hour ?? 0) * 60 + (time.minute ?? 0)
+      task.reminderIdentifier = reminder.calendarItemIdentifier
+      task.sortIndex = nextIndex
+      nextIndex += 1
+      modelContext.insert(task)
+      changed = true
+    }
+    if changed { try? modelContext.save() }
+  }
+
+  /// App → Rappels : toute tâche datée qui n'a pas encore son rappel, ou dont le rappel porte un
+  /// AUTRE jour, est (ré)écrite dans la liste-pont.
+  ///
+  /// La liste n'est imposée qu'à la création. Un rappel déjà existant garde la sienne : sans ça,
+  /// un rappel créé à la main depuis une tâche (cf. `SchedulePlannerView`, qui laisse choisir sa
+  /// destination) se ferait déménager dans la liste-pont au premier changement de date.
+  private func pushDatedTasks(to list: EKCalendar) async {
+    let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.when != nil })
+    guard let dated = try? modelContext.fetch(descriptor) else { return }
+
+    var changed = false
+    for task in dated {
+      let reminderDue = task.reminderIdentifier.flatMap(remindersService.reminderDay(for:))
+      let seenAlive =
+        task.reminderIdentifier.map(remindersService.reminderWasSeenAlive) ?? false
+      guard
+        RemindersSync.needsPush(task, reminderDue: reminderDue, wasSeenAlive: seenAlive),
+        let when = task.when
+      else { continue }
+      guard
+        let id = try? await remindersService.schedule(
+          title: task.title,
+          start: when,
+          due: RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour),
+          list: task.reminderIdentifier == nil ? list : nil,
+          existingIdentifier: task.reminderIdentifier)
+      else { continue }
+      task.reminderIdentifier = id
+      changed = true
+    }
+    if changed { try? modelContext.save() }
+  }
+
+  /// Recopie la complétion des rappels liés sur leurs tâches (Rappels → app).
   ///
   /// Fetch à la demande et PAS un `@Query` : posé sur cette vue racine, il ferait dépendre TOUT
   /// l'arbre (sidebar comprise) de la moindre mutation d'une tâche — une frappe dans un titre
   /// réinvalidait la fenêtre entière. Les tâches liées se relisent deux fois par notification,
   /// c'est le seul endroit qui en a besoin.
   private func syncCompletionsFromReminders() {
-    let descriptor = FetchDescriptor<TaskItem>(
-      predicate: #Predicate { $0.reminderIdentifier != nil })
-    guard let linked = try? modelContext.fetch(descriptor), !linked.isEmpty else { return }
+    let linked = linkedTasks()
+    guard !linked.isEmpty else { return }
     let states = remindersService.completionStates(for: linked.compactMap(\.reminderIdentifier))
     var changed = false
     for task in linked {
@@ -350,6 +530,14 @@ struct ContentView: View {
       changed = true
     }
     if changed { try? modelContext.save() }
+  }
+
+  /// Les tâches déjà rattachées à un rappel Apple — le retour de complétion les relit, l'import
+  /// s'en sert pour ne pas réimporter ce qui est déjà là.
+  private func linkedTasks() -> [TaskItem] {
+    let descriptor = FetchDescriptor<TaskItem>(
+      predicate: #Predicate { $0.reminderIdentifier != nil })
+    return (try? modelContext.fetch(descriptor)) ?? []
   }
 
   /// Seules les listes et projets sont des destinations « récentes » ; les vues intelligentes
@@ -487,7 +675,8 @@ private struct SidebarMenu: View {
 
   private func projectRow(_ project: Project) -> some View {
     row(.project(project), title: title(project.title), bold: true) {
-      Image(systemName: "hexagon.fill").font(.app(15)).foregroundStyle(.green)
+      Image(systemName: "folder.fill").font(.app(15))
+        .foregroundStyle(project.color.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary))
     }
   }
 
@@ -719,7 +908,9 @@ private struct QuickFindPanel: View {
         isCurrent: current == selection,
         action: { onSelect(selection) }
       ) {
-        Image(systemName: "hexagon.fill").font(.app(15)).foregroundStyle(.green)
+        Image(systemName: "folder.fill").font(.app(15))
+          .foregroundStyle(
+            project.color.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary))
       }
     default:
       EmptyView()

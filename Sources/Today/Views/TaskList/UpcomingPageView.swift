@@ -109,8 +109,9 @@ struct UpcomingPageView: View {
 
   private func delete(_ task: TaskItem) {
     focus.forget(task)
-    withAnimation(taskInsert) { modelContext.delete(task) }
-    try? modelContext.save()
+    withAnimation(taskInsert) {
+      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
+    }
   }
 
   private func toggle(_ task: TaskItem) {
@@ -228,6 +229,16 @@ private struct UpcomingTaskRow: View {
   var body: some View {
     HStack(alignment: .top, spacing: rowInset) {
       TaskCheckbox(isCompleted: task.isCompleted, onToggle: onToggle)
+
+      // L'heure devant le titre, sur la MÊME ligne et comme une ligne d'événement : sur une page qui
+      // range la journée dans l'ordre, une tâche à 14 h doit DIRE qu'elle est à 14 h, sinon son
+      // rang paraît arbitraire.
+      if let minutes = task.whenMinutes {
+        Text(String(format: "%02d:%02d", minutes / 60, minutes % 60))
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .fixedSize()
+      }
 
       VStack(alignment: .leading, spacing: 1) {
         Text(task.title.isEmpty ? "Sans titre" : task.title)

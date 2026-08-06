@@ -52,11 +52,16 @@ final class QuickEntryWindow {
   /// Fermeture DEMANDÉE : la vue joue sa sortie et rappellera `close()` une fois le ressort fini.
   /// Tout ce qui ferme le panneau passe par ici — Échap, le raccourci global rejoué — sans quoi la
   /// fenêtre disparaîtrait au milieu de l'animation.
-  func requestClose() {
+  ///
+  /// `discardDraft` distingue l'annulation VOLONTAIRE (Échap) de tout le reste (clic ailleurs, perte
+  /// de la clé, raccourci global rejoué) : seule la première jette ce qui était en train de s'écrire,
+  /// les autres le gardent pour la prochaine ouverture (cf. `QuickEntryView.persistDraft`).
+  func requestClose(discardDraft: Bool = false) {
     guard let channel else {
       close()
       return
     }
+    channel.discardDraft = discardDraft
     channel.isRequested = true
   }
 
@@ -82,6 +87,7 @@ final class QuickEntryWindow {
     let channel = QuickEntryChannel()
     self.channel = channel
     panel.onCancel = { [weak self] in self?.requestClose() }
+    panel.onEscape = { [weak self] in self?.requestClose(discardDraft: true) }
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false  // l'ombre vient du verre, à la forme de la capsule
@@ -135,18 +141,25 @@ final class QuickEntryWindow {
   /// ouverte. Remis à `nil` par la vue une fois posé — sans quoi deux frappes de suite sur la même
   /// combinaison ne feraient rien la seconde fois, la valeur n'ayant pas changé.
   var token: String?
+  /// Posé par `QuickEntryWindow.requestClose(discardDraft:)` juste avant `isRequested` : la vue le
+  /// lit au même instant pour savoir si cette fermeture doit jeter le brouillon (Échap) ou le
+  /// garder (tout le reste).
+  var discardDraft = false
 }
 
 /// Une fenêtre sans bordure refuse le focus clavier et ignore Échap tant qu'on ne le lui apprend pas.
 private final class FloatingPanel: NSPanel {
+  /// Clic ailleurs, perte de la clé : ACCIDENTEL — le brouillon en cours doit survivre.
   var onCancel: (() -> Void)?
+  /// Échap : annulation VOLONTAIRE — c'est le seul geste qui doit jeter le brouillon.
+  var onEscape: (() -> Void)?
 
   override var canBecomeKey: Bool { true }
 
   /// AppKit route Échap ici via la chaîne de responder, y compris depuis le field editor d'un
   /// `TextField` — plus fiable qu'un `.keyboardShortcut(.cancelAction)` sur un bouton caché.
   override func cancelOperation(_ sender: Any?) {
-    onCancel?()
+    onEscape?()
   }
 
   /// Cliquer ailleurs referme, comme Spotlight. Perdre la clé est le bon signal plutôt qu'un moniteur
@@ -167,11 +180,15 @@ private final class FloatingPanel: NSPanel {
 /// fenêtre blanche, là où le Spotlight système reste lisible partout. Deux ombres comme lui : une
 /// courte et dense qui pose le contact, une longue et diffuse qui creuse le fond. Une seule obligerait
 /// à choisir entre les deux, donc à la vouloir soit trop dure, soit trop molle.
+///
+/// Comparée au Spotlight système (capture du 4 août 2026) : la première version restait bien plus
+/// pâle que lui sur un fond clair, alors même que Spotlight vit sur le même verre. Densités montées
+/// pour tenir la comparaison — au prix, sur fond sombre, d'un contact qui se voit un peu plus qu'avant.
 extension View {
   func paneShadow() -> some View {
     self
-      .shadow(color: .black.opacity(0.20), radius: 4, y: 2)
-      .shadow(color: .black.opacity(0.16), radius: 32, y: 14)
+      .shadow(color: .black.opacity(0.28), radius: 5, y: 2)
+      .shadow(color: .black.opacity(0.24), radius: 40, y: 18)
   }
 }
 
@@ -185,6 +202,47 @@ private struct DestinationHeightKey: PreferenceKey {
 /// se déplie sur un second bloc pour les notes et les sous-tâches. Pas de barre de validation :
 /// Entrée enregistre, Échap ferme, et les deux boutons ne faisaient qu'afficher des raccourcis que
 /// tout le monde connaît.
+
+/// Une tâche déposée mais pas encore écrite : les mêmes champs que la saisie, gelés. Le titre
+/// garde ses jetons (`@demain`, `#liste`), analysés seulement à l'insertion — comme s'il venait
+/// d'être tapé.
+private struct PendingTask: Identifiable {
+  let id = UUID()
+  var title: String
+  var notes: String
+  var subtasks: [String]
+  var when: Date?
+  var targetID: PersistentIdentifier?
+}
+
+/// Le brouillon perdu à une fermeture accidentelle (Échap, clic ailleurs, raccourci global rejoué)
+/// — gardé en mémoire pour la durée de l'app, la capsule étant un panneau NEUF à chaque ouverture
+/// (cf. `QuickEntryWindow.show`). Une vraie validation (`save`) ne le touche jamais : `restoreDraft`
+/// le vide dès qu'il est repris, avant qu'aucune sauvegarde n'ait pu le voir.
+@MainActor
+private final class QuickEntryDraftStore {
+  static let shared = QuickEntryDraftStore()
+  var draft: Draft?
+
+  struct Draft {
+    var title = ""
+    var notes = ""
+    var subtasks: [String] = []
+    var when: Date?
+    var targetID: PersistentIdentifier?
+    var queued: [PendingTask] = []
+
+    var isEmpty: Bool {
+      title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && subtasks.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        && queued.isEmpty
+    }
+  }
+
+  private init() {}
+}
+
 private struct QuickEntryView: View {
   var channel: QuickEntryChannel
   /// Jeton posé d'entrée par le raccourci clavier qui a ouvert la capsule. Il passe par le même
@@ -238,18 +296,6 @@ private struct QuickEntryView: View {
   /// Identités de morphing du verre. Distinctes de `Field` : un bloc n'est pas une cible de focus.
   private enum Block: Hashable { case bar, destination, details, queue }
 
-  /// Une tâche déposée mais pas encore écrite : les mêmes champs que la saisie, gelés. Le titre
-  /// garde ses jetons (`@demain`, `#liste`), analysés seulement à l'insertion — comme s'il venait
-  /// d'être tapé.
-  private struct PendingTask: Identifiable {
-    let id = UUID()
-    var title: String
-    var notes: String
-    var subtasks: [String]
-    var when: Date?
-    var targetID: PersistentIdentifier?
-  }
-
   var body: some View {
     glassStack
       .frame(width: 650)
@@ -258,7 +304,10 @@ private struct QuickEntryView: View {
       // s'ouvrent.
       .scaleEffect(appeared ? 1 : 0.88, anchor: .top)
       .opacity(appeared ? 1 : 0)
-      .padding(.top, 32)
+      // 56, pas 32 : le halo de `paneShadow` (rayon 40) déborde d'environ radius − y = 22pt
+      // au-dessus de la capsule, et sa traîne, elle, va plus loin encore (un flou n'a pas de bord
+      // net). 32pt le coupait au ras de la fenêtre — un aplat au lieu d'un fondu.
+      .padding(.top, 56)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       .onAppear {
         withAnimation(Self.motion) { appeared = true }
@@ -273,6 +322,14 @@ private struct QuickEntryView: View {
           focus = .title
           return
         }
+        // Échap est la SEULE annulation volontaire : elle jette le brouillon. Tout le reste (clic
+        // ailleurs, perte de la clé, raccourci global rejoué) est accidentel et le garde — pour
+        // toujours, jusqu'à la prochaine ouverture ou un vrai enregistrement (cf. `persistDraft`).
+        if channel.discardDraft {
+          QuickEntryDraftStore.shared.draft = nil
+        } else {
+          persistDraft()
+        }
         dismiss()
       }
       // Le focus se pose ICI et pas dans `onAppear` : à ce moment-là le panneau n'est pas encore
@@ -283,6 +340,7 @@ private struct QuickEntryView: View {
         try? await Task.sleep(for: .milliseconds(50))
         // Après le sommeil, donc après le premier tour de boucle : la `@Query` a livré les listes,
         // et un `#Courses` de prefill trouve sa destination. Avant, elle serait tombée à côté.
+        restoreDraft()
         applyToken(prefill)
         focus = .title
       }
@@ -310,6 +368,14 @@ private struct QuickEntryView: View {
   private var glassStack: some View {
     if #available(macOS 26, *) {
       GlassEffectContainer(spacing: 26) { stack }
+        // Posée ICI, HORS du conteneur — pas dans `pane` : une ombre posée par bloc, À
+        // L'INTÉRIEUR du conteneur, ne sortait pas du tout (mesuré : aucune amélioration malgré
+        // des densités doublées). `GlassEffectContainer` compose son rendu Liquid Glass dans un
+        // calque à la mesure des FORMES, pas de leur débord — l'ombre, elle, en a besoin. Posée
+        // sur le conteneur lui-même, elle en épouse quand même le CONTOUR réel (`.shadow` suit
+        // l'alpha du rendu, pas une boîte) : au repos, seule la capsule est visible, l'ombre en
+        // épouse donc exactement son contour.
+        .paneShadow()
     } else {
       stack
     }
@@ -404,17 +470,23 @@ private struct QuickEntryView: View {
       // internes. `windowBackgroundColor` suit déjà le thème, pas de couleur figée ici.
       let glass = content()
         .glassEffect(
-          .regular.tint(Color(nsColor: .windowBackgroundColor).opacity(0.45)).interactive(),
+          .regular.tint(Color(nsColor: .windowBackgroundColor).opacity(0.25)).interactive(),
           in: shape
         )
-      Group {
+      let identified = Group {
         if morphing {
           glass.glassEffectID(id, in: morph)
         } else {
           glass
         }
       }
-      .paneShadow()
+      // La bordure vient APRÈS `glassEffectID`, pas avant : posée sur le verre lui-même (chaînée
+      // avant l'identité de morphing), elle ne se voyait quasiment pas — deux hausses de densité
+      // sans effet visible. Le conteneur retraite le sous-arbre identifié pour son fondu élastique ;
+      // ce qui est accroché AVANT cette étape n'en ressortait pas intact, exactement comme
+      // `paneShadow`, qu'il a fallu sortir du conteneur pour la même raison.
+      identified
+        .overlay { shape.strokeBorder(Color.primary.opacity(0.35), lineWidth: 1.25) }
     } else {
       content()
         .background(.regularMaterial, in: shape)
@@ -435,7 +507,7 @@ private struct QuickEntryView: View {
           .onTapGesture { self.when = nil }
           .help("Retirer la date")
       }
-      TextField("Nouvelle tâche", text: $title)
+      TextField("Nouvelle tâche", text: $title, axis: .vertical)
         .textFieldStyle(.plain)
         .font(.app(20))
         .focused($focus, equals: .title)
@@ -588,6 +660,41 @@ private struct QuickEntryView: View {
     .padding(.vertical, 8)
   }
 
+  /// Teinte du chip de destination : la même couleur de base que le fond de la capsule, mélangée au
+  /// noir par petites touches pour se lire un cran plus SOMBRE — mais gardée translucide, PAS un
+  /// aplat opaque. Un aplat opaque se voit bien sur un fond clair (c'est pour ça qu'il avait
+  /// remplacé `.quaternary.opacity(…)`, qui s'y noyait), mais posé par-dessus un verre qui, lui,
+  /// laisse deviner ce qu'il y a derrière, il devient un timbre mort dès que le fond est chargé —
+  /// mesuré par-dessus une capture d'écran riche en contraste : le chip seul perdait tout l'effet
+  /// liquid glass que le reste de la capsule gardait.
+  private static func chipTint(picking: Bool) -> Color {
+    Color(
+      nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let base =
+          NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .windowBackgroundColor
+        let fraction = picking ? (dark ? 0.22 : 0.14) : (dark ? 0.14 : 0.08)
+        return base.blended(withFraction: fraction, of: .black) ?? base
+      }
+    )
+    // Un cran au-dessus du tint de la capsule (0.45) : assez pour rester lisible sur un fond clair
+    // sans redevenir l'aplat qu'on vient de retirer.
+    .opacity(0.6)
+  }
+
+  /// Repli pré-macOS 26 : pas de verre à nourrir, donc l'aplat opaque d'origine reste le bon choix —
+  /// c'est la même densification que le repli material de `pane`.
+  private static func chipFill(picking: Bool) -> Color {
+    Color(
+      nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let base =
+          NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .windowBackgroundColor
+        let fraction = picking ? (dark ? 0.22 : 0.14) : (dark ? 0.14 : 0.08)
+        return base.blended(withFraction: fraction, of: .black) ?? base
+      })
+  }
+
   /// Où ira la tâche, à gauche du champ : la seule information que la capsule doit porter en
   /// permanence, parce qu'elle est la seule qu'on ne peut pas deviner en lisant ce qu'on tape.
   private var destinationChip: some View {
@@ -600,19 +707,33 @@ private struct QuickEntryView: View {
         if picking { expanded = false }
       }
     } label: {
-      HStack(spacing: 6) {
-        destinationIcon
-        Text(destination?.title ?? SmartList.all.label)
-      }
-      .font(.app(14))
-      .padding(.vertical, 5)
-      .padding(.horizontal, 12)
-      .contentShape(Capsule())
-      .background(.quaternary.opacity(picking ? 0.9 : 0.5), in: Capsule())
+      chipLabel
     }
     .buttonStyle(.plain)
     .fixedSize()
     .help("Choisir la destination")
+  }
+
+  /// Verre imbriqué plutôt qu'un aplat : le chip doit rester du VERRE, comme le reste de la
+  /// capsule, sinon il se détache en timbre opaque dès que le fond derrière la fenêtre est chargé
+  /// (cf. `chipTint`).
+  @ViewBuilder
+  private var chipLabel: some View {
+    let content = HStack(spacing: 6) {
+      destinationIcon
+      Text(destination?.title ?? SmartList.all.label)
+    }
+    .font(.app(14))
+    .padding(.vertical, 5)
+    .padding(.horizontal, 12)
+    .contentShape(Capsule())
+
+    if #available(macOS 26, *) {
+      content.glassEffect(
+        .regular.tint(Self.chipTint(picking: picking)).interactive(), in: Capsule())
+    } else {
+      content.background(Self.chipFill(picking: picking), in: Capsule())
+    }
   }
 
   @ViewBuilder private var destinationIcon: some View {
@@ -781,6 +902,32 @@ private struct QuickEntryView: View {
     expand(focusing: .subtask(subtasks.count - 1))
   }
 
+  // MARK: Brouillon
+
+  /// Réapplique le brouillon laissé par une fermeture accidentelle. Consommé une fois : la suite
+  /// des frappes reconstitue l'état courant, que `persistDraft` regardera si la capsule se referme
+  /// encore sans validation.
+  private func restoreDraft() {
+    guard let saved = QuickEntryDraftStore.shared.draft else { return }
+    QuickEntryDraftStore.shared.draft = nil
+    title = saved.title
+    notes = saved.notes
+    subtasks = saved.subtasks
+    when = saved.when
+    if let savedTarget = saved.targetID { targetID = savedTarget }
+    queued = saved.queued
+    if !saved.notes.isEmpty || !saved.subtasks.isEmpty { expanded = true }
+  }
+
+  /// Range l'état courant avant une fermeture qui n'est PAS une validation. Vide, il efface un
+  /// brouillon devenu obsolète plutôt que d'en garder un fantôme.
+  private func persistDraft() {
+    let saved = QuickEntryDraftStore.Draft(
+      title: title, notes: notes, subtasks: subtasks, when: when, targetID: targetID,
+      queued: queued)
+    QuickEntryDraftStore.shared.draft = saved.isEmpty ? nil : saved
+  }
+
   // MARK: Enregistrement
 
   /// Les listes que l'app sait ROUVRIR : l'inbox et celles rangées dans un projet. Une liste sans
@@ -842,6 +989,9 @@ private struct QuickEntryView: View {
     // La tâche en cours de frappe part avec la fournée : ↩ enregistre TOUT, sans quoi la dernière
     // resterait à l'écran au moment où la fenêtre se ferme.
     let batch = queued + [draft].compactMap { $0 }
+    // Une validation, même sans rien à écrire (une commande seule) : le brouillon qu'elle
+    // remplace n'a plus lieu d'être repêché à la prochaine ouverture.
+    QuickEntryDraftStore.shared.draft = nil
     // Rien à enregistrer : on sort par la même porte que Échap, pas en escamotant la fenêtre.
     guard !batch.isEmpty else {
       dismiss()

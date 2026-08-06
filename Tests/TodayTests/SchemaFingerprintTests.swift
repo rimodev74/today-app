@@ -26,9 +26,9 @@ import XCTest
 /// `CurrentSchema.versionIdentifier`, déclarer l'étape, déposer la base fixture (cf.
 /// `StoreFixtureTests`). L'empreinte se met à jour EN DERNIER, une fois tout le reste vert.
 final class SchemaFingerprintTests: XCTestCase {
-  /// L'empreinte de la forme 4.0.0. Mise à jour uniquement à l'issue de la marche ci-dessus.
+  /// L'empreinte de la forme 5.0.0. Mise à jour uniquement à l'issue de la marche ci-dessus.
   private static let expected =
-    "9fbb0f72f6e66a2e6654f9df66ee69f66d1888e88ab2ae1a96bf638bd7c52404"
+    "5d3d7ace143d0ff1a386f8081df1f6e60c7adae0deb353a8b077fcdf0cd07826"
 
   func testCurrentSchemaShapeIsTheDeclaredOne() {
     let actual = StoreBackup.fingerprint(of: Schema(versionedSchema: CurrentSchema.self))

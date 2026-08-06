@@ -2,22 +2,19 @@ import EventKit
 import SwiftData
 import SwiftUI
 
-/// Page « Aujourd'hui » : ce qu'on a décidé de faire aujourd'hui, plus la réserve de tout ce qui
-/// n'a pas de date et qu'on peut attraper au vol.
+/// Page « Aujourd'hui » : ce qu'on a décidé de faire aujourd'hui.
 ///
-/// Deux étages, et la frontière est nette :
-/// - en haut, les tâches datées du JOUR MÊME (`SmartList.today`). Ni la veille ni le lendemain :
-///   une tâche d'hier non faite quitte la page au passage de minuit et retourne dans sa liste ou
-///   son projet. Pas de repêchage des retards — c'est ce qui empêche la page de devenir une pile ;
-/// - en bas, repliée, la réserve des tâches sans date, tous projets confondus.
+/// Seules les tâches datées du JOUR MÊME (`SmartList.today`) apparaissent. Ni la veille ni le
+/// lendemain : une tâche d'hier non faite quitte la page au passage de minuit et retourne dans sa
+/// liste ou son projet. Pas de repêchage des retards — c'est ce qui empêche la page de devenir une
+/// pile.
 ///
 /// Une tâche créée ici est datée d'aujourd'hui d'office (cf. `createTask`) : c'est la raison
 /// d'être de la page — noter ce qu'on fait maintenant sans avoir à choisir un projet.
 ///
-/// Les tâches DU JOUR se réordonnent à la main (`TaskItem.smartOrder`) : c'est la raison d'être de
-/// la page — on planifie sa journée en glissant, pas en ajustant des priorités jusqu'à ce que le
-/// tri automatique tombe juste. La réserve, elle, garde son tri automatique : c'est un fourre-tout
-/// où l'on pioche, un ordre manuel n'y voudrait rien dire.
+/// Les tâches se réordonnent à la main (`TaskItem.smartOrder`) : c'est la raison d'être de la
+/// page — on planifie sa journée en glissant, pas en ajustant des priorités jusqu'à ce que le tri
+/// automatique tombe juste.
 ///
 /// Le reste (édition, suppression, dates, durée, rappels, sous-tâches) vient de la `TaskRow` de
 /// `TaskListView`, la même que les pages de liste.
@@ -45,16 +42,11 @@ struct TodayPageView: View {
   /// Brouillon de la tâche libre (sans liste ni projet) créable depuis cette page.
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
-  /// Repliée par défaut, et l'état survit au relancement : la réserve est un fourre-tout qu'on
-  /// ouvre quand on cherche quoi faire, pas la première chose qu'on doit lire en arrivant.
-  @AppStorage("todayUndatedExpanded") private var undatedExpanded = false
   /// Sélection (clic) et édition (clic sur une ligne déjà sélectionnée) — c'est `TaskRow` qui les
   /// consomme. Même type que les autres pages de tâches (cf. `TaskFocus`) : les transitions y sont
   /// écrites une fois, les courbes restent ici.
   @State private var focus = TaskFocus()
-  /// Le glissement en cours, et les positions de repos qui lui servent de repère. Seules les tâches
-  /// DU JOUR se réordonnent : la réserve reste triée automatiquement, c'est un fourre-tout où l'on
-  /// pioche, pas quelque chose qu'on met en ordre.
+  /// Le glissement en cours, et les positions de repos qui lui servent de repère.
   @State private var reorder = TaskPageReorder()
 
   /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, que le ticker
@@ -107,8 +99,6 @@ struct TodayPageView: View {
           }
           newTaskRow
           remindersSection
-
-          undatedSection(page)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -123,7 +113,7 @@ struct TodayPageView: View {
     // pour le glissement, gelée pendant un geste. Sans ce `reorder:`, la page mesure dans le vide —
     // le socle range les cadres chez lui et le glissement n'en voit aucun.
     .taskPageBase(
-      focus: $focus, blocks: { page.blocks(undatedExpanded: undatedExpanded) }, delete: delete,
+      focus: $focus, blocks: { page.blocks }, delete: delete,
       reorder: $reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
       newTask: createTaskInEditMode
@@ -261,52 +251,10 @@ struct TodayPageView: View {
 
   private func delete(_ task: TaskItem) {
     focus.forget(task)
+    // Son rappel part avec elle : laissé derrière, il revient dans la section « Rappels » de
+    // cette même page (cf. `RemindersService.forgetReminders`).
     withAnimation(taskInsert) {
-      modelContext.delete(task)
-      try? modelContext.save()
-    }
-  }
-
-  // MARK: Réserve (tâches sans date)
-
-  /// `DisclosureGroup` plutôt qu'un chevron maison : le triangle, son animation, le clic sur le
-  /// libellé et l'accessibilité viennent avec, et l'indentation du contenu sépare visuellement la
-  /// réserve de l'engagement du jour sans une ligne de mise en page.
-  @ViewBuilder private func undatedSection(_ page: TodayPage) -> some View {
-    if !page.undated.isEmpty {
-      VStack(alignment: .leading, spacing: 0) {
-        Divider().padding(.vertical, 10)
-        DisclosureGroup(isExpanded: $undatedExpanded) {
-          VStack(alignment: .leading, spacing: 0) {
-            ForEach(page.undated) { group in
-              Text(group.name)
-                .font(.app(.callout).weight(.semibold))
-                .foregroundStyle(.secondary)
-                // Aplomb sur la colonne des cases à cocher, que les `TaskRow` décalent de
-                // `rowInset` : un en-tête de groupe se lit comme la tête de sa colonne.
-                .padding(.leading, rowInset)
-                .padding(.top, 10)
-                .padding(.bottom, 2)
-              ForEach(group.tasks) { task in
-                // Pas de rattachement sur la ligne : l'en-tête du groupe le porte déjà.
-                taskRow(for: task, showsParent: false)
-              }
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-          HStack(spacing: 6) {
-            Image(systemName: "tray.full")
-              .font(.app(11))
-            Text("Tâches sans date")
-            Text("\(page.undatedCount)")
-              .foregroundStyle(.tertiary)
-          }
-          .font(.app(.subheadline).weight(.semibold))
-          .foregroundStyle(.secondary)
-        }
-      }
-      .padding(.top, 8)
+      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
     }
   }
 

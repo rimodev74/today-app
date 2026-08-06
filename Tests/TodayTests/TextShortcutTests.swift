@@ -123,6 +123,24 @@ final class TextShortcutTests: XCTestCase {
     XCTAssertNil(expand("ajd "))
   }
 
+  /// Une entrée écrite par une version antérieure du menu de réglages pouvait porter un jeton
+  /// `#liste` avec les espaces du nom (« #Bugs / Modifications ») : le bug remonté, où « / Modifications »
+  /// s'écrivait dans le champ au lieu de se résoudre en destination. `decode` la répare à la lecture.
+  func testDecodeStripsSpacesFromLegacyDestinationTokens() {
+    let legacy = TextShortcut(trigger: "bug", expansion: "#Bugs / Modifications")
+    let data = try! JSONEncoder().encode([legacy])
+    let fixed = TextShortcut.decode(data)
+    XCTAssertEqual(
+      fixed, [TextShortcut(id: legacy.id, trigger: "bug", expansion: "#Bugs/Modifications")])
+
+    let resolved = QuickEntry.resolving("bug", shortcuts: fixed)
+    XCTAssertEqual(resolved?.text, "#Bugs/Modifications ")
+    let consumed = QuickEntry.consuming(
+      resolved!.text, names: ["Bugs / Modifications"])
+    XCTAssertEqual(consumed?.text, "")
+    XCTAssertEqual(consumed?.entry.target, "Bugs / Modifications")
+  }
+
   /// Un store vierge sert les défauts ; une liste vidée à la main reste vide.
   func testDecodeDistinguishesEmptyStoreFromEmptyList() {
     XCTAssertEqual(TextShortcut.decode(Data()), TextShortcut.defaults)

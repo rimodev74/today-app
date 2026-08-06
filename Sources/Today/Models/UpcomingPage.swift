@@ -193,13 +193,14 @@ enum AgendaItem: Identifiable {
   /// Minutes depuis minuit si l'entrée porte une heure, `nil` sinon (événement toute la journée,
   /// rappel sans heure d'échéance) — ce `nil` la place dans le groupe « sans heure », en tête.
   ///
-  /// Une TÂCHE n'en porte jamais : l'app ne pose que des jours (cf. `TaskItem.when`). Elle est donc
-  /// toujours dans le groupe sans heure, aux côtés des événements « toute la journée ».
+  /// Une tâche en porte une depuis le schéma 5.0.0 (`whenMinutes`), et se range alors dans l'ordre
+  /// chronologique du jour, entre les événements — c'est tout l'intérêt de lui avoir donné une
+  /// heure. Sans heure, elle reste en tête avec les événements « toute la journée ».
   var minutesOfDay: Int? {
     let calendar = Calendar.current
     switch self {
-    case .task:
-      return nil
+    case .task(let task):
+      return task.whenMinutes
     case .event(let event):
       guard !event.isAllDay else { return nil }
       let c = calendar.dateComponents([.hour, .minute], from: event.startDate)

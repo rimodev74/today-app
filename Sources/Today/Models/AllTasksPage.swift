@@ -52,23 +52,6 @@ struct AllTasksPage {
     sections.first { $0.tasks.contains { $0.persistentModelID == task.persistentModelID } }
   }
 
-  /// La section VIDE dont la bande verticale contient `y`, s'il y en a une — l'unique cas où la
-  /// lecture par la voisine ne peut RIEN dire, puisqu'il n'y a pas de voisine.
-  ///
-  /// Seules les sections vides sont candidates, et c'est délibéré : une section qui porte des lignes
-  /// se lit très bien par sa voisine, et cette lecture-là sait en plus DANS QUELLE liste d'un projet
-  /// la tâche a atterri. Élargir la règle à toutes les sections ferait perdre cette finesse pour
-  /// corriger un cas qui n'est pas cassé.
-  ///
-  /// `bands` vient de la vue (`measureSectionBand`) : savoir où commence et finit une section à
-  /// l'écran est une question de position, donc de mesure — aucune valeur en mémoire n'y répond.
-  func emptySection(at y: CGFloat, bands: [String: CGRect]) -> Section? {
-    sections.first { section in
-      guard section.tasks.isEmpty, let band = bands[section.id] else { return false }
-      return y >= band.minY && y <= band.maxY
-    }
-  }
-
   /// Ce qu'un dépôt doit ÉCRIRE pour que la tâche reste là où on vient de la lâcher.
   ///
   /// Une section de cette page n'est pas un rangement arbitraire : c'est ce que la tâche EST.
@@ -76,34 +59,39 @@ struct AllTasksPage {
   /// Déposer sans écrire ça, c'est voir la ligne remonter à sa place d'origine au rendu suivant —
   /// le geste aurait l'air de ne pas marcher, alors qu'il aurait parfaitement marché.
   ///
-  /// La section d'accueil se lit sur la VOISINE, pas sur une zone de dépôt : la ligne du dessus,
-  /// ou celle du dessous quand on se pose en tête de page. C'est la seule lecture qui marche pour
-  /// les quatre sortes de sections d'un coup — la boîte de réception, le jour, un projet, une liste.
+  /// La section d'accueil se lit sur la VOISINE : la ligne du dessus, ou celle du dessous quand on
+  /// se pose en tête. C'est la seule lecture qui marche pour les quatre sortes de sections d'un
+  /// coup — la boîte de réception, le jour, un projet, une liste — et c'est la plus PRÉCISE : dans
+  /// un projet à plusieurs listes, elle dit laquelle.
   ///
-  /// Une section VIDE n'a aucune voisine à interroger — c'est pour elle qu'existe `landing`, que la
-  /// vue déduit de la GÉOMÉTRIE (cf. `emptySection(at:bands:)`). Sans lui, une tâche lâchée sur une
-  /// section « Aujourd'hui » vide se voyait attribuer la voisine de la section du DESSUS : elle
-  /// partait dans « Non classé » et perdait sa date, en silence. Mesuré, pas supposé.
+  /// Depuis que le glisser est borné à sa propre section (cf. `AllTasksPageView.rowsView`), les
+  /// voisines sont forcément de la même section que la tâche tirée : la destination est donc
+  /// toujours celle d'origine. Les branches ci-dessous restent néanmoins écrites pour de bon —
+  /// c'est ce qui rend le dépôt juste le jour où la traversée reviendra, et elles ne coûtent rien.
   ///
-  /// `landing` ne prend le pas que quand il est fourni : partout ailleurs la voisine reste la bonne
-  /// réponse, et elle est plus PRÉCISE — dans un projet à plusieurs listes, elle dit laquelle.
-  func applyDrop(
-    of task: TaskItem, in ordered: [TaskItem], today: Date, landing: Section? = nil
-  ) {
+  /// Un paramètre `landing` a existé, pour désigner une section VIDE par la géométrie : il n'avait
+  /// de sens que pour la traversée, et il a été retiré avec elle (avec `emptySection` et les bandes
+  /// que la vue mesurait pour lui — mesures republiées en continu, qui faisaient planter le panneau
+  /// de date sur cette page).
+  func applyDrop(of task: TaskItem, in ordered: [TaskItem], today: Date) {
     guard let index = ordered.firstIndex(where: { $0.persistentModelID == task.persistentModelID })
     else { return }
     let neighbour = ordered[..<index].last ?? ordered[(index + 1)...].first
-    let destination = landing ?? neighbour.flatMap(section(containing:))
-    guard let destination else { return }
+    guard let destination = neighbour.flatMap(section(containing:)) else { return }
 
     if destination.kind == .today {
       task.when = today
     } else {
       // La liste de la VOISINE quand il y en a une (plus précise), le repli de la section sinon.
-      task.list = (landing == nil ? neighbour?.list : nil) ?? destination.dropList ?? task.list
+      task.list = neighbour?.list ?? destination.dropList ?? task.list
       // Sortir du jour, sinon la tâche remonte aussitôt dans la section « Aujourd'hui » : celle-ci
       // retire ses tâches de toutes les autres, et le dépôt n'aurait servi à rien.
-      if let when = task.when, Calendar.current.isDate(when, inSameDayAs: today) { task.when = nil }
+      if let when = task.when, Calendar.current.isDate(when, inSameDayAs: today) {
+        task.when = nil
+        // L'heure part avec le jour : une heure sans jour ne veut rien dire, et redater la tâche
+        // plus tard lui rendrait une heure que personne ne se rappelle avoir posée.
+        task.whenMinutes = nil
+      }
     }
 
     // Le rang ne se réécrit que dans la section d'ACCUEIL, et sur ses membres à elle : renuméroter

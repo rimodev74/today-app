@@ -123,13 +123,11 @@ private struct ListPageView: View {
   // Une règle par date plutôt qu'un ensemble d'ID de tâches cochées : `persistentModelID` mute à
   // l'autosave (cf. la duplication de sous-tâches), un ensemble se serait vidé tout seul.
   @AppStorage(CompletedTaskRetention.storageKey) private var retentionRaw = CompletedTaskRetention
-    .untilViewChange.rawValue
-  // Ouverture de la page (mode « jusqu'à ce que je quitte la liste ») : tout ce qui a été coché
-  // AVANT est déjà archivé, ce qu'on coche maintenant reste visible jusqu'au changement de liste.
-  @State private var pageOpenedAt = Date()
-  // Mode « après 1,5 s » : `isArchived` dépend de l'heure qu'il est, or SwiftUI ne redessine que sur
-  // changement d'état — cocher programme donc un bump de `tick` 1,5 s plus tard, qui fait sortir la
-  // ligne. Sans lui, la tâche resterait affichée jusqu'au prochain redessin fortuit.
+    .untilNextDay.rawValue
+  // `isArchived` dépend de l'heure qu'il est, or SwiftUI ne redessine que sur changement d'état.
+  // Deux réveils, un par mode qui a une échéance : le bump programmé par `scheduleArchiveRefresh`
+  // (1,5 s après une coche) et le passage de minuit (`.NSCalendarDayChanged`, cf. `body`). Sans eux,
+  // la tâche resterait affichée jusqu'au prochain redessin fortuit.
   @State private var tick = Date()
   @State private var archivesExpanded = false
 
@@ -301,9 +299,17 @@ private struct ListPageView: View {
       focus.dismiss()
       notesFocused = false
       focusedDraft = nil
-      // « Quitter la liste » : ce changement EST la sortie de page (la vue n'est pas recréée).
-      pageOpenedAt = Date()
       archivesExpanded = false
+    }
+    // Minuit : ce qui a été coché hier quitte le flux (mode « jusqu'au lendemain »). Le seul moment
+    // où `isArchived` change sans qu'on ait rien touché — et l'app peut très bien être restée
+    // ouverte. `onReceive` se démonte tout seul avec la vue ; `receive(on:)` parce que rien ne
+    // garantit le fil de cette notification-là, et qu'un `@State` écrit ailleurs qu'en principal
+    // est un plantage à retardement.
+    .onReceive(
+      NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
+    ) { _ in
+      withAnimation(taskInsert) { tick = Date() }
     }
     // Création de liste (sidebar) : on passe le TITRE de la page en édition. `.task(id:)` et pas
     // `.onChange` — à la 1re création, cette page vient d'être montée, un `.onChange` ne verrait pas
@@ -386,14 +392,14 @@ private struct ListPageView: View {
   // MARK: Archivage des tâches cochées
 
   private var retention: CompletedTaskRetention {
-    CompletedTaskRetention(rawValue: retentionRaw) ?? .untilViewChange
+    CompletedTaskRetention(rawValue: retentionRaw) ?? .untilNextDay
   }
 
   /// Une tâche cochée quitte le flux de la liste — jamais la base. La règle est commune (cf.
-  /// `CompletedTaskRetention.hasLeftTheFlow`) ; ce qui est PROPRE à cette page, c'est qu'elle sait
-  /// depuis quand elle est ouverte, et c'est la seule chose qu'elle ajoute.
+  /// `CompletedTaskRetention.hasLeftTheFlow`) ; ce que la page ajoute, c'est `tick`, l'instant
+  /// auquel elle l'évalue.
   private func isArchived(_ task: TaskItem) -> Bool {
-    task.hasLeftTheFlow(retention, now: tick, pageOpenedAt: pageOpenedAt)
+    task.hasLeftTheFlow(retention, now: tick)
   }
 
   /// Les archivées de CETTE liste, la plus récemment cochée en tête — même tri que la vue
@@ -448,7 +454,7 @@ private struct ListPageView: View {
         Divider().padding(.vertical, 10)
 
         Button {
-          withAnimation(.snappy(duration: 0.22)) { archivesExpanded.toggle() }
+          withAnimation(disclosureFlow) { archivesExpanded.toggle() }
         } label: {
           HStack(spacing: 6) {
             Image(systemName: "chevron.right")
@@ -474,6 +480,10 @@ private struct ListPageView: View {
               onDelete: { delete($0) }
             )
           }
+          // Petit fondu à l'ouverture, EXPLICITE : ce bloc est un vrai retrait/insertion (contrairement
+          // au contenu d'un `DisclosureGroup`, qui reste monté), donc `.transition` s'applique — mais
+          // en toutes lettres, pas laissé au défaut implicite de SwiftUI. Cf. convention dans CLAUDE.md.
+          .transition(.opacity)
         }
       }
       .transition(.opacity)
@@ -1038,7 +1048,8 @@ private struct ListPageView: View {
       }
       TextField(
         "Nouvelle tâche…",
-        text: Binding(get: { drafts[block.id] ?? "" }, set: { drafts[block.id] = $0 })
+        text: Binding(get: { drafts[block.id] ?? "" }, set: { drafts[block.id] = $0 }),
+        axis: .vertical
       )
       .textFieldStyle(.plain)
       // Sans ça le champ retombe sur le `body` natif (13 pt) là où un titre de tâche est mis à
@@ -1352,14 +1363,14 @@ private struct ListPageView: View {
   }
 
   private func deleteList() {
-    list.delete(from: $selection, in: modelContext)
+    list.delete(
+      from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
   }
 
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.delete(task)
-      try? modelContext.save()
+      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
     }
   }
 
@@ -1447,6 +1458,10 @@ private struct ProjectPageView: View {
   @Binding var pendingTitleFocus: PersistentIdentifier?
 
   @Environment(\.modelContext) private var modelContext
+  /// Supprimer une liste emporte ses tâches ; leurs rappels Apple doivent partir avec elles, sinon
+  /// ils restent orphelins et reviennent s'afficher dans les sections « Rappels » de l'app (cf.
+  /// `TodoList.delete(from:in:forget:)`).
+  @Environment(RemindersService.self) private var remindersService
   @FocusState private var notesFocused: Bool
   /// Liste en attente de confirmation de suppression (non nil ⇒ alerte). Même règle que la
   /// sidebar : vide, elle part sans rien demander (cf. `TodoList.needsDeleteConfirmation`).
@@ -1506,7 +1521,10 @@ private struct ProjectPageView: View {
       presenting: deletionCandidate
     ) { list in
       Button("Supprimer", role: .destructive) {
-        withAnimation(boardFlow) { list.delete(from: $selection, in: modelContext) }
+        withAnimation(boardFlow) {
+          list.delete(
+            from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
+        }
         deletionCandidate = nil
       }
       Button("Annuler", role: .cancel) { deletionCandidate = nil }
@@ -1598,7 +1616,10 @@ private struct ProjectPageView: View {
     if list.needsDeleteConfirmation {
       deletionCandidate = list
     } else {
-      withAnimation(boardFlow) { list.delete(from: $selection, in: modelContext) }
+      withAnimation(boardFlow) {
+        list.delete(
+          from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
+      }
     }
   }
 }

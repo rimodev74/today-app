@@ -36,12 +36,23 @@ final class TaskItem {
   /// Comparé par `SmartList.sort`, qui range les tâches placées à la main AVANT celles qui ne
   /// l'ont jamais été — cf. son commentaire pour ce que ça veut dire d'une tâche qui arrive.
   var smartOrder: Int = 0
-  /// JOUR planifié, jamais une heure : tout ce qui pose une date de l'app (saisie rapide,
-  /// sélecteurs, raccourcis) écrit un début de journée. Un champ `hasTime` a existé pour dire
-  /// « l'heure de cette date compte » ; rien ne l'a jamais mis à vrai, et son affichage sur
-  /// « À venir » était donc inatteignable — retiré au schéma 2.0.0. Le jour où l'app saura poser
-  /// une heure, il reviendra AVEC son sélecteur, pas avant.
+  /// JOUR planifié, TOUJOURS un début de journée : tout ce qui pose une date (saisie rapide,
+  /// sélecteurs, raccourcis) écrit un début de journée, et tout ce qui la lit compare des jours.
+  /// L'heure, quand il y en a une, est à côté (`whenMinutes`) — jamais dans cette valeur.
   var when: Date?
+  /// L'HEURE de la tâche, en minutes depuis minuit. `nil` = aucune heure choisie, le cas d'une
+  /// tâche simplement datée (et de TOUTES les bases d'avant la 5.0.0).
+  ///
+  /// À côté de `when` et pas dedans : un jour et une heure ne se lisent pas pareil. Toute l'app
+  /// compare des jours (« est-ce aujourd'hui ? », « est-ce après demain ? ») ; glisser l'heure dans
+  /// `when` obligerait chacune de ces lectures à la remettre à zéro d'abord, et la première qui
+  /// l'oublierait ferait disparaître une tâche de sa propre page. C'est aussi ce qui distingue
+  /// « pas d'heure » de « minuit », qu'une date seule confondrait.
+  ///
+  /// En minutes et pas en `Date` : une heure n'a ni jour ni fuseau, et déplacer la date d'une tâche
+  /// ne doit pas déplacer son heure. Le remplaçant de `hasTime`, retiré au schéma 2.0.0 faute de
+  /// sélecteur — il revient AVEC le sien, comme annoncé.
+  var whenMinutes: Int?
   /// Échéance (deadline) — distincte de `when` (jour planifié). Affichée à droite de la ligne
   /// avec un drapeau, en rouge une fois atteinte ou dépassée.
   var deadline: Date?
@@ -151,6 +162,7 @@ final class TaskItem {
   /// partager ferait que cocher la copie cocherait l'originale).
   func copy(into list: TodoList?) -> TaskItem {
     let clone = TaskItem(title: title, notes: notes, when: when, isHeader: isHeader, list: list)
+    clone.whenMinutes = whenMinutes
     clone.deadline = deadline
     clone.estimateMinutes = estimateMinutes
     clone.sortIndex = sortIndex

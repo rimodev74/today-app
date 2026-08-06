@@ -10,7 +10,7 @@ de `ThingsCloneApp.swift`.
 ```bash
 ./run.sh          # build → bundle .app → open. Le seul moyen correct de lancer l'app.
 swift build       # compilation seule (~0,2 s incrémental)
-swift test        # 189 tests, en mémoire ou sur un store temporaire — jamais la vraie base
+swift test        # en mémoire ou sur un store temporaire — jamais la vraie base
 ```
 
 **Jamais `swift run`.** L'exécutable nu n'est pas un bundle : macOS ne lui applique pas la
@@ -74,9 +74,16 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
 - **Le minimum macOS n'est pas vérifié par le build.** `Package.swift` déclare `.macOS(.v14)`
   mais `swift build` compile pour l'hôte. Une API `@available(macOS 15+)` compile sans broncher et
   casserait sur une vraie cible 14. À vérifier à l'œil.
-- **Le store contient de la VRAIE donnée**, pas des jeux d'essai — et il vit à la racine de
-  `~/Library/Application Support/` (`default.store`), sans sous-dossier au nom du bundle id.
-  Le compter avant d'y toucher : `sqlite3 default.store "select count(*) from ZTASKITEM;"`.
+- **Le store contient de la VRAIE donnée**, pas des jeux d'essai — et il vit dans
+  `~/Library/Application Support/Today/default.store` (cf. `Services/StoreLocation.swift`, qui
+  déménage aussi l'ancienne base au premier lancement). Le compter avant d'y toucher :
+  `sqlite3 default.store "select count(*) from ZTASKITEM;"`.
+
+  **Il vivait à la RACINE de `~/Library/Application Support/`**, sans sous-dossier, parce que
+  SwiftData nomme son fichier par défaut `default.store` et le pose là quand rien ne lui dit où
+  aller. Le 5 août 2026, une autre app a écrit SON `default.store` par-dessus le nôtre : deux
+  applications sans rapport se disputaient le même chemin, et la première à écrire gagnait. C'est
+  pour ça que le dossier au nom de l'app n'est pas cosmétique.
 - **TOUT changement de forme d'un `@Model` demande une montée de version ET une étape.** Y compris
   un ajout. `CurrentSchema` pointe les classes VIVANTES et son numéro de version ne bouge pas tout
   seul — SwiftData compare les NUMÉROS, jamais les formes. Deux issues, toutes deux muettes à la
@@ -150,14 +157,29 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
      sur l'autre au relâchement produit le même symptôme que le point 4, pour une autre raison : le
      `ForEach` réordonne ses identités au moment où les décalages retombent. Rien n'écrit pendant un
      geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie.
-- **Une section VIDE ne se lit pas par sa voisine.** Sur « Tâches », le dépôt déduit la section
-  d'accueil de la ligne VOISINE — la seule lecture qui marche pour les quatre sortes de sections
-  d'un coup. Une section vide n'en a aucune : une tâche lâchée sur un « Aujourd'hui » vide partait
-  dans « Non classé » et perdait sa date, EN SILENCE (mesuré, pas supposé). D'où `SectionBandKey` +
-  `AllTasksPage.emptySection(at:bands:)`, qui désignent la section par sa GÉOMÉTRIE — et seulement
-  quand elle est vide, la voisine restant plus précise ailleurs (dans un projet à plusieurs listes,
-  elle dit laquelle). Ce n'est PAS un second stockage de cadres : il ne nourrit aucun décalage, il
-  ne sert qu'au relâchement.
+- **Sur « Tâches », chaque section est sa PROPRE zone de glissement**, et on n'y fait plus voyager
+  une tâche d'une section à l'autre au doigt. La séquence donnée au moteur est `section.tasks`,
+  jamais les lignes de la page (cf. `AllTasksPageView.rowsView`).
+
+  Le glisser traversant a existé, avec toute une machinerie pour deviner la section d'accueil
+  (`SectionBandKey`, `AllTasksPage.emptySection(at:bands:)`, `measureSectionBand` — **tous
+  supprimés**, ne pas les chercher). Il a été retiré le 6 août 2026 pour deux défauts que cette
+  machinerie ne pouvait pas corriger, parce qu'ils venaient d'ailleurs : le moteur raisonnait sur
+  une liste PLATE, alors que les titres de section occupent de la hauteur à l'écran. Plus on
+  traversait de titres, plus l'écart se creusait entre la ligne dessinée et le trou qui s'ouvre —
+  le « flou » constaté à l'usage. Et un titre n'étant pas une ligne, lâcher dessus faisait lire la
+  tâche du DESSUS : on atterrissait dans la section précédente.
+
+  Bornée à sa section, la séquence est homogène et contiguë : plus de trou d'air, et les deux bouts
+  du dépliant deviennent des butées naturelles.
+
+  **Ne pas rétablir le glisser entre sections**, et surtout pas pour faire s'ouvrir une section
+  repliée au survol (la demande est venue, elle a été écartée le 6 août). Ce serait réinstaller les
+  deux défauts ci-dessus sur le morceau le plus fragile de l'app, pour une cible qui DÉFILE — viser
+  une section 800 px plus bas n'est pas plus rapide qu'un clic droit. Le déplacement entre sections
+  passe par le menu ▸ *Déplacer vers…* et le sélecteur *Quand…*, qui disent explicitement ce que le
+  glisser devait deviner. La suite prévue, elle, est le glisser vers la SIDEBAR (cible fixe, qui
+  liste toutes les destinations, et qui n'a aucun trou à calculer) — cf. `ROADMAP.md`.
 - **Lire une propriété d'un `@Model` n'est PAS un accès mémoire.** Ça traverse la machinerie
   SwiftData (`_$backingData`). Conséquence non évidente : un comparateur ordinaire relit ses clés à
   chaque comparaison, soit n·log n fois — ~4 400 accès pour trier 86 tâches sur cinq clés, et le tri
@@ -193,7 +215,73 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
   du container, avant qu'aucune fenêtre n'existe ; `ContentView` le consomme et l'affiche une fois.
 - **Un plantage sans message se lit dans le journal.** `CrashLog` installe un gestionnaire
   d'exceptions non rattrapées, parce que le rapport système garde la pile mais PAS la raison :
-  `log show --last 1h --predicate 'process == "Today"' | grep PLANTAGE`.
+  `log show --last 1h --predicate 'process == "Today"' | grep PLANTAGE`. Il n'attrape en revanche
+  QUE les exceptions Objective-C : un `fatalError` de Swift (`EXC_BREAKPOINT`, `brk 1`, pile qui
+  part de `_assertionFailure`) passe à côté, et le rapport système n'en garde pas la phrase. La
+  seule façon de la lire est de **rejouer le geste hors de l'app** — un test sur une COPIE de la
+  vraie base, où le message s'imprime en clair. C'est ce qui a résolu le crash ci-dessous après
+  deux fausses pistes.
+- **L'annulation et la cascade ne se mélangent pas.** `ContentView` branche l'`UndoManager` de la
+  fenêtre sur le contexte (c'est ce qui fait marcher ⌘Z). Avec lui branché, enregistrer une cascade
+  à PLUSIEURS niveaux — un projet emporte ses listes, qui emportent leurs tâches — fait tomber
+  SwiftData sur `DataUtilities.swift:541: A snapshot should exist before creating a new snapshot
+  for undo`. Supprimer un projet depuis la sidebar plantait l'app à tous les coups (6 août 2026).
+  Mesuré en rejouant la suppression sur une copie neuve de la vraie base, un projet par copie :
+  **sans** manager, les 6 projets partent sans un mot ; **avec**, le premier fait tomber le
+  processus. D'où `ModelContext.deleteCascadeAndSave`, qui débranche le manager le
+  temps de la cascade et VIDE sa pile (elle parle peut-être d'objets que la cascade vient
+  d'effacer). Réservé aux deux appelants qui cascadent : tout y passer retirerait ⌘Z de la
+  suppression d'une tâche, qui marche et qui compte. Gardé par `CascadeDeleteTests` — qui ne
+  reproduit RIEN si l'on oublie de rouvrir le store entre le semis et la suppression : il faut des
+  objets relus du disque, sans instantané en mémoire.
+
+  **Ce n'est PAS la profondeur de la cascade qui décide.** Ce fichier a affirmé le contraire
+  (« une tâche, sous-tâches comprises, ne pose aucun problème — c'est le niveau supplémentaire qui
+  casse »), et c'est faux. Mesuré le 6 août 2026 en écrivant `CascadeDeleteTests` : avec le manager
+  branché, supprimer UNE tâche relue du disque fait tomber la même assertion — y compris après avoir
+  effacé ses sous-tâches d'abord. Ce qui change tout, c'est de **LIRE ses propriétés avant** : la
+  même suppression passe alors sans un mot. C'est l'instantané qui manquait, pas un niveau de trop.
+
+  Conséquence pratique : ⌫ est hors de portée du défaut parce qu'une ligne supprimable a forcément
+  été RENDUE, donc lue. Le corollaire compte pour la suite — **toute suppression écrite hors du
+  chemin de l'affichage** (une passe de synchro, un ménage au lancement, un futur import) travaille
+  sur des objets que personne n'a lus, et retombe donc dans le cas qui casse. Là, il faudra
+  `deleteCascadeAndSave`, quelle que soit la profondeur.
+
+  Les deux fausses pistes valent d'être connues, parce qu'elles étaient plausibles et qu'elles ont
+  coûté deux tours : une variable mal nommée dans le code de suppression (réelle, sans rapport),
+  puis l'écriture EventKit intercalée dans la cascade (réelle aussi — corrigée, à garder — mais le
+  crash est resté identique à la ligne près). Ce qui a tranché : comparer les rapports de crash
+  AVANT et APRÈS le correctif. Mêmes frames SwiftData, même assertion. Un correctif qui ne déplace
+  pas la pile n'a pas touché la cause.
+- **EventKit s'écrit APRÈS SwiftData, jamais pendant.** Effacer un rappel fait écrire EventKit, qui
+  poste `.EKEventStoreChanged`, qui relance la synchro de `ContentView`, qui RÉENREGISTRE le même
+  contexte — au milieu de la mutation en cours. Le motif tient en trois temps : lire les
+  IDENTIFIANTS de rappel (des `String`, qui survivent à ce que SwiftData efface), supprimer et
+  enregistrer, puis effacer les rappels. Écrit une fois dans `ModelContext.deleteTasksAndSave` et
+  dans `TodoList.delete` ; les cinq pages faisaient l'inverse, chacune de son côté.
+- **La synchro Rappels se réveille pour son propre bruit — et il faut DEUX déclencheurs, pas un.**
+  `.EKEventStoreChanged` sonne à chacune de NOS écritures, et le fil principal la livre PENDANT la
+  passe (chaque `await` lui rend la main). Sans temporisation, une passe qui pousse dix rappels
+  relançait dix fois la relecture des complétions, chacune posant un `calendarItem(withIdentifier:)`
+  synchrone par tâche liée : le carré du nombre de tâches, sur le fil qui dessine. D'où la seconde
+  d'attente et TOUT sous `withSyncLock` (cf. `ContentView.syncWithReminders`).
+
+  Symétriquement, cette notification ne dit rien de NOS écritures à nous : dater une tâche n'écrit
+  que dans SwiftData. Le sens app → Rappels n'avait donc aucun déclencheur, et partait au prochain
+  réveil venu d'ailleurs — une quinzaine de secondes, mesurées à l'usage. `ModelContext.didSave` est
+  son pendant exact, et c'est ce qui manquait.
+- **Le push effaçait la preuve que la suppression attendait.** Supprimer un rappel dans l'app
+  Rappels ne supprimait pas la tâche, et le rappel réapparaissait dans la seconde. La chaîne : la
+  passe note l'absence (première des deux preuves de `reminderVanished`), puis le push, juste
+  derrière, voit « pas de rappel » — indiscernable de « jamais poussé » — et le RECRÉE avec un
+  identifiant neuf. La passe suivante trouve un rappel vivant : plus rien n'a jamais disparu, la
+  seconde preuve ne peut pas exister. D'où `wasSeenAlive` dans `RemindersSync.needsPush`, qui
+  départage les deux façons d'être introuvable : **jamais vu vivant** = identifiant périmé (base
+  restaurée) ⇒ recréer, ce qui rend ses rappels à une sauvegarde qu'on remonte ; **vu vivant puis
+  disparu** = l'utilisateur vient de le supprimer ⇒ ne rien faire, et laisser la preuve s'accumuler.
+  La règle générale : *une passe qui répare ne doit pas effacer ce qu'une autre passe est en train
+  de constater.*
 
 ## Conventions
 
@@ -214,6 +302,47 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
 - **Avant d'ajouter un `@State`, chercher le type qui porte déjà ce comportement.** Un second état
   pour une notion existante (sélection, édition, brouillon, glissement) est exactement la façon dont
   deux pages se mettent à diverger sans que personne ne le voie.
+- **Tout dépliant s'anime avec `disclosureFlow`.** Un chevron qui tourne et un contenu qui
+  apparaît, c'est le MÊME geste partout : repli d'un projet dans la sidebar, section
+  d'« Aujourd'hui » ou de « Tâches », archives d'une liste, sous-tâches d'une ligne. Quatre valeurs
+  avaient divergé (`.snappy(0.2)`, `.snappy(0.22)`, `.easeInOut(0.2)`, le défaut de
+  `DisclosureGroup`) — assez pour que le même clic ne se sente pas pareil d'un onglet à l'autre.
+  Un nouveau dépliant prend `disclosureFlow` (défini dans `TaskPageChrome.swift`, avec les autres
+  courbes), jamais une durée inventée sur place — et TOUJOURS en enveloppant la MUTATION, pas le
+  rendu : `withAnimation(disclosureFlow) { … }` autour de l'écriture de l'état (`isCollapsed.toggle()`,
+  `toggled.insert/remove`, `undatedExpanded = …`), jamais un `.animation(value:)` posé sur la vue.
+  Un `DisclosureGroup` change son binding depuis son propre bouton AppKit, hors de notre code : un
+  `.animation(value:)` à côté n'attrape pas cette transaction-là — testé, résultat instantané et
+  saccadé. Passer par un `Binding` maison dont le `set` fait le `withAnimation` (cf.
+  `TodayPageView.undatedExpansion`, `AllTasksPageView.expansion(of:)`) au lieu du binding brut.
+
+  **Le contenu fond en s'ouvrant, en plus de la hauteur qui s'anime — et toujours EXPLICITEMENT,**
+  jamais laissé au défaut implicite de SwiftUI (un ancêtre qui pose un jour `.transition(.identity)`
+  l'éteindrait sans qu'on le voie). Deux cas, selon si le contenu est démonté ou pas :
+  - **retrait/insertion réel** (`if isOpen { rows }`, comme la sidebar ou les archives d'une liste) →
+    `.transition(.opacity)` sur ce bloc (au besoin `Group { … }` s'il contient plusieurs vues) ;
+  - **`DisclosureGroup`** — son contenu reste MONTÉ, replié par hauteur seulement, un `.transition`
+    n'y change donc rien → `.opacity(isOpen ? 1 : 0)` sur le contenu, qui suit la même transaction
+    que le `withAnimation` du binding puisqu'il lit le même booléen.
+
+  Un nouveau dépliant applique les DEUX : `disclosureFlow` sur la mutation, fondu sur le contenu.
+
+  **Les sections de « Tâches » ne sont plus des `DisclosureGroup`** (6 août 2026) : elles relèvent
+  donc du PREMIER cas, pas du second. Un `DisclosureGroup` rogne son contenu à son propre cadre, et
+  la ligne qu'on tire en sortait — elle se faisait couper net en pleine course. Remplacés par un
+  dépliant fait main (bouton + `if open { rows }`), qui ne rogne rien. Bénéfice au passage : le
+  contenu est vraiment RETIRÉ quand la section est repliée, au lieu d'être seulement replié en
+  hauteur — une section fermée ne coûte donc plus rien à rendre. Le binding maison
+  (`AllTasksPageView.expansion(of:)`) reste, lui : c'est ce qui met la mutation dans la transaction
+  animée, quel que soit le dépliant.
+
+  **L'état du dépliant n'est JAMAIS un `@AppStorage`, même s'il doit survivre au relancement.**
+  Mesuré : un dépliant piloté par `@AppStorage` reste totalement instantané sous `withAnimation` —
+  son écriture passe par `UserDefaults`, hors du mécanisme d'observation que SwiftUI sait capturer
+  dans une transaction animée. C'était le bug de « Tâches sans date » (Aujourd'hui), invisible tant
+  que personne ne comparait à un dépliant voisin. Un `@State` ordinaire, avec la persistance écrite
+  à la main dans son `set` (cf. `TodayPageView.undatedExpansion`), donne le même résultat SANS ce
+  piège.
 - **Une couleur figée se double.** Quand une valeur de maquette s'impose (fond opaque, calque de
   drag), passer par `NSColor(name:) { appearance in … }` avec sa version sombre — le motif est
   déjà là dans `SidebarView.rowFill`, `thingsSelectionFill` et `HeaderRow.dragLayer`. Une
@@ -265,9 +394,19 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
   une ligne sélectionnable (Finder, Mail, Rappels gardent la flèche). Le comportement actuel — main
   sur la case à cocher seulement — est correct. Si un repère de survol manque, la bonne réponse est
   un fond de survol, pas un changement de curseur.
+- **Le glisser d'une section à l'autre sur « Tâches »**, et son corollaire « la section repliée
+  s'ouvre au survol ». Écrit, mesuré, retiré le 6 août 2026 : le détail et les deux défauts sont
+  dans les Pièges. La répartition d'une tâche vers une liste passera par la SIDEBAR, qui est une
+  cible fixe et n'a aucun trou à calculer.
 
 ## Outils
 
+- **`swift build` ET `swift test` sont imposés à la fin de chaque tour**, pas laissés à la mémoire :
+  `Scripts/build-check.sh`, branché en hook `Stop` (cf. `.claude/settings.local.json`), refuse de
+  rendre la main et remonte les erreurs. C'est ce qui fait tourner les deux cliquets de schéma
+  AVANT qu'on lance l'app — sans ça, « Rouge ⇒ ne pas lancer l'app » était une consigne sans
+  exécution derrière. Coût : ~2 s à chaud. Une seule passe de correction automatique
+  (`stop_hook_active`), pour ne pas boucler.
 - **sourcekit-lsp est installé** et couvre les `.swift`. Utiliser les outils `lsp_*`
   (`lsp_diagnostics`, `lsp_goto_definition`, `lsp_find_references`, `lsp_hover`) plutôt que de
   deviner un type ou de grep des références à la main. Attention : après création ou renommage d'un
@@ -292,9 +431,21 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
 Ce qui marche : listes, tâches, en-têtes de section, réordonnancement (tâches ET blocs d'en-tête),
 renommage, complétion, projets, sous-tâches, notes en texte riche, saisie rapide (`@demain`,
 `#liste`), raccourcis texte et combinaisons globales, archivage, pomodoro, rappels et calendrier
-Apple (lecture + report de complétion), recherche (`QuickFindPanel`), capsule de saisie rapide hors
+Apple (lecture, report de complétion, et pont bidirectionnel optionnel — cf. `RemindersSync` : une
+liste Rappels désignée dans les Réglages, les tâches datées y partent, ses rappels datés en
+reviennent ; c'est `needsPush` qui empêche la boucle — il compare les JOURS quand la tâche n'a pas
+d'heure, ce qui préserve celle d'un rappel importé, et l'instant COMPLET quand elle en a une, sans
+quoi changer l'heure d'une tâche ne partirait jamais), recherche (`QuickFindPanel`),
+capsule de saisie rapide hors
 app, et les quatre pages intelligentes — **Tâches**, **Aujourd'hui**, **À venir**, **Archives** —
 toutes réelles.
+
+Le pont Rappels est **branché dans les deux sens et vérifié à la main le 6 août 2026** : une tâche
+datée part dans la liste-pont, un rappel coché là-bas coche la tâche ici, un rappel supprimé là-bas
+emporte la tâche, et changer l'heure d'un côté la met à jour de l'autre — sans que rien ne reparte
+en boucle. Il avait été coupé le 5 août après avoir supprimé trois tâches ; ce qui a rendu la
+suppression sûre est dans les Pièges (les deux preuves de `reminderVanished`, et `wasSeenAlive`,
+sans lequel la suppression depuis Rappels ne pouvait pas fonctionner du tout).
 
 `HUDWindow` est la pastille d'accusé de réception, en bas de l'ÉCRAN : elle ne parle QUE des gestes
 dont le résultat n'est pas à l'écran — une tâche déposée par la capsule depuis une autre app, un
@@ -304,9 +455,11 @@ elle n'a rien à dire, et l'y ajouter la transformerait en bruit.
 
 Les cinq pages se comportent pareil, et ça a été vérifié à la main, dans les deux thèmes :
 sélection au clic, ⌫, ↑/↓, clic dans le vide qui relâche, ⌘Z après une suppression. Le glisser
-existe sur une liste, un projet, « Aujourd'hui » et « Tâches » ; « À venir » et « Archives » n'en
-ont pas, et c'est un choix — elles sont ordonnées par une date, il n'y a pas d'ordre manuel à y
-mettre.
+existe sur une liste, « Aujourd'hui » et « Tâches » — sur cette dernière, borné à sa propre section
+(cf. Pièges). « À venir » et « Archives » n'en ont pas, et c'est un choix : elles sont ordonnées par
+une date, il n'y a pas d'ordre manuel à y mettre. **La page d'un PROJET non plus**, et pas par
+choix d'ordre : c'est un tableau de cartes (une carte par liste), il n'y a aucune ligne de tâche à
+y glisser. Ce fichier a longtemps prétendu le contraire.
 
 **Plus rien n'est du décor.** Les trois derniers faux-semblants ont été retirés le 2 août 2026, et
 le principe qui les a fait partir vaut pour la suite : *une fonctionnalité est branchée ou elle
@@ -314,8 +467,10 @@ n'existe pas.* Du code en pause ment sur ce que l'app sait faire, et se paie deu
 en le maintenant, une fois en le débranchant.
 
 - l'**icône tag**, décorative faute de modèle qui porte des tags → retirée ;
-- **`TaskItem.hasTime`**, jamais mis à vrai par aucun chemin (l'app ne pose que des JOURS), ce qui
-  rendait l'affichage d'heure d'« À venir » inatteignable → retiré du schéma (cf. `SchemaV1`) ;
+- **`TaskItem.hasTime`**, jamais mis à vrai par aucun chemin (l'app ne posait que des JOURS), ce qui
+  rendait l'affichage d'heure d'« À venir » inatteignable → retiré du schéma (cf. `SchemaV1`).
+  Revenu le 5 août 2026 sous la forme de `TaskItem.whenMinutes` (schéma 5.0.0) — AVEC son sélecteur
+  (`WhenPicker`), comme la règle l'exigeait : le jour reste dans `when`, l'heure vit à côté ;
 - la **barre de capacité** d'« Aujourd'hui », écrite, testée et masquée — avec son réglage
   « Fin de journée » resté VISIBLE dans les Réglages, où il ne pilotait donc plus rien → supprimée,
   avec `DayCapacity`. `Estimate` (la durée d'une tâche) reste : elle sert ailleurs.

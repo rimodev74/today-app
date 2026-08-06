@@ -180,8 +180,10 @@ struct TaskKeyMonitor: NSViewRepresentable {
   }
 
   func makeNSView(context: Context) -> NSView {
+    let host = NSView(frame: .zero)
+    context.coordinator.host = host
     context.coordinator.install()
-    return NSView(frame: .zero)
+    return host
   }
 
   func updateNSView(_ nsView: NSView, context: Context) {
@@ -212,12 +214,21 @@ struct TaskKeyMonitor: NSViewRepresentable {
       self.onMove = onMove
     }
 
+    /// La vue qui porte ce moniteur — sa fenêtre est la SEULE dans laquelle il doit agir. Même
+    /// raison que dans `KeyCommandMonitor` : un moniteur local écoute toute l'APPLICATION. Ce
+    /// moniteur-ci s'en tirait par un effet de bord (son test « un champ texte a le focus ? »
+    /// écarte la capsule de saisie rapide et les Réglages, où l'on tape toujours dans un champ),
+    /// mais rien ne le garantissait — une fenêtre auxiliaire sans champ texte aurait vu ⌫
+    /// supprimer une tâche dans la fenêtre de derrière.
+    weak var host: NSView?
+
     func install() {
       guard monitor == nil else { return }
       // Sans modificateur : ⌘⌫ ou ⌥↑ appartiennent à d'autres gestes, existants ou à venir.
       let ignored: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
       monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-        guard let self, event.modifierFlags.intersection(ignored).isEmpty, self.isActive()
+        guard let self, event.modifierFlags.intersection(ignored).isEmpty, self.isActive(),
+          let window = self.host?.window, event.window === window
         else { return event }
         if NSApp.keyWindow?.firstResponder is NSText { return event }
 
@@ -251,8 +262,10 @@ struct KeyCommandMonitor: NSViewRepresentable {
   func makeCoordinator() -> Coordinator { Coordinator(modifiers: modifiers, action: action) }
 
   func makeNSView(context: Context) -> NSView {
+    let host = NSView(frame: .zero)
+    context.coordinator.host = host
     context.coordinator.install(keyCode: keyCode)
-    return NSView(frame: .zero)
+    return host
   }
 
   func updateNSView(_ nsView: NSView, context: Context) {
@@ -277,15 +290,82 @@ struct KeyCommandMonitor: NSViewRepresentable {
       self.action = action
     }
 
+    /// La vue qui porte ce moniteur — sa fenêtre est la SEULE dans laquelle il doit agir.
+    ///
+    /// `addLocalMonitorForEvents` écoute toute l'APPLICATION, pas une fenêtre. Sans cette garde,
+    /// ⌘N frappé dans les Réglages ou dans la capsule de saisie rapide créait une tâche dans la
+    /// fenêtre principale, derrière — une tâche apparue là où l'on ne regardait même pas.
+    /// (`TaskKeyMonitor` échappait au même défaut par accident : son test « un champ texte a le
+    /// focus ? » écarte la capsule, mais rien ne l'écartait par principe.)
+    weak var host: NSView?
+
     func install(keyCode: UInt16) {
       guard monitor == nil else { return }
       let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
       monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
         guard let self, event.keyCode == keyCode,
-          event.modifierFlags.intersection(relevantMods) == self.modifiers
+          event.modifierFlags.intersection(relevantMods) == self.modifiers,
+          let window = self.host?.window, event.window === window
         else { return event }
         self.action()
         return nil
+      }
+    }
+
+    func uninstall() {
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+    }
+  }
+}
+
+/// Referme ce qui est accroché à une rangée dès que la liste DÉFILE.
+///
+/// Un popover est une fenêtre accrochée à une vue. Quand cette vue se déplace — et défiler la
+/// déplace à chaque cran de molette — macOS ré-affiche la fenêtre pour la resituer, en plein calcul
+/// de mise en page. C'est là qu'il a levé une exception dans `NSRemoteView` le 5 août 2026 (deux
+/// rapports, `NSPopover showRelativeToRect:` en frame 19). Et même sans planter, le panneau
+/// restait posé dans le vide, loin de la ligne qui l'avait ouvert.
+///
+/// Un moniteur `NSEvent`, comme les autres ponts de ce fichier, et pas une lecture de la position
+/// de défilement : la molette est l'ÉVÉNEMENT, la position n'en est que la conséquence — et sur
+/// macOS l'inertie continue de faire bouger la vue longtemps après le geste.
+///
+/// Installé UNIQUEMENT tant qu'il y a quelque chose à refermer (cf. son usage dans `TaskRow`) :
+/// un moniteur par rangée, en permanence, ferait passer chaque cran de molette par autant de
+/// fermetures que la page a de lignes.
+struct ScrollDismissObserver: NSViewRepresentable {
+  var onScroll: () -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(onScroll: onScroll) }
+
+  func makeNSView(context: Context) -> NSView {
+    context.coordinator.install()
+    return NSView(frame: .zero)
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    context.coordinator.onScroll = onScroll
+  }
+
+  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    coordinator.uninstall()
+  }
+
+  /// Isolé au fil principal comme le reste d'AppKit : ses rappels ne partent que de la boucle
+  /// d'événements. L'annotation écrit une contrainte déjà vraie, elle n'en ajoute aucune.
+  @MainActor
+  final class Coordinator {
+    var onScroll: () -> Void
+    private var monitor: Any?
+
+    init(onScroll: @escaping () -> Void) { self.onScroll = onScroll }
+
+    func install() {
+      guard monitor == nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+        self?.onScroll()
+        return event  // le défilement poursuit sa route : la liste bouge normalement
       }
     }
 

@@ -116,6 +116,21 @@ final class UpcomingPageTests: XCTestCase {
     XCTAssertTrue(page([task("très loin", on: farAway)]).monthBands.isEmpty)
   }
 
+  // MARK: L'heure d'une tâche (schéma 5.0.0)
+
+  /// Une tâche à heure se range dans l'ordre du jour, pas en tête avec les « toute la journée » —
+  /// c'est tout l'intérêt de lui en avoir donné une. Sans heure, elle reste devant.
+  func testUneTacheAHeureSeRangeDansLordreDuJour() {
+    let matin = task("matin", on: date(2026, 8, 7))
+    matin.whenMinutes = 8 * 60
+    let soir = task("soir", on: date(2026, 8, 7))
+    soir.whenMinutes = 18 * 60
+    let sansHeure = task("sans heure", on: date(2026, 8, 7))
+
+    let day = page([soir, sansHeure, matin]).nearDays.first { !$0.items.isEmpty }
+    XCTAssertEqual(day?.tasks.map(\.title), ["sans heure", "matin", "soir"])
+  }
+
   // MARK: Les pans du socle clavier
 
   /// Un pan par jour, dans l'ordre du rendu : fenêtre proche d'abord, puis les jours des bandeaux.

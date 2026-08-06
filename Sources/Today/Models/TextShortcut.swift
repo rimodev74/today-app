@@ -111,7 +111,20 @@ extension TextShortcut {
   /// « [] » : elle survit au relancement au lieu de voir les défauts ressusciter.
   static func decode(_ data: Data) -> [TextShortcut] {
     guard !data.isEmpty else { return defaults }
-    return (try? JSONDecoder().decode([TextShortcut].self, from: data)) ?? defaults
+    let decoded = (try? JSONDecoder().decode([TextShortcut].self, from: data)) ?? defaults
+    return decoded.map(sanitized)
+  }
+
+  /// Un jeton `#liste` ne porte jamais d'espace (cf. `QuickEntry.fold`) : une version antérieure du
+  /// menu de réglages écrivait le nom de la liste tel quel, espaces compris (« #Bugs / Modifications »),
+  /// ce qui laissait les mots suivants tels quels dans le champ au lieu de les résoudre en destination.
+  /// Réparé à la LECTURE plutôt qu'à l'écriture : une entrée déjà enregistrée dans les défauts d'un
+  /// utilisateur se corrige d'elle-même, sans qu'il ait à la retoucher à la main.
+  private static func sanitized(_ shortcut: TextShortcut) -> TextShortcut {
+    guard shortcut.expansion.hasPrefix("#") else { return shortcut }
+    var fixed = shortcut
+    fixed.expansion = "#" + shortcut.expansion.dropFirst().filter { !$0.isWhitespace }
+    return fixed
   }
 
   static func encode(_ shortcuts: [TextShortcut]) -> Data {

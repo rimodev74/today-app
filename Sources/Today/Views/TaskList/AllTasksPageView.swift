@@ -1,3 +1,4 @@
+import EventKit
 import SwiftData
 import SwiftUI
 
@@ -20,6 +21,7 @@ struct AllTasksPageView: View {
   @Binding var searchPresented: Bool
 
   @Environment(\.modelContext) private var modelContext
+  @Environment(RemindersService.self) private var remindersService
   @Query private var allTasks: [TaskItem]
   /// Cibles du « Déplacer vers… » : toutes les listes, comme sur « Aujourd'hui » — les tâches
   /// affichées viennent déjà d'un peu partout.
@@ -32,27 +34,27 @@ struct AllTasksPageView: View {
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
   @State private var focus = TaskFocus()
-  /// Le glissement en cours. Ici il traverse les sections : lâcher une tâche dans un autre
-  /// dépliant la rattache à cette liste (cf. `AllTasksPage.applyDrop`). C'est la page fourre-tout,
-  /// on y range en déplaçant.
+  /// Le glissement en cours. Il est borné à la section de la tâche tirée — chaque dépliant est sa
+  /// propre zone, avec ses butées (cf. `rowsView`, qui dit pourquoi la traversée a été retirée).
   @State private var reorder = TaskPageReorder()
   /// Sections dont le repli DIFFÈRE de leur défaut (cf. `expansion(of:)`) — stocker l'écart plutôt
   /// que l'état permet à chaque section de garder son propre défaut sans initialisation.
   /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
   /// à faire si retrouver ses dépliants au relancement manque vraiment.
   @State private var toggled: Set<String> = []
-  /// Où commence et finit chaque section à l'écran. Sert UNIQUEMENT au relâchement, pour désigner
-  /// une section vide — une section qui porte des lignes se lit par sa voisine, sans géométrie.
-  @State private var sectionBands: [String: CGRect] = [:]
+  // Les bandes de section (`measureSectionBand`) ont été DÉBRANCHÉES. Elles servaient à désigner
+  // une section vide comme cible de dépôt — ce qui n'a plus de sens depuis que le glisser est borné
+  // à sa propre section (cf. `rowsView`). Elles étaient par ailleurs la source de mesures republiées
+  // en continu qui faisaient planter le panneau de date sur cette page, et elles ne manquent donc à
+  // personne. `AllTasksPage.emptySection` est parti avec elles — rien à retirer de plus.
+  /// Repli de la section « Calendrier ». Elle n'est pas une section de `AllTasksPage` — elle ne
+  /// porte aucune tâche —, donc elle ne passe pas par `toggled` : son état lui appartient.
+  @State private var calendarExpanded = true
 
   var body: some View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `sections`
     // refiltrait et retriait toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
-    // La séquence affichée, toutes sections confondues : c'est elle que le glissement parcourt, et
-    // c'est pour ça qu'une tâche peut passer d'un dépliant à l'autre. Le geste en fige sa propre
-    // copie à l'empoignade (cf. `TaskPageReorder`) ; ce qui est RENDU reste vivant.
-    let rows = page.blocks(isExpanded: isExpanded).displayedRows
     let offsets = reorder.offsets()
     return ScrollView {
       VStack(alignment: .leading, spacing: 0) {
@@ -62,10 +64,10 @@ struct AllTasksPageView: View {
         // longtemps été rendue à part, et c'est exactement comme ça qu'elle a fini par manquer à
         // l'ordre du clavier sans que rien ne le montre.
         ForEach(page.sections) { section in
-          sectionView(section, rows: rows, offsets: offsets)
-            // Ce qui rend une section VIDE désignable : sans sa bande, un dépôt dessus se rabat
-            // sur la section du dessus (cf. `AllTasksPage.emptySection`).
-            .measureSectionBand(section.id)
+          sectionView(section, offsets: offsets)
+          // Juste après le jour : ce que le calendrier impose aujourd'hui se lit avec ce qu'on a
+          // décidé d'y faire, comme sur « Aujourd'hui » qui les montre l'un au-dessus de l'autre.
+          if section.kind == .today { calendarSection }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -75,7 +77,6 @@ struct AllTasksPageView: View {
     // Le socle commun des pages de tâches : ⌫ et ↑/↓. Les mêmes sections que le `body` rend.
     // Le trou d'insertion : même brique que « Aujourd'hui », même courbe.
     .taskReorderPlaceholder(reorder)
-    .onPreferenceChange(SectionBandKey.self) { sectionBands = $0 }
     // Le socle commun des pages de tâches : ⌫, ↑/↓, clic dans le vide, et les cadres des lignes que
     // le glissement lui emprunte. Les mêmes sections que le `body` rend.
     .taskPageBase(
@@ -96,6 +97,67 @@ struct AllTasksPageView: View {
         onNewTask: { draftFocused = true }, onInsertHeader: nil,
         onSearch: { searchPresented = true })
     }
+    // Le cache vit dans le service (cf. `RemindersService`), pas ici : cette page est recréée à
+    // chaque fois que l'onglet redevient la sélection, une `@State` locale repartirait de zéro.
+    .task { await remindersService.refreshToday(now: Date()) }
+  }
+
+  // MARK: Calendrier (lecture seule)
+
+  /// Les événements du Calendrier Apple du jour, dans leur propre section — le MÊME contenu et la
+  /// MÊME `EventRow` que « Aujourd'hui », qui les montre en tête de page. Ils ne sont pas des
+  /// tâches : ils ne se sélectionnent pas, ne se glissent pas et ne comptent pas pour le clavier,
+  /// donc ils restent hors de `AllTasksPage`.
+  ///
+  /// Absente si vide, comme les sections « Rappels »/« Événements » d'« Aujourd'hui ».
+  @ViewBuilder private var calendarSection: some View {
+    let events = remindersService.todayEvents
+    if !events.isEmpty {
+      // Le MÊME dépliant fait main que les sections de tâches juste au-dessus. Ici le rognage d'un
+      // `DisclosureGroup` ne gênerait pas (rien ne se glisse dans le calendrier), mais deux
+      // dépliants d'aspect différent sur la même page se verraient — et c'est exactement la
+      // divergence que `disclosureFlow` a été créé pour éteindre.
+      VStack(alignment: .leading, spacing: 0) {
+        Button {
+          calendarExpansion.wrappedValue.toggle()
+        } label: {
+          HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+              .font(.app(10, weight: .semibold))
+              .rotationEffect(.degrees(calendarExpanded ? 90 : 0))
+            Image(systemName: "calendar")
+              .font(.app(11))
+              .foregroundStyle(Color.secondary)
+            Text("Calendrier")
+            Text("\(events.count)")
+              .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+          }
+          .font(.app(.subheadline).weight(.semibold))
+          .foregroundStyle(.secondary)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if calendarExpanded {
+          VStack(alignment: .leading, spacing: 6) {
+            ForEach(events, id: \.eventIdentifier) { EventRow(event: $0) }
+          }
+          .padding(.top, 6)
+          .transition(.opacity)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 14)
+    }
+  }
+
+  /// `withAnimation` sur la MUTATION : le triangle change le binding depuis son bouton AppKit,
+  /// hors de notre code (même règle que `expansion(of:)`).
+  private var calendarExpansion: Binding<Bool> {
+    Binding(
+      get: { calendarExpanded },
+      set: { open in withAnimation(disclosureFlow) { calendarExpanded = open } })
   }
 
   private var header: some View {
@@ -116,29 +178,56 @@ struct AllTasksPageView: View {
   /// Un seul rendu pour toutes les sections — y compris « Aujourd'hui », qui s'ouvre par défaut
   /// mais se replie comme les autres si l'on ne veut voir que ses projets.
   @ViewBuilder private func sectionView(
-    _ section: AllTasksPage.Section, rows: [TaskItem], offsets: [PersistentIdentifier: CGSize]
+    _ section: AllTasksPage.Section, offsets: [PersistentIdentifier: CGSize]
   ) -> some View {
     if section.hasHeader {
-      DisclosureGroup(isExpanded: expansion(of: section)) {
-        rowsView(of: section, rows: rows, offsets: offsets)
-      } label: {
-        HStack(spacing: 6) {
-          Image(systemName: symbol(of: section.kind))
-            .font(.app(11))
-            // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
-            // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
-            .foregroundStyle(tint(of: section.kind) ?? Color.secondary)
-          Text(section.title)
-          Text("\(section.tasks.count)")
-            .foregroundStyle(.tertiary)
+      // **Dépliant fait main, et PAS un `DisclosureGroup`** — le seul écart au « natif d'abord » du
+      // projet, et il est mesuré : un `DisclosureGroup` se replie en ROGNANT son contenu, c'est le
+      // mécanisme même de son animation. Or cette page est la seule où l'on glisse une tâche d'une
+      // section à l'autre : la ligne tirée sort du cadre de sa section et se faisait couper net,
+      // puis disparaissait. `.zIndex` ne sert à rien contre ça — il ordonne des voisines, il ne
+      // fait pas sortir d'un cadre qui rogne.
+      //
+      // Le même dépliant existait déjà à la main pour les archives d'une liste (cf.
+      // `ListPageView.archiveSection`) : c'est le motif qu'on reprend, pas un troisième inventé.
+      // Bénéfice au passage : le contenu est vraiment RETIRÉ quand la section est repliée (un
+      // `DisclosureGroup` le garde monté), donc `.transition(.opacity)` s'applique pour de vrai et
+      // les lignes repliées ne se mesurent plus.
+      let open = isExpanded(section)
+      VStack(alignment: .leading, spacing: 0) {
+        Button {
+          expansion(of: section).wrappedValue.toggle()
+        } label: {
+          HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+              .font(.app(10, weight: .semibold))
+              .rotationEffect(.degrees(open ? 90 : 0))
+            Image(systemName: symbol(of: section.kind))
+              .font(.app(11))
+              // Teinte de la vue intelligente quand elle en a une (le jaune d'« Aujourd'hui ») : la
+              // section se repère du coin de l'œil, comme sa ligne dans la sidebar.
+              .foregroundStyle(tint(of: section.kind) ?? Color.secondary)
+            Text(section.title)
+            Text("\(section.tasks.count)")
+              .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+          }
+          .font(.app(.subheadline).weight(.semibold))
+          .foregroundStyle(.secondary)
+          .contentShape(Rectangle())
         }
-        .font(.app(.subheadline).weight(.semibold))
-        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+
+        if open {
+          rowsView(of: section, offsets: offsets)
+            .transition(.opacity)
+        }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.top, 14)
     } else {
       VStack(alignment: .leading, spacing: 0) {
-        rowsView(of: section, rows: rows, offsets: offsets)
+        rowsView(of: section, offsets: offsets)
         // Le champ « Nouvelle tâche » appartient au pan à nu : c'est le non-classé, et la seule
         // section où l'on crée (une tâche notée ici n'a ni projet ni date — la définition de
         // l'Inbox).
@@ -148,14 +237,31 @@ struct AllTasksPageView: View {
     }
   }
 
+  /// **Chaque section est sa PROPRE zone de glissement.** La séquence donnée au moteur est
+  /// `section.tasks`, jamais les lignes de toute la page — et c'est toute la correction.
+  ///
+  /// Avant, le moteur recevait l'inventaire complet et raisonnait donc sur une liste PLATE : les
+  /// titres de section occupent de la hauteur à l'écran, mais cette hauteur n'existait pas pour le
+  /// calcul. Plus on traversait de titres, plus l'écart se creusait entre l'endroit où la ligne est
+  /// dessinée et celui où le trou s'ouvre — c'est le « flou » constaté à l'usage. Et un titre
+  /// n'étant pas une ligne, lâcher dessus faisait lire la tâche du DESSUS : on atterrissait dans la
+  /// section précédente, pas dans celle qu'on visait.
+  ///
+  /// Bornée à sa section, la séquence est homogène et contiguë : plus de trou d'air, et les deux
+  /// bouts du dépliant deviennent des BUTÉES naturelles — une tâche déjà en tête n'ouvre plus de
+  /// trou au-dessus d'elle, exactement comme sur les autres pages.
+  ///
+  /// Conséquence assumée : on ne fait plus voyager une tâche d'une section à l'autre au doigt. Ce
+  /// déplacement-là existe déjà, et il est plus sûr — le menu ▸ *Déplacer vers…* et le sélecteur
+  /// *Quand…* disent explicitement ce que le glisser devait deviner.
   private func rowsView(
-    of section: AllTasksPage.Section, rows: [TaskItem], offsets: [PersistentIdentifier: CGSize]
+    of section: AllTasksPage.Section, offsets: [PersistentIdentifier: CGSize]
   ) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(section.tasks) { task in
         taskRow(
           for: task, isToday: section.kind == .today,
-          offset: offsets[task.persistentModelID] ?? .zero, rows: rows)
+          offset: offsets[task.persistentModelID] ?? .zero, rows: section.tasks)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,21 +286,29 @@ struct AllTasksPageView: View {
   /// des ouvertes aurait demandé de l'amorcer au premier rendu —, d'où le XOR. Sans bandeau, il n'y
   /// a rien à replier.
   ///
-  /// Lu par le `DisclosureGroup` ET par le socle clavier (les flèches ne parcourent que le
-  /// visible) : la règle vit à un seul endroit.
+  /// Lu par le dépliant ET par le socle clavier (les flèches ne parcourent que le visible) :
+  /// la règle vit à un seul endroit.
   private func isExpanded(_ section: AllTasksPage.Section) -> Bool {
     guard section.hasHeader else { return true }
     return toggled.contains(section.id) != section.defaultExpanded
   }
 
+  /// Le `withAnimation` enveloppe la MUTATION, pas le rendu. La raison a changé depuis que le
+  /// dépliant est fait main — c'était le bouton AppKit du `DisclosureGroup` qui écrivait `toggled`
+  /// hors de notre code —, mais la règle tient toujours : ce qui s'anime ici, c'est l'apparition et
+  /// la disparition RÉELLES des lignes, et seul un `withAnimation` autour de l'écriture les met
+  /// dans la même transaction que la `.transition` du bloc. Même geste que `toggleCollapse` côté
+  /// sidebar : sans lui, saccadé et quasi instantané au lieu de `disclosureFlow`.
   private func expansion(of section: AllTasksPage.Section) -> Binding<Bool> {
     Binding(
       get: { isExpanded(section) },
       set: { open in
-        if open == section.defaultExpanded {
-          toggled.remove(section.id)
-        } else {
-          toggled.insert(section.id)
+        withAnimation(disclosureFlow) {
+          if open == section.defaultExpanded {
+            toggled.remove(section.id)
+          } else {
+            toggled.insert(section.id)
+          }
         }
       })
   }
@@ -244,15 +358,14 @@ struct AllTasksPageView: View {
     // au relâchement, et la faire descendre jusqu'à chaque ligne pour ce seul usage encombrerait
     // toute la chaîne.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
-    // Lu AVANT `dropTaskDrag`, qui prend `reorder` en `inout` : le relire depuis la closure serait
-    // un accès exclusif interdit, et l'état est de toute façon désarmé à ce moment-là.
-    let landing = reorder.draggedCenterY.flatMap {
-      page.emptySection(at: $0, bands: sectionBands)
-    }
+    // Pas de `landing` : il désignait une section d'ACCUEIL par la géométrie, pour les cas où la
+    // tâche changeait de section en cours de route. Le glisser étant borné à sa section (cf.
+    // `rowsView`), `ordered` ne contient que des voisines de la MÊME section — la destination est
+    // donc celle d'origine, et la lire par la voisine suffit et reste la plus précise (dans un
+    // projet à plusieurs listes, elle dit laquelle).
     dropTaskDrag(&reorder) { ordered in
       page.applyDrop(
-        of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()),
-        landing: landing)
+        of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()))
       try? modelContext.save()
     }
   }
@@ -296,8 +409,7 @@ struct AllTasksPageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.delete(task)
-      try? modelContext.save()
+      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
     }
   }
 
@@ -324,6 +436,15 @@ struct AllTasksPageView: View {
     // Mêmes paddings qu'une `TaskRow` au repos : la rangée de création garde le rythme des tâches.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+    // Pendant un glisser, le champ s'efface — il encombrerait le déplacement, et une page de liste
+    // le fait depuis toujours (cf. `ListPageView`, même modificateur). Deux pages qui se comportent
+    // différemment pendant le MÊME geste, c'est exactement ce que le socle commun sert à éviter.
+    //
+    // Opacité et PAS un retrait de l'arbre : les cadres des lignes sont gelés à l'empoignade en
+    // supposant que la mise en page ne bouge plus. Retirer le champ ferait s'effondrer sa hauteur
+    // pendant tout le geste et fausserait le calcul du trou d'insertion.
+    .opacity(reorder.isDragging ? 0 : 1)
+    .animation(.easeInOut(duration: 0.15), value: reorder.isDragging)
   }
 
   /// ⌘N : la tâche est créée VIDE et s'ouvre AUSSITÔT en édition — carte complète, avec notes,

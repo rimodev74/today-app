@@ -7,14 +7,14 @@ import XCTest
 ///
 /// Il a d'abord mesuré le flux VISIBLE — une tâche sortie de la page ne comptait ni au numérateur
 /// ni au dénominateur — pour qu'une liste au long cours n'affiche pas un disque quasi plein devant
-/// une page où rien n'est fait. Sauf qu'un anneau ne regarde AUCUNE page : sans `pageOpenedAt`, la
-/// règle retombait sur le seuil de 1,5 s, et toute tâche cochée quittait le flux une seconde et
-/// demie après le clic. Mesuré : 2 faites sur 4 → 0,0. L'anneau montait puis retombait à zéro tout
-/// seul, sur la sidebar comme sur la page d'un projet.
+/// une page où rien n'est fait. Sauf qu'un anneau ne regarde AUCUNE page : la règle retombait sur
+/// le seuil de 1,5 s, et toute tâche cochée quittait le flux une seconde et demie après le clic.
+/// Mesuré : 2 faites sur 4 → 0,0. L'anneau montait puis retombait à zéro tout seul, sur la sidebar
+/// comme sur la page d'un projet.
 ///
 /// Ces tests tiennent le nouveau contrat : l'âge d'une coche et le réglage de rétention n'entrent
 /// PLUS dans une progression. Ils restent en revanche la règle de ce que la PAGE d'une liste
-/// affiche (cf. `CompletedTaskRetentionTests`), qui, elle, sait depuis quand elle est ouverte.
+/// affiche (cf. `CompletedTaskRetentionTests`).
 final class ListProgressTests: XCTestCase {
   private var context: ModelContext!
 
