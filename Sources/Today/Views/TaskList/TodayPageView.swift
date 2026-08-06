@@ -22,6 +22,9 @@ struct TodayPageView: View {
   @Binding var searchPresented: Bool
 
   @Environment(RemindersService.self) private var remindersService
+  /// Le glisser vers la barre latérale : la page n'en connaît que le nom, tout se joue au
+  /// relâchement (cf. `dropTaskDrag`).
+  @Environment(SidebarDrop.self) private var filing
   @Environment(\.modelContext) private var modelContext
   @Query private var allTasks: [TaskItem]
   // Destination de la tâche libre créée depuis cette page (cf. `createTask`) : l'Inbox, comme
@@ -195,7 +198,7 @@ struct TodayPageView: View {
     )
     // Rien n'est capturé en image : c'est la vraie rangée qui se déplace, donc rien ne disparaît
     // ni ne réapparaît au relâchement.
-    .taskRowDragLayer(reorder, task: task, offset: offset)
+    .taskRowDragLayer(reorder, task: task, offset: offset, airborne: filing.isAirborne)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
     // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches, et au glissement de
@@ -206,7 +209,7 @@ struct TodayPageView: View {
   /// Relâchement. La mécanique (lire le plan avant de désarmer, tout écrire en une transaction)
   /// est dans `dropTaskDrag` ; ici il ne reste que ce qui appartient à cette page — le rang.
   private func dropDraggedTask() {
-    dropTaskDrag(&reorder) { ordered in
+    dropTaskDrag(&reorder, onto: filing, lists: allLists, in: modelContext) { ordered in
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
     }
@@ -237,8 +240,7 @@ struct TodayPageView: View {
   /// Pose la tâche à la fin de sa nouvelle liste, comme `ListPageView.move`.
   private func move(_ task: TaskItem, to target: TodoList) {
     focus.forget(task)
-    task.list = target
-    task.sortIndex = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
+    task.move(to: target)
     try? modelContext.save()
   }
 

@@ -67,6 +67,10 @@ private struct ListPageView: View {
   @Binding var searchPresented: Bool
   @Binding var pendingTitleFocus: PersistentIdentifier?
 
+  /// Le glisser vers la barre latérale. Cette page a son PROPRE moteur de réordonnancement (cf.
+  /// `dragSpace`), mais le rangement, lui, est le même partout : elle publie le cadre de sa ligne en
+  /// vol comme les autres et consulte la cible au relâchement (cf. `endDrag`).
+  @Environment(SidebarDrop.self) private var filing
   @Environment(\.modelContext) private var modelContext
   // Toutes les listes, pour l'action « Déplacer vers… » du menu d'une tâche.
   @Query private var allLists: [TodoList]
@@ -547,7 +551,18 @@ private struct ListPageView: View {
       }
       // La ligne empoignée se soulève et suit le curseur en 2D ; les autres s'écartent verticalement.
       // MÊME vue du début à la fin — pas d'instantané façon `.onDrag`, donc rien ne saute au drop.
-      .opacity(folding ? 0 : 1)
+      // `folding` = une tâche du bloc dont on tire l'en-tête. `airborne` = la ligne a franchi le
+      // bord de la page et c'est le calque qui la représente (cf. `SidebarDrop.isAirborne`) : elle
+      // s'efface, sans quitter le calcul — elle publie toujours son cadre, qui est justement ce qui
+      // pilote le calque.
+      .opacity(folding || (grabbed && filing.isAirborne) ? 0 : 1)
+      // Le cadre de la ligne en vol, pour la fenêtre — et comme la mesure de repos juste au-dessus,
+      // SOUS le décalage : c'est ce qui fait qu'il le suit (cf. `publishTaskDrag`).
+      //
+      // Sur `grabbed` et pas `lifted` : une seule ligne voyage sous le curseur, les autres du bloc
+      // se replient derrière elle. Et jamais une EN-TÊTE : elle emmène ses tâches, ce qu'un
+      // rangement dans une liste ne saurait pas faire — *Déplacer vers…* reste son chemin.
+      .publishTaskDrag(lifted: grabbed && !task.isHeader)
       .offset(rowOffset(for: task, offsets: offsets))
       .scaleEffect(lifted ? 1.03 : 1, anchor: grabbed ? dragAnchor : .center)
       // Ombre de soulevé pour une TÂCHE tirée. Pas pour une tâche qui se replie (elle s'estompe), ni
@@ -1006,8 +1021,18 @@ private struct ListPageView: View {
   private func endDrag() {
     // `dragState` lit `draggingID`/`draggedGroup` : on capture le plan AVANT de désarmer.
     let state = dragState()
+    // La cible de la barre latérale se lit de même — avant, et sans condition : `drop` désarme
+    // aussi le geste côté sidebar. Rien à tester sur l'en-tête ici : elle ne publie pas de cadre
+    // en vol (cf. `publishTaskDrag` sur la rangée), donc rien ne peut être survolé quand on la tire.
+    let filed = filing.drop(in: allLists)
+    let grabbed = draggedGroup.first
     withAnimation(.snappy(duration: 0.22)) {
-      if let state {
+      // Un rangement l'emporte sur le rang : la tâche quitte la page, écrire aussi sa place dedans
+      // ne voudrait rien dire (même règle que `dropTaskDrag`, pour les pages qui, elles, partagent
+      // le moteur du socle).
+      if let filed, let grabbed {
+        grabbed.move(to: filed)
+      } else if let state {
         let newOrder = state.tasks.reordered(state.dragged, among: state.others)
         for (index, task) in newOrder.enumerated() { task.sortIndex = index }
       }
@@ -1376,8 +1401,7 @@ private struct ListPageView: View {
 
   /// Déplace une tâche vers une autre liste, en la posant à la fin de sa nouvelle liste.
   private func move(_ task: TaskItem, to target: TodoList) {
-    task.list = target
-    task.sortIndex = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
+    task.move(to: target)
     try? modelContext.save()
   }
 

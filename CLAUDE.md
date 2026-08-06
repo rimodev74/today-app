@@ -32,6 +32,7 @@ leur en-tête AVANT d'écrire.
 | `Models/TaskFocus.swift` | quelle ligne est sélectionnée, laquelle est en édition | trois pages pilotaient deux `@State` nus avec les mêmes cinq transitions recopiées |
 | `Models/TaskPageRows.swift` (`TaskPageBlock`) | ce qu'une page affiche : des pans de lignes, visibles ou repliés | chaque page REDÉCRIVAIT l'ordre de ses lignes dans une closure, que rien ne reliait à son `body` — une page l'a écrit faux, et le symptôme était « la touche ne marche pas » |
 | `Models/TaskPageReorder.swift` | l'état d'un glissement : cadres, séquence figée, décalages, ordre obtenu | rien — seule la page d'une liste savait glisser, avec son moteur à elle |
+| `Models/SidebarDrop.swift` | ranger une tâche en la lâchant sur la barre latérale : la règle du dépôt, `TaskItem.move(to:)`, et l'état d'un geste que trois vues SŒURS se partagent | le menu ▸ *Déplacer vers…* pour seul chemin — et son écriture recopiée dans trois pages, dont deux calculaient le nouveau rang à l'envers |
 | `Models/TodayPage.swift`, `AllTasksPage`, `UpcomingPage`, `ArchivePage` | ce que chaque page intelligente présente, à partir des tâches qu'on lui donne | des propriétés calculées DANS la vue : recalculées à chaque lecture (donc plusieurs fois par image) et invérifiables autrement qu'en cliquant |
 | `Views/TaskList/TaskPageChrome.swift` (`TaskPageBase`) | le socle de TOUTE page de tâches : ⌫, ↑/↓, clic dans le vide, cadres des lignes | chaque page recevait ses gestes au coup par coup — la même touche donnait un résultat différent d'un onglet à l'autre |
 | `Models/TodaySchema.swift` (`CurrentSchema` + `SchemaV1`) + `Tests/TodayTests/DeployedSchemaSnapshot.swift` | la forme des données, écrite deux fois et confrontée à chaque `swift test` | rien — un `@Model` cassé vidait sa colonne en silence (cf. Pièges) |
@@ -157,6 +158,19 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
      sur l'autre au relâchement produit le même symptôme que le point 4, pour une autre raison : le
      `ForEach` réordonne ses identités au moment où les décalages retombent. Rien n'écrit pendant un
      geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie.
+- **Une mesure posée APRÈS un `.offset` ne bouge pas.** `.offset` est un effet de RENDU : il ne
+  déplace pas la position de layout. Une `GeometryReader` posée après lui dans la chaîne devient
+  donc la SŒUR de la vue décalée, reste calée sur la place de repos, et publie un cadre parfaitement
+  immobile pendant tout le geste. Posée AVANT, elle est sous l'offset et le suit. C'est la même
+  mécanique que le gel des cadres de `TaskPageReorder`, vue de l'autre côté : là c'est le piège qui
+  fait boucler, ici c'est le mécanisme qui fait marcher `publishTaskDrag` — le calque du rangement
+  vers la sidebar. Rien de tout ça ne se voit à la compilation : mesuré le 6 août 2026, le calque
+  n'apparaissait jamais et aucune ligne de sidebar ne s'allumait, sans un mot nulle part.
+
+  Corollaire de diagnostic : **le journal système ne remonte rien de ce process**
+  (`log show --predicate 'process == "Today"'` rend 0 ligne, y compris pour un `NSLog` que le binaire
+  exécute vraiment). Tracer un geste passe par un fichier plat — l'app n'a aucun entitlement de
+  sandbox, `/tmp` lui est ouvert.
 - **Sur « Tâches », chaque section est sa PROPRE zone de glissement**, et on n'y fait plus voyager
   une tâche d'une section à l'autre au doigt. La séquence donnée au moteur est `section.tasks`,
   jamais les lignes de la page (cf. `AllTasksPageView.rowsView`).
@@ -174,7 +188,8 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
   du dépliant deviennent des butées naturelles.
 
   **Ne pas rétablir le glisser entre sections**, et surtout pas pour faire s'ouvrir une section
-  repliée au survol (la demande est venue, elle a été écartée le 6 août). Ce serait réinstaller les
+  repliée au survol (la demande est venue, elle a été écartée le 6 août — la SIDEBAR, elle, déplie
+  bien au survol, et pourquoi ce n'est pas la même chose est en « Déjà essayé et REJETÉ »). Ce serait réinstaller les
   deux défauts ci-dessus sur le morceau le plus fragile de l'app, pour une cible qui DÉFILE — viser
   une section 800 px plus bas n'est pas plus rapide qu'un clic droit. Le déplacement entre sections
   passe par le menu ▸ *Déplacer vers…* et le sélecteur *Quand…*, qui disent explicitement ce que le
@@ -396,8 +411,14 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
   un fond de survol, pas un changement de curseur.
 - **Le glisser d'une section à l'autre sur « Tâches »**, et son corollaire « la section repliée
   s'ouvre au survol ». Écrit, mesuré, retiré le 6 août 2026 : le détail et les deux défauts sont
-  dans les Pièges. La répartition d'une tâche vers une liste passera par la SIDEBAR, qui est une
-  cible fixe et n'a aucun trou à calculer.
+  dans les Pièges. La répartition d'une tâche vers une liste passe par la SIDEBAR, qui est une
+  cible fixe et n'a aucun trou à calculer — c'est fait (cf. `Models/SidebarDrop.swift`).
+
+  **Le déplier-au-survol de la SIDEBAR, lui, est voulu et il reste** : survoler une ligne de projet
+  pendant un glissement la déplie pour révéler ses listes. Ce n'est PAS le rétablissement de ce qui
+  a été rejeté, et la nuance est toute la différence entre les deux : ici rien n'est calculé au
+  survol — pas de trou à ouvrir, pas d'ordre à deviner, la sidebar ne fait que montrer des cibles
+  qu'elle avait cachées. Sur « Tâches », déplier changeait la géométrie DU CALCUL en cours.
 
 ## Outils
 
@@ -429,6 +450,8 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
 ## État réel
 
 Ce qui marche : listes, tâches, en-têtes de section, réordonnancement (tâches ET blocs d'en-tête),
+rangement par glisser vers la barre latérale (cf. `Models/SidebarDrop.swift` — seules les LISTES
+accueillent ; survoler un projet le déplie pour montrer les siennes),
 renommage, complétion, projets, sous-tâches, notes en texte riche, saisie rapide (`@demain`,
 `#liste`), raccourcis texte et combinaisons globales, archivage, pomodoro, rappels et calendrier
 Apple (lecture, report de complétion, et pont bidirectionnel optionnel — cf. `RemindersSync` : une

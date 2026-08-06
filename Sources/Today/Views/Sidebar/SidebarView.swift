@@ -13,6 +13,10 @@ struct SidebarView: View {
   /// Supprimer une liste ou un projet emporte ses tâches ; leurs rappels Apple doivent partir avec
   /// elles (cf. `TodoList.delete(from:in:forget:)`).
   @Environment(RemindersService.self) private var remindersService
+  /// Le rangement par glisser : la sidebar y publie ses lignes d'accueil et lit celle qu'on
+  /// survole. Elle n'écrit RIEN au relâchement — c'est la page qui tire qui conclut son geste
+  /// (cf. `dropTaskDrag`), comme c'est elle qui l'a commencé.
+  @Environment(SidebarDrop.self) private var filing
   @Query private var allTasks: [TaskItem]
   @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
   private var projects: [Project]
@@ -38,6 +42,8 @@ struct SidebarView: View {
   /// Le projet dont la palette est ouverte. Un identifiant et pas un `Bool` : le popover s'ancre sur
   /// UNE rangée précise, et les rangées sont toutes rendues par la même fonction.
   @State private var palettePickerID: PersistentIdentifier?
+  /// Dépliage en attente d'un survol soutenu (cf. `projectsGroup`'s `.onChange(of: filing.hovered)`).
+  @State private var pendingExpand: Task<Void, Never>?
 
   private enum DeletionCandidate: Identifiable {
     case list(TodoList)
@@ -75,6 +81,22 @@ struct SidebarView: View {
   private struct RowFrameKey: PreferenceKey {
     static let defaultValue: [RowKey: CGRect] = [:]
     static func reduce(value: inout [RowKey: CGRect], nextValue: () -> [RowKey: CGRect]) {
+      value.merge(nextValue()) { _, new in new }
+    }
+  }
+
+  /// Les lignes qui ACCUEILLENT une tâche venue d'une page, mesurées dans le repère GLOBAL.
+  ///
+  /// Séparée de `RowFrameKey`, qui mesure dans `dragSpace` pour le réordonnancement de la sidebar :
+  /// ce sont deux questions distinctes, dans deux repères distincts, et les fondre obligerait à
+  /// convertir l'une des deux à chaque lecture. Ce n'est pas non plus un « second stockage des
+  /// cadres » au sens du piège documenté — celui-là parle de deux mesures qui nourrissent le MÊME
+  /// calcul de décalage, dont une seule gelait. Ici rien n'alimente de décalage.
+  private struct DropRowKey: PreferenceKey {
+    static let defaultValue: [SidebarDropRow: CGRect] = [:]
+    static func reduce(
+      value: inout [SidebarDropRow: CGRect], nextValue: () -> [SidebarDropRow: CGRect]
+    ) {
       value.merge(nextValue()) { _, new in new }
     }
   }
@@ -300,6 +322,82 @@ struct SidebarView: View {
       guard dragID == nil else { return }
       rowFrames = frames
     }
+    // Même garde que `RowFrameKey` : ces cadres suivraient sinon le décalage que le
+    // réordonnancement de la SIDEBAR leur applique (`dragID`). Rien à voir avec un dépôt de tâche
+    // en vol : `SidebarDrop.measured` ne gèle plus rien pour celui-là, précisément pour laisser
+    // passer les lignes qu'un projet révèle en se dépliant sous le curseur (cf. juste en dessous).
+    .onPreferenceChange(DropRowKey.self) { rows in
+      guard dragID == nil else { return }
+      filing.measured(rows)
+    }
+    // Survoler un projet le déplie, pour révéler ses listes — les seules vraies destinations
+    // (`SidebarFiling.dropRow(for: Project)` ne range jamais rien). Rien à faire si la ligne
+    // survolée est déjà une liste (`row.list != nil`) ou si le projet est déjà déplié : réécrire
+    // `isCollapsed` à l'identique animerait pour rien.
+    //
+    // Un DÉLAI, pas un dépliage immédiat : sans lui, chaque projet simplement TRAVERSÉ en visant
+    // une liste plus bas s'ouvrait au passage — mesuré le 6 août 2026. `pendingExpand` s'annule à
+    // CHAQUE changement de ligne survolée (y compris vers `nil`), donc un survol qui ne s'attarde
+    // pas ne déplie jamais rien ; seul celui qui tient jusqu'au bout du délai le fait, à condition
+    // qu'on soit toujours dessus une fois le délai écoulé.
+    .onChange(of: filing.hovered) { _, row in
+      pendingExpand?.cancel()
+      guard let row, row.list == nil, let target = project(row.row), target.isCollapsed else {
+        return
+      }
+      pendingExpand = Task {
+        try? await Task.sleep(for: .milliseconds(500))
+        guard !Task.isCancelled, filing.hovered == row else { return }
+        withAnimation(disclosureFlow) { expand(target) }
+      }
+    }
+  }
+
+  /// Ce qui fait d'une ligne une destination : elle se mesure, et elle s'allume quand la tâche en
+  /// vol la vise.
+  ///
+  /// Posé sur le contenu NU, avant l'indentation d'une ligne de liste et avant les décalages du
+  /// réordonnancement : le cadre publié est donc exactement celui de la pilule de sélection, et le
+  /// repère de survol tombe pile dessus.
+  ///
+  /// `row` est toujours mesurée (même une ligne de projet, cf. `SidebarFiling.dropRow(for:Project)`)
+  /// — c'est ce qui la rend survolable. Elle ne s'ALLUME en revanche que si elle accueille
+  /// vraiment un dépôt (`row.list != nil`) : une ligne de projet reste éteinte, son survol ne fait
+  /// que la déplier (cf. `projectsGroup`'s `.onChange(of: filing.hovered)`) — le repère de survol ne
+  /// promet jamais un dépôt qui n'aurait pas lieu.
+  ///
+  /// ponytail: chaque ligne lit `filing.hovered`, dont le calcul balaie les cadres — soit N
+  /// balayages de N entrées par image de glissement. Plafond : une sidebar à quelques dizaines de
+  /// lignes. Le jour où ça se sent, poser UN seul repère sur `projectsGroup` et le placer par le
+  /// cadre de la ligne visée, comme le placeholder du réordonnancement juste au-dessus — au prix
+  /// d'une conversion de repère, ces cadres-ci étant mesurés en global et pas dans `dragSpace`.
+  private func dropTarget(_ content: some View, _ row: SidebarDropRow?) -> some View {
+    // Évalué UNE fois : lu deux fois, il balayait deux fois les cadres pour la même réponse.
+    let hovered = row?.list != nil && filing.hovered == row
+    return
+      content
+      .background {
+        if let row {
+          GeometryReader { g in
+            Color.clear.preference(key: DropRowKey.self, value: [row: g.frame(in: .global)])
+          }
+        }
+      }
+      // Un ANNEAU SEUL, sans fond. Un fond de plus dirait la même chose que la surbrillance de
+      // sélection et que celle de survol, qui occupent déjà ce registre : trois teintes empilées et
+      // on ne sait plus laquelle veut dire quoi. Le contour, lui, ne ressemble à rien d'autre dans
+      // la sidebar — c'est le repère de Things, et celui du Finder sur un dossier.
+      //
+      // Bascule NETTE, sans `.animation(value:)` : la convention du projet interdit de poser un
+      // modificateur d'animation par rangée (une ligne au repos n'a rien à faire traquer), et un
+      // fondu serait de toute façon le mauvais choix ici — en passant vite d'une ligne à l'autre on
+      // verrait deux anneaux à moitié allumés, donc deux destinations à la fois.
+      .overlay {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .strokeBorder(Color.accentColor, lineWidth: 2)
+          .opacity(hovered ? 1 : 0)
+          .allowsHitTesting(false)
+      }
   }
 
   private func projectRow(_ project: Project, offsets: [RowKey: CGFloat]) -> some View {
@@ -375,7 +473,9 @@ struct SidebarView: View {
       Divider()
       Button("Supprimer le projet", role: .destructive) { requestDelete(project) }
     }
-    return reorderable(row, key: .project(id), id: id, isProject: true, offsets: offsets)
+    return reorderable(
+      dropTarget(row, SidebarFiling.dropRow(for: project)),
+      key: .project(id), id: id, isProject: true, offsets: offsets)
   }
 
   private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat]) -> some View {
@@ -409,8 +509,11 @@ struct SidebarView: View {
     // L'indentation de 18 est posée APRÈS le wrapper de mesure : ainsi le cadre mesuré = la zone
     // exacte de la surbrillance de sélection (`sidebarRow`), pas la ligne + son retrait. C'est ce
     // cadre qui dimensionne le placeholder → il coïncide pile avec une liste sélectionnée.
-    return reorderable(row, key: .list(id), id: id, isProject: false, offsets: offsets)
-      .padding(.leading, 18)
+    return reorderable(
+      dropTarget(row, SidebarFiling.dropRow(for: list)),
+      key: .list(id), id: id, isProject: false, offsets: offsets
+    )
+    .padding(.leading, 18)
   }
 
   private func addListRow(_ project: Project, offsets: [RowKey: CGFloat]) -> some View {
@@ -651,6 +754,13 @@ struct SidebarView: View {
   private func toggleCollapse(_ project: Project) {
     project.isCollapsed.toggle()
     try? modelContext.save()  // écriture explicite, comme partout ailleurs dans l'app
+  }
+
+  /// Déplie un projet — jamais l'inverse : appelée au survol d'un glisser (cf. `projectsGroup`),
+  /// où seul DÉPLIER a un sens. Un `toggleCollapse` y aurait refermé un projet déjà ouvert.
+  private func expand(_ project: Project) {
+    project.isCollapsed = false
+    try? modelContext.save()
   }
 
   private func startRename(_ id: PersistentIdentifier) {

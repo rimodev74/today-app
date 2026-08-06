@@ -63,6 +63,10 @@ struct ContentView: View {
   /// Les fichiers écartés par `StoreQuarantine` au lancement, s'il y en a eu (cf. l'alerte).
   /// Vide 999 fois sur 1000 — c'est un signal de bug, pas une routine.
   @State private var quarantinedPaths: [String] = []
+  /// Le rangement d'une tâche par glisser vers la barre latérale. Il vit ICI parce que c'est le
+  /// seul ancêtre commun des deux colonnes : la page publie la ligne en vol, la sidebar publie ses
+  /// lignes d'accueil, et la fenêtre dessine le calque par-dessus les deux (cf. `SidebarDrop`).
+  @State private var filing = SidebarDrop()
   @State private var grabberHovered = false
   /// Survol de la sidebar elle-même. État SÉPARÉ de `grabberHovered` (et pas le même drapeau posé
   /// des deux côtés) : les deux zones se touchent, et rien ne garantit que SwiftUI livre la sortie
@@ -152,6 +156,16 @@ struct ContentView: View {
     // Pas `HSplitView`, qui donnerait le redimensionnement gratuitement mais remplace le layout
     // par un NSSplitView : exit le repli animé et le fond pleine hauteur des colonnes.
     .overlay(alignment: .leading) { grabber }
+    .environment(filing)
+    // Le cadre de la ligne en vol remonte de la page jusqu'ici. Une préférence et pas une écriture
+    // directe : la rangée est enfouie sous `TaskListView` puis sous sa page, et rien d'autre ne
+    // relie ces deux colonnes.
+    .onPreferenceChange(DraggedRowFrameKey.self) { filing.track($0) }
+    // Le bord où la page rogne. La fenêtre est la seule à le connaître : la sidebar se replie et se
+    // tire. `initial` parce que la largeur de repos ne change pas au lancement — sans lui, aucun
+    // glissement ne serait « en vol » tant qu'on n'aurait pas touché à la poignée.
+    .onChange(of: effectiveWidth, initial: true) { filing.sidebarEdge = effectiveWidth }
+    .overlay { taskDragGhost }
     // La palette flotte AU-DESSUS de toute la fenêtre (centrée en haut), elle n'est pas
     // ancrée au bouton : c'est le comportement Spotlight demandé.
     .overlay {
@@ -278,6 +292,32 @@ struct ContentView: View {
   private static let collapseSidebarWidth = 150.0
   /// Largeur de la bande qui révèle le mors au survol, mesurée depuis le bord de la sidebar.
   private static let grabberHoverWidth = 40.0
+
+  /// La ligne en vol, dessinée par la FENÊTRE et pas par la page.
+  ///
+  /// C'était l'obstacle du chantier, et il est réel : la rangée qu'on tire vit dans le `ScrollView`
+  /// de sa page, qui la rogne à son bord — au-dessus de la barre latérale, elle n'existe tout
+  /// simplement pas. Elle en sort par une `PreferenceKey` (cf. `publishTaskDrag`), qui remonte son
+  /// cadre DÉJÀ décalé en repère global ; la `GeometryReader` ne fait que le ramener dans celui de
+  /// cet overlay.
+  ///
+  /// Le calque n'apparaît qu'une fois le bord de la page franchi — et à cet instant précis la page
+  /// EFFACE sa rangée (`SidebarDrop.isAirborne`, la condition unique des deux côtés). Tant qu'on
+  /// réordonne dans la page, c'est la vraie ligne qu'on déplace et rien ne saute au relâchement ;
+  /// dès qu'on part vers la sidebar, elle DEVIENT la pilule. Une seule chose à l'écran de bout en
+  /// bout du geste.
+  @ViewBuilder private var taskDragGhost: some View {
+    GeometryReader { proxy in
+      let origin = proxy.frame(in: .global).origin
+      if filing.isAirborne, let flying = filing.draggedFrame {
+        SidebarDropGhost()
+          .offset(
+            x: flying.minX - origin.x,
+            y: flying.midY - origin.y - SidebarDropGhost.height / 2)
+      }
+    }
+    .allowsHitTesting(false)
+  }
 
   /// Le mors : une pilule verticale posée sur le bord de la sidebar, à mi-hauteur. Invisible au
   /// repos — il n'apparaît qu'au survol de la bande qui longe ce bord, sidebar ouverte comme
@@ -968,5 +1008,50 @@ private struct QuickFindRow<Icon: View>: View {
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
+  }
+}
+
+/// Ce qu'on emmène vers la barre latérale : la pilule de sélection, RÉDUITE, et le compte de ce
+/// qu'elle transporte.
+///
+/// C'est le calque de Things, et il dit deux choses en ne dessinant presque rien : la teinte est
+/// celle d'une ligne sélectionnée (`thingsSelectionFill`, exactement la même valeur), donc l'objet
+/// en vol se lit comme « la ligne que je viens de prendre » ; et il est court, donc il ne masque
+/// pas la destination qu'on vise. Un calque à la largeur de la rangée recouvrirait la colonne
+/// entière au moment précis où il faut la lire.
+///
+/// Son bord AVANT à mi-hauteur est le point qui vise (cf. `SidebarFiling.anchor`) : ce qu'on voit
+/// est ce qui touche.
+///
+/// Pas la vraie `TaskRow`, et pas son titre non plus : le titre est déjà sous les yeux, dans la
+/// page d'où la ligne vient. Ce qu'on ne sait pas sans lui, c'est COMBIEN on transporte — d'où le
+/// badge, et rien d'autre.
+private struct SidebarDropGhost: View {
+  static let height: CGFloat = 22
+  /// Largeur fixe : la pilule ne représente pas un contenu mais un objet en transit — c'est un
+  /// curseur de dépôt, pas un aperçu.
+  private static let width: CGFloat = 110
+  private static let badge: CGFloat = 18
+
+  var body: some View {
+    Capsule()
+      .fill(thingsSelectionFill)
+      .frame(width: Self.width, height: Self.height)
+      // Le badge DÉBORDE, en haut à droite : posé dedans il se lirait comme une pastille de
+      // contenu, alors qu'il compte ce que la pilule porte. Il ne change pas la taille de mise en
+      // page, donc le centrage vertical du calque reste celui de la pilule.
+      .overlay(alignment: .topTrailing) {
+        // « 1 » en dur, et pas un paramètre : un glissement empoigne UNE rangée, et une en-tête —
+        // le seul cas où un bloc voyage — ne se range pas dans une liste (cf. `ListPageView`). Un
+        // `count` passé par l'unique appelant aurait été un faux réglage, toujours littéral. Le
+        // jour où la sélection multiple arrivera, ce chiffre deviendra une vraie question.
+        Text("1")
+          .font(.system(size: 11, weight: .bold))
+          // Blanc sur rouge : le contraste ne dépend pas du thème, c'est le badge du système.
+          .foregroundStyle(.white)
+          .frame(width: Self.badge, height: Self.badge)
+          .background(Circle().fill(Color.red))
+          .offset(x: Self.badge / 2.5, y: -Self.badge / 2.5)
+      }
   }
 }

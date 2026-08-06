@@ -224,6 +224,16 @@ struct TaskRowFrameKey: PreferenceKey {
   }
 }
 
+/// Le cadre de la ligne EN VOL, remonté jusqu'à la fenêtre (cf. `View.publishTaskDrag`). Une seule
+/// à la fois : un glissement empoigne une rangée, jamais deux — d'où « la première l'emporte »
+/// plutôt qu'une fusion.
+struct DraggedRowFrameKey: PreferenceKey {
+  static let defaultValue: CGRect? = nil
+  static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+    value = value ?? nextValue()
+  }
+}
+
 /// La bande verticale d'une SECTION, publiée par celle-ci et reçue par la page.
 ///
 /// Séparée des cadres de lignes, et ce n'est pas un second stockage de ceux-ci (cf. le piège
@@ -256,14 +266,53 @@ extension View {
   /// compte : le plan et l'ombre isolent la ligne tirée du reste, et l'animation ne doit surtout
   /// pas s'appliquer à elle — une ligne qui « rattrape » le curseur avec 0,22 s de retard donne
   /// l'impression que le geste patine.
-  func taskRowDragLayer(_ reorder: TaskPageReorder, task: TaskItem, offset: CGSize) -> some View {
+  ///
+  /// `airborne` : la ligne a franchi le bord de la page, c'est le calque qui la représente
+  /// (`SidebarDrop.isAirborne`) et la rangée s'efface — sans quitter ni le layout ni le calcul, elle
+  /// publie toujours son cadre et le trou reste à sa place. **Sans valeur par défaut**, comme
+  /// `reorder` et `newTask` du socle : l'oublier montrerait la rangée ET la pilule, sans un mot.
+  func taskRowDragLayer(
+    _ reorder: TaskPageReorder, task: TaskItem, offset: CGSize, airborne: Bool
+  ) -> some View {
     let lifted = reorder.isDragging(task)
     return
       self
+      // AVANT le décalage, et c'est tout le sujet : voir `publishTaskDrag`.
+      .publishTaskDrag(lifted: lifted)
+      // `opacity` et pas un retrait de l'arbre : une rangée démontée ne publierait plus son cadre,
+      // donc le calque perdrait sa position à l'instant même où il en prend la relève.
+      .opacity(lifted && airborne ? 0 : 1)
       .offset(offset)
       .zIndex(lifted ? 1 : 0)
       .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 10 : 0, y: lifted ? 5 : 0)
       .animation(lifted ? nil : taskDrop, value: offset)
+  }
+
+  /// Dire à la FENÊTRE où en est la ligne qu'on tire : c'est ce qui permet de la ranger dans la
+  /// barre latérale, et de l'y voir pendant qu'on l'y emmène.
+  ///
+  /// **À poser AVANT le `.offset`, jamais après**, et l'inverse ne se voit pas à la compilation.
+  /// Posée après, la mesure devient le FRÈRE de la ligne décalée au lieu d'en être un descendant ;
+  /// or `.offset` est un effet de RENDU, qui ne déplace pas la position de layout — le frère reste
+  /// donc calé sur la place de repos et publie un cadre parfaitement immobile. Essayé : le calque
+  /// n'apparaissait jamais et aucune ligne ne s'allumait, sans un mot nulle part. Sous l'offset,
+  /// `frame(in:)` inclut le décalage : c'est le gel des cadres de `TaskPageReorder` vu de l'autre
+  /// côté — là c'est le piège, ici c'est le mécanisme.
+  ///
+  /// En `.global` : c'est le seul repère qu'une page et la sidebar partagent, chacune mesurant dans
+  /// le sien. Et par une préférence plutôt qu'une écriture directe, parce que la valeur doit
+  /// remonter jusqu'à `ContentView`, seul ancêtre commun des deux colonnes.
+  ///
+  /// Interne, pas privée : `ListPageView` a son propre moteur de glissement mais range dans la
+  /// sidebar comme les autres — c'est le MÊME calque, pas un second.
+  func publishTaskDrag(lifted: Bool) -> some View {
+    background {
+      if lifted {
+        GeometryReader { proxy in
+          Color.clear.preference(key: DraggedRowFrameKey.self, value: proxy.frame(in: .global))
+        }
+      }
+    }
   }
 
   /// Le trou d'insertion, DERRIÈRE la page : il n'est donc visible que dans le vide ouvert par
@@ -292,11 +341,28 @@ extension View {
 ///
 /// `write` reçoit l'ordre obtenu ; ce qu'on en persiste appartient à la page (renuméroter un rang,
 /// et sur « Tâches » rattacher la tâche à la liste où elle a atterri).
+///
+/// **Un dépôt sur la barre latérale l'emporte sur le réordonnancement**, et les deux s'excluent :
+/// une tâche lâchée sur une liste part dans cette liste, point — écrire aussi son rang dans la page
+/// qu'elle quitte ne veut rien dire. Le geste est le même des deux côtés (cf. `SidebarDrop`), c'est
+/// donc ici, à l'endroit unique où il se termine, que la question se tranche — et pas dans chacune
+/// des trois pages qui glissent.
 @MainActor
-func dropTaskDrag(_ reorder: inout TaskPageReorder, write: ([TaskItem]) -> Void) {
+func dropTaskDrag(
+  _ reorder: inout TaskPageReorder, onto filing: SidebarDrop, lists: [TodoList],
+  in context: ModelContext, write: ([TaskItem]) -> Void
+) {
   let ordered = reorder.dropped()
+  let dragged = reorder.draggedTask
+  // Lue AVANT de désarmer, comme l'ordre, et pour la même raison.
+  let filed = filing.drop(in: lists)
   withAnimation(taskDrop) {
-    if let ordered { write(ordered) }
+    if let filed, let dragged {
+      dragged.move(to: filed)
+      try? context.save()
+    } else if let ordered {
+      write(ordered)
+    }
     reorder.end()
   }
 }

@@ -22,6 +22,9 @@ struct AllTasksPageView: View {
 
   @Environment(\.modelContext) private var modelContext
   @Environment(RemindersService.self) private var remindersService
+  /// Le glisser vers la barre latérale : la page n'en connaît que le nom, tout se joue au
+  /// relâchement (cf. `dropTaskDrag`).
+  @Environment(SidebarDrop.self) private var filing
   @Query private var allTasks: [TaskItem]
   /// Cibles du « Déplacer vers… » : toutes les listes, comme sur « Aujourd'hui » — les tâches
   /// affichées viennent déjà d'un peu partout.
@@ -343,7 +346,7 @@ struct AllTasksPageView: View {
       onDrag: { reorder.track(task, by: $0, in: rows) },
       onDrop: { dropDraggedTask() }
     )
-    .taskRowDragLayer(reorder, task: task, offset: offset)
+    .taskRowDragLayer(reorder, task: task, offset: offset, airborne: filing.isAirborne)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
     // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches.
@@ -363,7 +366,7 @@ struct AllTasksPageView: View {
     // `rowsView`), `ordered` ne contient que des voisines de la MÊME section — la destination est
     // donc celle d'origine, et la lire par la voisine suffit et reste la plus précise (dans un
     // projet à plusieurs listes, elle dit laquelle).
-    dropTaskDrag(&reorder) { ordered in
+    dropTaskDrag(&reorder, onto: filing, lists: allLists, in: modelContext) { ordered in
       page.applyDrop(
         of: dragged, in: ordered, today: Calendar.current.startOfDay(for: Date()))
       try? modelContext.save()
@@ -394,8 +397,7 @@ struct AllTasksPageView: View {
 
   private func move(_ task: TaskItem, to target: TodoList) {
     focus.forget(task)
-    task.list = target
-    task.sortIndex = (target.tasks.map(\.sortIndex).max() ?? -1) + 1
+    task.move(to: target)
     try? modelContext.save()
   }
 

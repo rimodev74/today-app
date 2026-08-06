@@ -29,21 +29,27 @@ Clone natif macOS de [Things](https://culturedcode.com/things/) (Cultured Code),
 - Monétisation / StoreKit
 - (autres features à définir par l'utilisateur)
 
-### Prochain chantier acté (6 août 2026)
+### Fait le 6 août 2026 — glisser une tâche vers la SIDEBAR
 
-**Glisser une tâche vers une ligne de la SIDEBAR pour la rattacher à une liste ou un projet.**
+Répartir l'inbox sans passer par clic droit ▸ *Déplacer vers…*. On tire une tâche depuis n'importe
+quelle page qui glisse, on la lâche sur une **liste** de la barre latérale, elle y est rattachée.
 
-Le besoin : répartir l'inbox sans passer à chaque fois par clic droit ▸ *Déplacer vers…*. C'est le
-geste du système (Finder, Mail, Things), donc rien à apprendre.
+La sidebar plutôt qu'un glisser entre les sections de « Tâches », et c'était un choix, pas un repli :
+la cible ne défile pas, elle liste toutes les destinations, et n'a aucun trou à calculer. Le glisser
+entre sections a été essayé et retiré (cf. `CLAUDE.md`).
 
-La sidebar plutôt qu'un glisser entre les sections de « Tâches », et c'est un choix, pas un repli :
-la cible ne défile pas, elle liste TOUTES les destinations, et le geste vaut depuis n'importe quelle
-page. Le glisser entre sections a été essayé et retiré — le pourquoi est dans `CLAUDE.md`
-(Pièges, et « Déjà essayé et REJETÉ »).
+**Seules les LISTES rangent.** Une ligne de projet est survolable mais n'accueille rien : la
+survoler la DÉPLIE, pour révéler ses listes. Choisir sa première liste à la place de l'utilisateur
+aurait été une devinette, et un projet vide n'aurait rien eu à offrir.
 
-Obstacle connu, à mesurer avant de s'engager : la ligne qu'on tire est dessinée à l'intérieur de la
-page et serait coupée net à son bord. Il faut faire sortir son calque de la page et lire le point de
-relâchement dans un repère commun aux deux.
+L'obstacle annoncé — la ligne rognée au bord de la page — s'est réglé sans détacher quoi que ce
+soit : la rangée publie son cadre par une `PreferenceKey`, la fenêtre dessine une pilule par-dessus
+les deux colonnes, et un seul booléen (`SidebarDrop.isAirborne`) décide laquelle des deux on voit.
+Le moteur de réordonnancement n'a pas bougé.
+
+Reste ouvert : ⌘Z sur un rangement remet la tâche en place **sans animation** — le déclencheur du
+socle (`TaskPageBase`, `carriedRowCount`) ne voit pas une tâche qui change de section, seulement une
+qui entre ou sort. Vrai depuis toujours pour *Déplacer vers…*, juste plus visible maintenant.
 
 ## Architecture technique (décisions actées)
 
