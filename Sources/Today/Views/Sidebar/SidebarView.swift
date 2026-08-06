@@ -425,17 +425,6 @@ struct SidebarView: View {
             project.color.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary)
           )
           .frame(width: 20)
-          // La palette s'ancre sur l'ICÔNE, qui est justement ce qu'elle colore — et pas sur la
-          // rangée entière, dont le cadre est gelé pendant un glissement (cf. `rowFrames`).
-          .popover(
-            isPresented: Binding(
-              get: { palettePickerID == id },
-              set: { if !$0 { palettePickerID = nil } }),
-            arrowEdge: .trailing
-          ) {
-            PalettePicker(
-              selection: Bindable(project).color, dismiss: { palettePickerID = nil })
-          }
 
         editableTitle(id: id, text: Bindable(project).title, placeholder: "Nom du projet") {
           if project.title.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -469,13 +458,42 @@ struct SidebarView: View {
     .contextMenu {
       Button("Renommer") { startRename(id) }
       Button("Nouvelle to-do list") { addList(to: project) }
-      Button("Couleur…") { palettePickerID = id }
+      Button("Couleur…") { openPalette(id) }
       Divider()
       Button("Supprimer le projet", role: .destructive) { requestDelete(project) }
     }
+
+    // La palette se révèle SOUS la rangée, DANS la fenêtre — jamais dans un popover : l'en-tête de
+    // `PalettePicker` dit pourquoi (une fenêtre présentée depuis le layout tue le process). Sur sa
+    // propre ligne et pas à côté de l'icône : à 200 pt (largeur minimale de la sidebar) les huit
+    // pastilles ne tiennent pas en plus d'un nom de projet.
+    //
+    // Enveloppée AUTOUR de la rangée et non dedans : le fond de sélection et la cible de dépôt
+    // restent ceux de la rangée seule. Le cadre publié grandit le temps que la palette est
+    // ouverte — sans effet, personne ne glisse et ne choisit une couleur en même temps.
+    let rowAndPalette = VStack(alignment: .leading, spacing: 0) {
+      row
+      if palettePickerID == id {
+        PalettePicker(selection: Bindable(project).color, dismiss: closePalette)
+          .transition(.opacity)
+      }
+    }
+
     return reorderable(
-      dropTarget(row, SidebarFiling.dropRow(for: project)),
+      dropTarget(rowAndPalette, SidebarFiling.dropRow(for: project)),
       key: .project(id), id: id, isProject: true, offsets: offsets)
+  }
+
+  /// Ouvrir et fermer la palette passent par la MUTATION enveloppée, jamais par un
+  /// `.animation(value:)` posé à côté — c'est la règle de tout dépliant de l'app
+  /// (cf. `disclosureFlow`). Le même item de menu la referme : sans ça, l'ouvrir par erreur
+  /// obligerait à choisir une couleur pour s'en sortir.
+  private func openPalette(_ id: PersistentIdentifier) {
+    withAnimation(disclosureFlow) { palettePickerID = palettePickerID == id ? nil : id }
+  }
+
+  private func closePalette() {
+    withAnimation(disclosureFlow) { palettePickerID = nil }
   }
 
   private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat]) -> some View {

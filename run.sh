@@ -16,5 +16,10 @@ if pgrep -x Today >/dev/null; then
     exit 1
 fi
 
-./Scripts/make-app.sh "${1:-debug}" Today
+# RELEASE par défaut, et pas debug. Ce script est le seul moyen de voir l'app pour de vrai : juger
+# sa fluidité sur un binaire non optimisé, alors que ce qu'on livre est optimisé, c'est juger autre
+# chose. Tout ce que ce projet écrit lui-même — tris, `Reorder`, `TaskPageBlock`, construction des
+# pages — tourne à chaque image d'un glissement et n'est pas optimisé en debug. `./run.sh debug`
+# reste là pour le pas-à-pas.
+./Scripts/make-app.sh "${1:-release}" Today
 open Today.app

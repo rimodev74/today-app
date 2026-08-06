@@ -31,7 +31,9 @@ struct HeaderRow: View {
   /// Bascule brièvement l'icône de copie en checkmark après un clic, pour confirmer visuellement
   /// que le texte est bien dans le presse-papiers (sinon rien à l'écran ne le montre).
   @State private var copied = false
-  /// Palette ouverte. Le choix d'une couleur ne tient pas dans un menu : cf. `PalettePicker`.
+  /// Palette révélée DANS la pilule. Ni un sous-menu (un menu contextuel macOS ne dessine pas les
+  /// images de ses items) ni un popover (une fenêtre présentée depuis le layout tue le process —
+  /// tout est dans l'en-tête de `PalettePicker`).
   @State private var pickingColor = false
 
   /// Cascade du drag : décalage vertical d'un calque et retrait horizontal (plus étroit, centré) par
@@ -127,8 +129,64 @@ struct HeaderRow: View {
     .onChange(of: isEditing) { _, editing in titleFocused = editing }
   }
 
-  /// Le corps de l'en-tête : titre + menu, sur une pilule lavande quand elle est active.
+  /// Le corps de l'en-tête : titre + menu, sur une pilule lavande quand elle est active. La palette
+  /// se révèle SOUS la ligne du titre, dans la même pilule, qui grandit pour l'accueillir.
   private func pill(active: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      titleLine(active: active)
+      if pickingColor {
+        // Retrait/insertion RÉELS : c'est donc le premier cas de la règle des dépliants, celui du
+        // `.transition(.opacity)` — pas l'`.opacity()` réservé au `DisclosureGroup`, dont le
+        // contenu reste monté (cf. `disclosureFlow` dans `TaskPageChrome`).
+        Group {
+          Divider().padding(.vertical, 6)
+          PalettePicker(selection: $task.headerColor, dismiss: closePalette)
+        }
+        .transition(.opacity)
+      }
+    }
+    .padding(.vertical, 6)
+    .padding(.horizontal, rowInset)
+    .background {
+      // La pilule est TOUJOURS visible (plus un indicateur de sélection) : c'est l'apparence
+      // permanente de l'en-tête. Pendant le drag, l'en-tête est le calque du DESSUS de la
+      // cascade : couleur OPAQUE dédiée (#CAE1FF), sinon les calques derrière transparaissent à
+      // travers. Hors drag, le lavande translucide (comme une tâche sélectionnée) suffit, ou la
+      // teinte choisie si définie. Ombre de soulevé seulement au drag.
+      // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
+      // `thingsSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
+      let tinted = task.headerColor.map { AnyShapeStyle($0.color.opacity(0.22)) }
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(
+          isDragging
+            ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(thingsSelectionFill))
+        )
+        .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
+    }
+    // Même règle que le cadre de notes : la pilule est TOUJOURS visible, c'est donc son BORD qui
+    // s'aligne sur la colonne (case à cocher, anneau, ＋), pas son titre. Le fond de sélection d'une
+    // tâche, lui, reste 10 pt plus à gauche — il n'apparaît qu'au clic et doit dégager la case.
+    .padding(.leading, rowInset)
+    // Clic droit = le même jeu d'actions que le •••, qui n'apparaît qu'au survol : sans ça,
+    // supprimer une en-tête demandait de viser un bouton invisible au repos.
+    .contextMenu { menuItems }
+    // Échap referme la palette : sans lui, l'ouvrir par erreur oblige à choisir une couleur pour
+    // s'en sortir (« Par défaut » en est une). Les deux autres sorties sont le choix lui-même et un
+    // second passage par ▸ *Couleur…*, qui bascule.
+    .onExitCommand { if pickingColor { closePalette() } }
+  }
+
+  /// Ouvrir et fermer passent par la MUTATION enveloppée, jamais par un `.animation(value:)` posé
+  /// à côté — c'est la règle de tout dépliant de l'app (cf. `disclosureFlow`).
+  private func togglePalette() {
+    withAnimation(disclosureFlow) { pickingColor.toggle() }
+  }
+
+  private func closePalette() {
+    withAnimation(disclosureFlow) { pickingColor = false }
+  }
+
+  private func titleLine(active: Bool) -> some View {
     HStack(spacing: 8) {
       // TOUJOURS le même TextField (repos comme édition) : identité de vue stable, pas de bascule
       // Text↔TextField qui « recharge » le titre. Au repos il ne capte pas les clics — ils vont au
@@ -171,44 +229,14 @@ struct HeaderRow: View {
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       .fixedSize()
-      // La palette s'ancre sur le ••• : c'est de lui qu'elle est ouverte, dans les deux chemins
-      // (le menu du bouton et le clic droit partagent `menuItems`).
-      .popover(isPresented: $pickingColor, arrowEdge: .bottom) {
-        PalettePicker(selection: $task.headerColor, dismiss: { pickingColor = false })
-      }
       // ••• visible en survol et à l'état actif, mais pas pendant le drag (la pilule est en vol).
       .opacity((hovering || active) && !isDragging ? 1 : 0)
     }
-    .padding(.vertical, 6)
-    .padding(.horizontal, rowInset)
-    .background {
-      // La pilule est TOUJOURS visible (plus un indicateur de sélection) : c'est l'apparence
-      // permanente de l'en-tête. Pendant le drag, l'en-tête est le calque du DESSUS de la
-      // cascade : couleur OPAQUE dédiée (#CAE1FF), sinon les calques derrière transparaissent à
-      // travers. Hors drag, le lavande translucide (comme une tâche sélectionnée) suffit, ou la
-      // teinte choisie si définie. Ombre de soulevé seulement au drag.
-      // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
-      // `thingsSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
-      let tinted = task.headerColor.map { AnyShapeStyle($0.color.opacity(0.22)) }
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(
-          isDragging
-            ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(thingsSelectionFill))
-        )
-        .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
-    }
-    // Même règle que le cadre de notes : la pilule est TOUJOURS visible, c'est donc son BORD qui
-    // s'aligne sur la colonne (case à cocher, anneau, ＋), pas son titre. Le fond de sélection d'une
-    // tâche, lui, reste 10 pt plus à gauche — il n'apparaît qu'au clic et doit dégager la case.
-    .padding(.leading, rowInset)
-    // Clic droit = le même jeu d'actions que le •••, qui n'apparaît qu'au survol : sans ça,
-    // supprimer une en-tête demandait de viser un bouton invisible au repos.
-    .contextMenu { menuItems }
   }
 
   /// Les actions d'une en-tête, écrites une fois pour ses deux points d'entrée (••• et clic droit).
   @ViewBuilder private var menuItems: some View {
-    Button("Couleur…") { pickingColor = true }
+    Button("Couleur…", action: togglePalette)
     Menu {
       if moveTargets.isEmpty {
         Text("Aucune autre liste")

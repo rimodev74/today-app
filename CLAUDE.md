@@ -8,7 +8,9 @@ de `ThingsCloneApp.swift`.
 ## Lancer
 
 ```bash
-./run.sh          # build → bundle .app → open. Le seul moyen correct de lancer l'app.
+./run.sh          # build RELEASE → bundle .app → open. Le seul moyen correct de lancer l'app.
+                  # `./run.sh debug` pour le pas-à-pas. Il construisait en debug PAR DÉFAUT, ce qui
+                  # faisait juger la fluidité sur un binaire non optimisé alors qu'on livre l'autre.
 swift build       # compilation seule (~0,2 s incrémental)
 swift test        # en mémoire ou sur un store temporaire — jamais la vraie base
 ```
@@ -72,6 +74,40 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
 
 ## Pièges de ce projet
 
+- **Un popover est une FENÊTRE, et SwiftUI ne la présente pas au clic — il la présente depuis le
+  LAYOUT.** `PopoverBridge.preferencesDidChange` → `updatePresentations` →
+  `NSPopover.showRelativeToRect:`, le tout sous `NSHostingView.layout()`. Or cette app fait circuler
+  des préférences en continu (chaque ligne republie son cadre, `TaskRowFrameKey`, à chaque mise en
+  page). Ordonner une fenêtre enfant en plein calcul de layout fait passer AppKit par
+  `addChildWindow:` → `_rebuildOrderingGroup:`, qui réordonne les autres fenêtres du groupe ; l'une
+  d'elles héberge une vue hors-process, `-[NSRemoteView containingWindowWillOrderOnScreen:]` lève
+  une exception, et comme on est sous `_NSViewLayout` AppKit la convertit en
+  `+[NSApplication _crashOnException:]` : **SIGTRAP, sans un mot**, et le gestionnaire de `CrashLog`
+  ne la voit JAMAIS (AppKit passe devant). Pile complète : `Today-2026-08-06-164404.ips`, geste
+  « ••• → Couleur… » sur une en-tête. Trois plantages de la même famille le 5 août.
+
+  **Ce n'est pas le menu qui se ferme derrière.** Hypothèse plausible, et FAUSSE : mesurée avec un
+  reproducteur AppKit nu, un `NSPopover` présenté dans le même tour de boucle qu'un `NSMenu` qui se
+  ferme passe 12 fois sur 12. C'est la présentation depuis le layout qui casse.
+
+  Conséquence : **une palette, un sélecteur, un panneau ne prennent pas de fenêtre** — ils se
+  révèlent DANS la fenêtre (cf. `PalettePicker`, et `QuickFindPanel` avant lui). Les popovers qui
+  restent (`WhenPicker`, `DeadlinePicker`, la date d'une liste) sont sous la même menace ; celui de
+  `TaskRow` se referme avant d'écrire, ce qui traite le symptôme, pas la cause.
+- **Lire un rappel par son identifiant est un XPC SYNCHRONE.**
+  `EKEventStore.calendarItem(withIdentifier:)` fait un aller-retour bloquant vers le démon Rappels :
+  sur le fil principal, il le GÈLE le temps de la réponse. Trois fonctions en posaient un PAR tâche
+  liée (`completionStates`, `reminderDay`, `reminderVanished`). Mesuré au `sample`, app AU REPOS :
+  **97 échantillons de fil principal arrêtés dans
+  `__NSXPCCONNECTION_IS_WAITING_FOR_A_SYNCHRONOUS_REPLY__` sur une fenêtre de 4 s** — la moitié de
+  tout le travail non-oisif du fil qui dessine, pour une app à laquelle personne ne touchait. Et
+  c'est linéaire en tâches liées, rejoué à chaque `.EKEventStoreChanged` **et** à chaque
+  `ModelContext.didSave`, donc après chaque titre validé, chaque case cochée, chaque dépôt.
+
+  Remplacé par UN instantané asynchrone par passe (`RemindersService.passSnapshot`, pris dans
+  `withSyncLock`) : `fetchReminders` rend la main tout de suite et rappelle hors du fil principal.
+  Re-mesuré : **97 → 0**. La règle générale : dans ce service, tout ce qui interroge EventKit par
+  identifiant passe par l'instantané, jamais par `store` en direct.
 - **Le minimum macOS n'est pas vérifié par le build.** `Package.swift` déclare `.macOS(.v14)`
   mais `swift build` compile pour l'hôte. Une API `@available(macOS 15+)` compile sans broncher et
   casserait sur une vraie cible 14. À vérifier à l'œil.
@@ -405,6 +441,11 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
 - **Faire taire les diagnostics de chemins de clé** en marquant les `@Model` `@unchecked Sendable`.
   Ce serait un mensonge (ce sont des classes mutables) et le rafistolage que le projet refuse. Trou
   entre SwiftData et Swift 6, à laisser tel quel.
+- **Le popover pour choisir une couleur** (en-tête de section, projet). Écrit d'abord, et il TUE
+  l'app : une fenêtre présentée depuis le layout, cf. les Pièges. Remplacé par une révélation dans
+  la fenêtre — la palette s'ouvre dans la pilule de l'en-tête, sous la rangée du projet. Le
+  sous-menu, lui, avait déjà été rejeté avant (un menu contextuel macOS ne dessine pas les images
+  de ses items : sept lignes de texte identiques à lire une par une).
 - **Le curseur « main » sur toute la ligne.** Sur macOS, la main signale un bouton ou un lien, jamais
   une ligne sélectionnable (Finder, Mail, Rappels gardent la flèche). Le comportement actuel — main
   sur la case à cocher seulement — est correct. Si un repère de survol manque, la bonne réponse est

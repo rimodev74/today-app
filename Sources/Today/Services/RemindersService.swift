@@ -104,17 +104,85 @@ final class RemindersService {
   }
 
   /// Relit l'état de complétion des rappels liés (Rappels → app). Renvoie `identifiant: isCompleted`
-  /// pour ceux qui existent encore. Vide tant que l'accès n'est pas accordé. Synchrone : le volume
-  /// de tâches liées reste petit, et `calendarItem(withIdentifier:)` réinterroge le store.
-  func completionStates(for identifiers: [String]) -> [String: Bool] {
-    guard authorizationStatus == .fullAccess else { return [:] }
-    var states: [String: Bool] = [:]
-    for id in identifiers {
-      if let reminder = store.calendarItem(withIdentifier: id) as? EKReminder {
-        states[id] = reminder.isCompleted
-      }
+  /// pour ceux qui existent encore. Vide tant que l'accès n'est pas accordé.
+  ///
+  /// **UNE requête asynchrone, et non un `calendarItem(withIdentifier:)` par tâche.** Ce dernier est
+  /// un aller-retour XPC **synchrone** vers le démon Rappels : posé sur le fil principal, il le GÈLE
+  /// le temps de la réponse. Mesuré le 6 août 2026 (`sample` sur l'app AU REPOS, personne n'y
+  /// touchait) : 43 échantillons de fil principal arrêtés dans
+  /// `__NSXPCCONNECTION_IS_WAITING_FOR_A_SYNCHRONOUS_REPLY__` sur une fenêtre de 4 s — soit ~40 %
+  /// de tout le travail non-oisif du fil qui dessine. Et le coût est LINÉAIRE en tâches liées,
+  /// rejoué à chaque `.EKEventStoreChanged` **et** à chaque `ModelContext.didSave` (cf.
+  /// `ContentView.syncWithReminders`), c'est-à-dire après chaque titre validé, chaque case cochée,
+  /// chaque dépôt. Le commentaire d'avant pariait « le volume de tâches liées reste petit » : il
+  /// l'est, et ça coûtait quand même des images entières.
+  ///
+  /// `fetchReminders` rend la main tout de suite et rappelle hors du fil principal — même idiome
+  /// que `reminders(dueFrom:to:)`, `UncheckedBox` compris et pour la même raison.
+  ///
+  /// ponytail: le prédicat balaye TOUS les calendriers de rappels, faute de savoir dans lequel vit
+  /// chacun des liés. Un aller-retour plus gros si l'utilisateur a des milliers de rappels — mais
+  /// hors du fil qui dessine, ce qui est tout le sujet. Le borner le jour où ça se mesure.
+  ///
+  /// Pendant une passe, l'instantané de `withSyncLock` sert de source : la passe entière ne coûte
+  /// alors qu'UN aller-retour, partagé avec `reminderDay(for:)` et `reminderVanished(_:)`.
+  func completionStates(for identifiers: [String]) async -> [String: Bool] {
+    guard authorizationStatus == .fullAccess, !identifiers.isEmpty else { return [:] }
+    // Pas de `??` : son opérande droit est une autoclosure, qui n'accepte pas d'`await`.
+    let all: [String: EKReminder]
+    if let passSnapshot {
+      all = passSnapshot
+    } else {
+      all = await fetchedSnapshot()
     }
-    return states
+    return identifiers.reduce(into: [:]) { states, id in
+      guard let reminder = all[id] else { return }
+      states[id] = reminder.isCompleted
+    }
+  }
+
+  // MARK: L'instantané d'une passe
+
+  /// Tous les rappels du store, relus UNE fois au début d'une passe et interrogés ensuite par
+  /// identifiant. `nil` hors passe.
+  ///
+  /// Il existe parce que trois fonctions posaient chacune un `calendarItem(withIdentifier:)` PAR
+  /// tâche, et que cet appel est un aller-retour XPC **synchrone** vers le démon Rappels : sur le
+  /// fil principal, il le gèle le temps de la réponse. Mesuré au `sample`, app au repos, personne
+  /// n'y touchant : 97 échantillons de fil principal arrêtés dans
+  /// `__NSXPCCONNECTION_IS_WAITING_FOR_A_SYNCHRONOUS_REPLY__` sur une fenêtre de 4 s, soit la
+  /// moitié de tout le travail non-oisif du fil qui dessine. Et c'est LINÉAIRE en tâches liées,
+  /// rejoué à chaque `.EKEventStoreChanged` **et** à chaque `ModelContext.didSave` — donc après
+  /// chaque titre validé, chaque case cochée, chaque dépôt.
+  ///
+  /// `fetchReminders` rend la main tout de suite et rappelle hors du fil principal : le coût
+  /// devient une requête par passe, et elle ne bloque plus personne.
+  private var passSnapshot: [String: EKReminder]?
+
+  /// Le rappel d'identifiant donné : dans l'instantané si une passe est en cours, sinon relu au
+  /// coup par coup. Le repli garde EXACTEMENT le comportement d'avant hors passe — c'est ce qui
+  /// permet d'installer l'instantané sans rien changer à ce que voient les appelants.
+  private func reminder(_ identifier: String) -> EKReminder? {
+    if let passSnapshot { return passSnapshot[identifier] }
+    return store.calendarItem(withIdentifier: identifier) as? EKReminder
+  }
+
+  private func fetchedSnapshot() async -> [String: EKReminder] {
+    guard authorizationStatus == .fullAccess else { return [:] }
+    // `predicateForReminders(in:)` ramène les complétés comme les autres — c'est indispensable,
+    // `completionStates` n'existe que pour lire des complétions.
+    //
+    // ponytail: tous les calendriers, faute de savoir dans lequel vit chaque rappel lié. Requête
+    // plus grosse pour qui a des milliers de rappels — mais hors du fil qui dessine, ce qui est
+    // tout le sujet. La borner le jour où ça se mesure.
+    let predicate = store.predicateForReminders(in: nil)
+    let fetched = await withCheckedContinuation { continuation in
+      store.fetchReminders(matching: predicate) { reminders in
+        continuation.resume(returning: UncheckedBox(reminders ?? []))
+      }
+    }.value
+    return Dictionary(
+      fetched.map { ($0.calendarItemIdentifier, $0) }, uniquingKeysWith: { first, _ in first })
   }
 
   // MARK: Lecture — page « Aujourd'hui » (rappels + événements Apple, affichage seul)
@@ -239,8 +307,7 @@ final class RemindersService {
   /// Jour d'échéance du rappel lié — `nil` s'il a disparu, n'a pas d'échéance, ou si l'accès n'est
   /// pas accordé. C'est la seule chose que `RemindersSync.needsPush` a besoin de savoir du rappel.
   func reminderDay(for identifier: String) -> Date? {
-    guard authorizationStatus == .fullAccess,
-      let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder
+    guard authorizationStatus == .fullAccess, let reminder = reminder(identifier)
     else { return nil }
     return reminder.dueDateComponents.flatMap(Calendar.current.date(from:))
   }
@@ -270,7 +337,7 @@ final class RemindersService {
   /// d'échéance » et « plus de rappel » appellent des réponses opposées (réécrire vs supprimer).
   func reminderVanished(_ identifier: String) -> Bool {
     guard authorizationStatus == .fullAccess else { return false }
-    guard !(store.calendarItem(withIdentifier: identifier) is EKReminder) else {
+    guard reminder(identifier) == nil else {
       seenAlive.insert(identifier)
       missedOnce.remove(identifier)
       return false
@@ -390,11 +457,25 @@ final class RemindersService {
   /// Rend `false` quand une passe tournait déjà et que `body` n'a donc PAS été exécuté — à charge
   /// de l'appelant de repasser plus tard. Sans ce retour, un changement extérieur tombé au milieu
   /// d'une passe disparaissait sans un mot (cf. `ContentView.syncWithReminders`, qui se rearme).
+  /// C'est aussi ici que se prend l'instantané des rappels (cf. `passSnapshot`) : la passe est
+  /// justement le bloc pendant lequel il est valable, et le seul endroit où toutes les lectures
+  /// tombent. Pris AVANT `body`, rendu après, quoi qu'il arrive.
+  ///
+  /// **Un instantané VIDE ne s'installe pas.** Un fetch qui revient vide pour une raison passagère
+  /// (démon Rappels qui redémarre, compte iCloud qui se resynchronise) ferait passer TOUS les
+  /// rappels liés pour introuvables d'un coup, et c'est précisément l'entrée de
+  /// `reminderVanished(_:)` — la fonction qui a effacé trois tâches le 5 août 2026. Ses deux
+  /// preuves encaissent une absence isolée, mais une requête groupée rate pour tout le monde en
+  /// même temps là où les lectures une par une échouaient chacune de leur côté. Vide, on retombe
+  /// donc sur la lecture au coup par coup, c'est-à-dire sur le comportement d'avant, exactement.
   @discardableResult
   func withSyncLock(_ body: () async -> Void) async -> Bool {
     guard !isSyncing else { return false }
     isSyncing = true
+    let snapshot = await fetchedSnapshot()
+    passSnapshot = snapshot.isEmpty ? nil : snapshot
     await body()
+    passSnapshot = nil
     isSyncing = false
     return true
   }

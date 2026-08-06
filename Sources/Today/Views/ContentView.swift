@@ -421,7 +421,7 @@ struct ContentView: View {
       try? await Task.sleep(for: .seconds(1))
       guard !Task.isCancelled else { return }
       let ran = await remindersService.withSyncLock {
-        syncCompletionsFromReminders()
+        await syncCompletionsFromReminders()
         guard remindersPush || remindersImport,
           let list = remindersService.list(withIdentifier: remindersListID)
         else { return }
@@ -557,10 +557,11 @@ struct ContentView: View {
   /// l'arbre (sidebar comprise) de la moindre mutation d'une tâche — une frappe dans un titre
   /// réinvalidait la fenêtre entière. Les tâches liées se relisent deux fois par notification,
   /// c'est le seul endroit qui en a besoin.
-  private func syncCompletionsFromReminders() {
+  private func syncCompletionsFromReminders() async {
     let linked = linkedTasks()
     guard !linked.isEmpty else { return }
-    let states = remindersService.completionStates(for: linked.compactMap(\.reminderIdentifier))
+    let states = await remindersService.completionStates(
+      for: linked.compactMap(\.reminderIdentifier))
     var changed = false
     for task in linked {
       guard let id = task.reminderIdentifier, let done = states[id], task.isCompleted != done
