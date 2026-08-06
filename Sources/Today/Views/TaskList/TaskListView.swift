@@ -51,12 +51,26 @@ struct TaskListView: View {
 
 /// Page d'une to-do list — refonte en cours.
 ///
-/// Volontairement bâtie sur `ScrollView` + `LazyVStack`, et PAS sur `List`. `List` sur macOS
+/// Volontairement bâtie sur `ScrollView` + `VStack`, et PAS sur `List`. `List` sur macOS
 /// est adossée à `NSTableView` (AppKit) : elle donne gratuitement reorder/sélection/clavier,
 /// mais elle verrouille tout le reste — hauteur de ligne animée, `matchedGeometryEffect`,
 /// fonds et hover custom, ressorts. Pour une surface dont l'animation EST le produit (Things),
 /// ce plafond ne convient pas. Ici on possède chaque pixel ; reorder/sélection/clavier seront
 /// réintroduits à la main, au fur et à mesure des specs.
+///
+/// **`VStack` et surtout pas `LazyVStack`**, et ce n'est pas un détail : c'était un `LazyVStack`,
+/// et c'est ce qui rendait le glisser saccadé sur cette page alors qu'il est fluide sur « Tâches »
+/// (qui est en `VStack`). Les décalages du réordonnancement font entrer et sortir les rangées du
+/// viewport paresseux, qui les DÉTRUIT et les RECONSTRUIT en boucle — menu contextuel compris.
+/// Mesuré le 6 août 2026, même glissement simulé sur 24 lignes, fenêtre de 2 s :
+/// **fil principal saturé à 100 % en `LazyVStack` (964 échantillons de travail, dont 134 dans
+/// `TaskRow.body` et 38 dans `TaskRow.taskMenu`) contre 9 % en `VStack` (124)**. Le projet avait
+/// déjà mesuré et rejeté `LazyVStack` sur « Aujourd'hui » pour cette raison exacte ; la leçon
+/// n'avait simplement jamais été appliquée ici.
+///
+/// ponytail: toutes les rangées sont donc construites. Sans objet aux volumes réels (24 lignes,
+/// 50 tâches en base) ; le jour où une liste se compte en centaines, ce sera à remesurer — mais la
+/// réponse ne sera pas `LazyVStack` tant que cette page se réordonne au doigt.
 ///
 /// ponytail: coquille minimale. N'affiche que l'en-tête et les tâches en lecture (+ la case à
 /// cocher). Édition, création, réordonnancement, sélection : à reconstruire sur specs.
@@ -146,7 +160,7 @@ private struct ListPageView: View {
     let placeholder = state.flatMap(dragPlaceholderRect)
     return GeometryReader { geo in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
           pageHeader
             // Calé sur le bord de section (`gutter`), comme les bandeaux d'en-tête et les fonds de
             // sélection des lignes — et comme les en-têtes d'« Aujourd'hui » et « Archives ». Le
@@ -205,7 +219,13 @@ private struct ListPageView: View {
             archiveSection
           }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Largeur EXPLICITE et pas `maxWidth: .infinity`. Un `LazyVStack` impose d'office la
+        // largeur proposée à ses rangées ; un `VStack`, non — il leur propose une largeur
+        // INDÉTERMINÉE, et chacune se réduit à sa taille idéale. Invisible sur une ligne au repos
+        // (son texte a une largeur intrinsèque), fatal sur la ligne en ÉDITION : son `TextField`
+        // focalisé délègue son rendu au field editor d'AppKit, dont la largeur idéale est nulle —
+        // le titre disparaissait purement et simplement (mesuré à la capture d'écran, 6 août 2026).
+        .frame(width: max(geo.size.width - 2 * gutter, 1), alignment: .leading)
         .padding(.horizontal, gutter)
         .padding(.top, 30)
         // Espace de référence partagé : mesure des positions de repos ET translation du drag.
@@ -590,9 +610,10 @@ private struct ListPageView: View {
         dragGesture(for: task),
         including: focus.isEditing(task) ? .subviews : .all
       )
-    // Posé sur la LIGNE et non sur un `Group` englobant : un modificateur sur le `ForEach` d'un
-    // `LazyVStack` risque de lui faire évaluer d'un coup toutes ses rangées — la lenteur qu'on
-    // vient justement de retirer. `pageHeader` (anneau, titre, notes) reste au-dessus, intact.
+    // Posé sur la LIGNE et non sur un `Group` englobant. La raison d'origine — un modificateur sur
+    // le `ForEach` d'un `LazyVStack` lui fait évaluer d'un coup toutes ses rangées — a disparu avec
+    // le `LazyVStack` lui-même (cf. l'en-tête du fichier). Reste la bonne : un geste appartient à
+    // la ligne qu'il empoigne, pas au bloc qui la contient.
   }
 
   /// En-tête de section ou tâche : deux rendus distincts, même enveloppe drag/drop (posée par
@@ -1253,7 +1274,7 @@ private struct ListPageView: View {
       notesBox
     }
     // Aucun retrait sur le VStack : les fonds (notesBox) partent du bord de section, à l'aplomb
-    // des bandeaux d'en-tête et des pilules de ligne (cf. `pageHeader` dans le LazyVStack).
+    // des bandeaux d'en-tête et des pilules de ligne (cf. `pageHeader` en tête de la pile).
     // contentShape pour que le survol couvre toute la bande, pas seulement le texte.
     .contentShape(Rectangle())
     .onHover { headerHovering = $0 }

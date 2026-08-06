@@ -94,6 +94,36 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
   révèlent DANS la fenêtre (cf. `PalettePicker`, et `QuickFindPanel` avant lui). Les popovers qui
   restent (`WhenPicker`, `DeadlinePicker`, la date d'une liste) sont sous la même menace ; celui de
   `TaskRow` se referme avant d'écrire, ce qui traite le symptôme, pas la cause.
+- **Un `@Query` se ré-invalide SANS qu'aucune écriture n'ait lieu.** Mesuré le 6 août 2026 avec
+  `Self._printChanges()` : ouvrir la carte d'édition d'une tâche imprime, à chaque fois,
+  `SidebarView: \_QueryController<TodoList, String>.<computed (Bool)> changed` — puis pareil à la
+  fermeture. Or **rien n'est écrit** : vérifié en écoutant `ModelContext.didSave`,
+  `ModelContext.willSave` et `NSManagedObjectContextObjectsDidChange`, aucune des trois ne sonne.
+  C'est une sur-notification de SwiftData (l'accès à une relation suffit), et **on ne peut pas
+  l'empêcher depuis ici**.
+
+  Conséquence, et c'est elle qui compte : **le corps d'une vue qui porte un `@Query` se rejoue
+  bien plus souvent qu'on ne le croit** — il faut donc qu'il soit BON MARCHÉ, pas qu'il soit rare.
+  `SidebarView.body` coûtait ~13 ms, soit plus d'une image entière à 120 Hz, et il tombait pile au
+  démarrage de l'animation d'ouverture d'une carte : le décrochage se voyait.
+
+  La cause du prix : `listRow` lisait `list.progress` puis `list.remainingCount` DEUX fois, soit
+  trois traversées de la relation `TodoList.tasks` PAR RANGÉE. D'où `Models/SidebarCounts.swift` —
+  tous les compteurs en UNE passe, distribués aux rangées, exactement le motif de `TodayPage.build`
+  et des décalages de `projectsGroup`. Mesuré au `sample` sur le geste rejoué en boucle : travail
+  du fil principal par ouverture/fermeture **1264 → ~940 échantillons** (deux runs : 970 et 907,
+  contre 1264 avant), soit ~6,6 ms → ~4,9 ms par image. Il y a de nouveau de la marge sous les
+  8,3 ms d'une image à 120 Hz.
+
+  Le corollaire général : **toute propriété calculée d'un `@Model` lue depuis une rangée est un
+  piège** (`progress`, `remainingCount`, `orderedTasks`…). Elle se calcule une fois en tête du
+  `body` qui rend la collection, jamais dans la rangée.
+
+  Pour diagnostiquer un rendu de trop : `Self._printChanges()` dit QUELLE dépendance a bougé, ce
+  qu'un `sample` ne dira jamais. Et pour déclencher un geste sans souris, un `.task` temporaire
+  piloté par une variable d'environnement vaut mieux qu'un clic simulé (le journal système ne
+  remonte rien de ce process, cf. plus bas — passer par `print` avec `setvbuf(stdout, nil, _IONBF, 0)`,
+  sinon la sortie reste dans le tampon et on croit que rien ne s'exécute).
 - **Lire un rappel par son identifiant est un XPC SYNCHRONE.**
   `EKEventStore.calendarItem(withIdentifier:)` fait un aller-retour bloquant vers le démon Rappels :
   sur le fil principal, il le GÈLE le temps de la réponse. Trois fonctions en posaient un PAR tâche
@@ -264,7 +294,61 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
   à côté, sous un autre nom, et le vrai risque était de tout retaper par-dessus. Le rapport passe par
   les défauts (`StoreQuarantine.reportKey`) parce que la quarantaine a lieu pendant la construction
   du container, avant qu'aucune fenêtre n'existe ; `ContentView` le consomme et l'affiche une fois.
-- **Un plantage sans message se lit dans le journal.** `CrashLog` installe un gestionnaire
+- **Une vue HORS-PROCESS de WebKit vit dans ce process, et elle plante dès qu'une fenêtre est
+  ordonnée à l'écran.** C'est le dénominateur commun des TROIS plantages du 6 août 2026 — la
+  palette d'une en-tête, « Rechercher les mises à jour », et le réveil de l'icône de barre de
+  menus. Aucun des trois n'était en cause : chacun ne faisait qu'ordonner une fenêtre. La raison,
+  enfin lisible grâce à `CrashLog` :
+
+      NSInternalInconsistencyException
+      assertion failed: '<NSRemoteView … SPCompletionListServiceViewController> notified of
+      <NSStatusBarWindow …> but expected (null)'
+      in -[NSRemoteView containingWindowWillOrderOnScreen:] line 4221 (ViewBridge)
+
+  **Établi** : `Sparkle.framework` lie `WebKit` (il affiche ses notes de version dans une
+  WKWebView) — vérifié à l'`otool -L` ; notre binaire, lui, n'a aucun lien direct. Tout le process
+  hérite donc de WebKit, WebCore et SafariPlatformSupport au CHARGEMENT, et Today lance exactement
+  un `com.apple.SafariPlatformSupport.Helper` (mesuré : 9 → 10 → 9 helpers à l'ouverture puis à la
+  fermeture de l'app, reproductible).
+
+  **Réfuté — ne pas réessayer** :
+  - `isAutomaticTextCompletionEnabled = false` sur nos `NSTextView` (le nom de la classe fautive
+    désigne pourtant la liste de complétion) : le helper est lancé quand même ;
+  - retirer entièrement `prewarmRichTextEditing()` : lancé quand même. Ce ne sont donc ni nos vues
+    texte ni le préchauffage qui l'allument ;
+  - passer à une variante de Sparkle sans interface : elle n'existe pas, son paquet SPM ne fournit
+    qu'un framework pré-compilé.
+
+  **Conclusion en l'état** : une assertion d'Apple dans ViewBridge, atteignable chez nous parce que
+  Sparkle traîne la pile WebKit, sur un macOS 26 encore en bêta (26A5388g). Pas de correctif de
+  notre côté identifié. À reprendre avec un `crash.log` frais si ça se reproduit — et à retester
+  sur un macOS non bêta avant d'aller plus loin.
+- **`NSSetUncaughtExceptionHandler` ne voit presque RIEN dans une app AppKit**, et `CrashLog` a
+  donc parlé dans le vide pendant des semaines. Mesuré le 6 août 2026 en levant une vraie
+  `NSException` : toute exception levée pendant que la boucle d'événements tourne est attrapée par
+  AppKit, qui appelle `+[NSApplication _crashOnException:]` et déclenche un SIGTRAP **avant**
+  `_objc_terminate` — or c'est `_objc_terminate` qui appelle le gestionnaire. Il ne reste couvert
+  que ce qui lève hors boucle. C'est ce qui a rendu muets les deux plantages du 6 août (la palette
+  d'une en-tête, puis « Rechercher les mises à jour »).
+
+  Le point d'accroche qui marche est `-[NSApplication reportException:]`, qu'AppKit appelle AVEC
+  l'exception avant de tuer le process. `CrashLog` l'échange (swizzle) et rappelle l'implémentation
+  d'origine — il observe, il ne détourne pas. La voie propre (sous-classe `NSApplication` +
+  `NSPrincipalClass`) est fermée : `TodayApp.init` touche `NSApplication.shared` avant que
+  `NSApplicationMain` ne lise cette clé, la classe est déjà figée.
+
+  **La raison s'écrit dans un FICHIER**, `~/Library/Application Support/Today/crash.log`, à côté de
+  la base — surtout pas dans le journal unifié, qui ne rend rien pour ce process (cf. ci-dessous).
+  Vérifié de bout en bout : exception levée pour de vrai, fichier écrit, nom + raison + pile en
+  clair.
+
+  **`_CFBundleGetValueForInfoKey + 0` dans une pile d'exception ne veut RIEN dire.** Ce symbole
+  apparaît en position 2 de TOUTES ces piles, y compris celle du banc de vérification qui ne lit
+  aucun bundle : c'est l'adresse de retour d'`objc_exception_throw` résolue au symbole précédent le
+  plus proche, pas un appel réel. Ce fichier a bâti sur lui le diagnostic du « plantage fantôme »
+  (l'`Info.plist` réécrit sous les pieds de l'app) — l'explication reste plausible pour le cas de
+  `make-app.sh`, mais **cette frame n'en est pas la preuve**.
+- **Un plantage sans message se lit dans le journal.** `CrashLog` installe aussi un gestionnaire
   d'exceptions non rattrapées, parce que le rapport système garde la pile mais PAS la raison :
   `log show --last 1h --predicate 'process == "Today"' | grep PLANTAGE`. Il n'attrape en revanche
   QUE les exceptions Objective-C : un `fatalError` de Swift (`EXC_BREAKPOINT`, `brk 1`, pile qui
@@ -435,9 +519,33 @@ Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont ét�
   l'ordre du clavier est ce qui est AFFICHÉ — d'où `TaskPageBlock`, qui est une valeur, pas une
   mesure. Les cadres, eux, restent bien du ressort d'une préférence : ils ne concernent que le
   visible, c'est leur définition.
-- **`LazyVStack` sur « Aujourd'hui »** pour ne construire que les lignes visibles. Mesuré : le
-  glisser en devient PIRE, pas meilleur (les rangées se créent et se détruisent au passage des
-  décalages). Cette page reste en `VStack`.
+- **`LazyVStack` sur une page qui se RÉORDONNE au doigt.** Essayé sur « Aujourd'hui », mesuré,
+  rejeté : le glisser en devient PIRE, pas meilleur — les décalages font entrer et sortir les
+  rangées du viewport paresseux, qui les détruit et les reconstruit en boucle.
+
+  **La leçon n'avait pas été appliquée à la page d'une LISTE**, restée en `LazyVStack` — et c'est
+  exactement pour ça que son glisser était saccadé alors que celui de « Tâches » est fluide. Le
+  différentiel est venu de l'usage, pas du code : « dans Tâches c'est parfaitement fluide, dans une
+  liste c'est tout l'inverse ». Mesuré le 6 août 2026, même glissement simulé sur 24 lignes,
+  fenêtre de 2 s : **fil principal saturé à 100 % en `LazyVStack`** (964 échantillons de travail,
+  dont 134 dans `TaskRow.body` et 38 dans `TaskRow.taskMenu` — le menu contextuel entier
+  reconstruit en boucle) **contre 9 % en `VStack`** (124). Les trois pages qui glissent sont
+  désormais toutes en `VStack`.
+
+  **Le remplacement ne se fait PAS à l'identique, et l'oubli casse l'édition.** Un `LazyVStack`
+  impose d'office la largeur proposée à ses rangées ; un `VStack`, non — il leur propose une
+  largeur INDÉTERMINÉE et chacune se réduit à sa taille idéale. Invisible sur une ligne au repos
+  (son texte a une largeur intrinsèque), **fatal sur la ligne en ÉDITION** : son `TextField`
+  focalisé délègue son rendu au field editor d'AppKit, dont la largeur idéale est nulle — le titre
+  disparaît purement et simplement, carte ouverte et vide. Constaté à l'usage, puis reproduit et
+  corrigé à la capture d'écran. D'où la largeur EXPLICITE
+  (`.frame(width: geo.size.width - 2 * gutter)`) et non un `maxWidth: .infinity`, qui ne résout
+  rien quand la proposition entrante est déjà indéterminée. Re-mesuré après correction : le gain
+  du glissement tient (7 %).
+
+  Corollaire pour la suite : **une page qui glisse se construit en entier.** Le jour où une liste
+  se comptera en centaines de lignes, la réponse ne sera toujours pas `LazyVStack` — ce sera de
+  borner ce qu'on rend, ou de ne plus déplacer les rangées elles-mêmes.
 - **Faire taire les diagnostics de chemins de clé** en marquant les `@Model` `@unchecked Sendable`.
   Ce serait un mensonge (ce sont des classes mutables) et le rafistolage que le projet refuse. Trou
   entre SwiftData et Swift 6, à laisser tel quel.

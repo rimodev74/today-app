@@ -277,6 +277,10 @@ struct SidebarView: View {
     // recherchés ligne par ligne : chaque rangée devait sinon balayer la séquence pour se trouver,
     // soit un coût quadratique à chaque image de glissement.
     let offsets = layout?.offsets() ?? [:]
+    // Même raison que les décalages juste au-dessus, et le même remède : les compteurs de TOUTES
+    // les listes en UNE passe, distribués aux rangées. Chaque rangée traversait sinon la relation
+    // `TodoList.tasks` trois fois pour elle seule (cf. `SidebarCounts`).
+    let counts = SidebarCounts(tasks: allTasks)
     return VStack(alignment: .leading, spacing: 6) {
       if projects.isEmpty {
         Text("Aucun projet")
@@ -294,7 +298,7 @@ struct SidebarView: View {
           // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
           Group {
             ForEach(project.orderedLists) { list in
-              listRow(list, offsets: offsets)
+              listRow(list, offsets: offsets, counts: counts)
             }
             addListRow(project, offsets: offsets)
           }
@@ -496,15 +500,21 @@ struct SidebarView: View {
     withAnimation(disclosureFlow) { palettePickerID = nil }
   }
 
-  private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat]) -> some View {
+  /// `counts` arrive d'en haut, calculé une fois pour toutes les rangées : lire `list.progress` et
+  /// `list.remainingCount` ici traversait la relation `TodoList.tasks` trois fois par rangée
+  /// (cf. `SidebarCounts`).
+  private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat], counts: SidebarCounts)
+    -> some View
+  {
     let id = list.persistentModelID
+    let count = counts[list]
     let row = sidebarRow(id: id, isSelected: { selection == .list(list) }) {
       selection = .list(list)
     } label: {
       HStack(spacing: 8) {
         // Trait seul (pas de camembert plein) : une liste vide reste un anneau GRIS ; le bleu
         // n'apparaît qu'avec la progression, disque plein bleu quand tout est fait.
-        ProgressRing(progress: list.progress)
+        ProgressRing(progress: count.progress)
           .tint(list.project?.color?.color)
         editableTitle(id: id, text: Bindable(list).title, placeholder: "Nom de la liste") {
           if list.title.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -512,8 +522,8 @@ struct SidebarView: View {
           }
         }
         .font(.system(size: 14, weight: .medium))
-        if list.remainingCount > 0 {
-          Text("\(list.remainingCount)")
+        if count.remaining > 0 {
+          Text("\(count.remaining)")
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(.secondary)
         }

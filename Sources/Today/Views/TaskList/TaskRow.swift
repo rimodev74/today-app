@@ -194,7 +194,21 @@ struct TaskRow: View {
     // le fait qu'elle soit sélectionnée. Pleine opacité dès qu'on l'édite : on la touche, elle
     // redevient nette le temps qu'on s'en occupe.
     .opacity(isEditing ? 1 : task.dormancyFade)
-    .animation(.easeOut(duration: 0.2), value: isEditing)
+    // PAS de `.animation(value: isEditing)` ici, et c'est le correctif du 6 août 2026 : il y en
+    // avait un (`.easeOut(0.2)`), et il COUPAIT la carte en deux.
+    //
+    // Un `.animation(_:value:)` ne s'applique qu'à ce qui le PRÉCÈDE dans la chaîne. Celui-ci
+    // couvrait donc le contenu (titre, éditeur, sous-tâches) mais PAS ce qui suit — les paddings,
+    // le fond, le rayon du coin. À l'ouverture, le contenu partait en `easeOut(0.2)` pendant que le
+    // cadre partait en `taskFlow` (`timingCurve(0.4, 0, 0.2, 1)`), déclenché par le `withAnimation`
+    // de la page. Deux courbes de même durée mais de forme différente sur UNE seule transition :
+    // le contenu prend de l'avance au début, le cadre le rattrape à la fin, et la carte se déforme
+    // en s'ouvrant. C'est ce que « ça ne fait pas natif » désignait.
+    //
+    // Retiré plutôt qu'aligné : les CINQ pages enveloppent déjà toutes leurs transitions d'édition
+    // dans `withAnimation(taskFlow)` (vérifié site par site), il n'y a donc rien à rattraper ici.
+    // C'est aussi ce que la convention du projet demande — les transitions se déclenchent en
+    // explicite, côté page.
     // Le padding grandit en édition : la hauteur de la carte s'ouvre autour du titre resté en place.
     // Sélection et normal partagent le même padding — le texte ne saute donc pas au clic simple.
     // Bas en édition : les sous-tâches sont désormais le dernier élément de la carte (après
@@ -234,18 +248,16 @@ struct TaskRow: View {
         ScrollDismissObserver { activePicker = nil }
       }
     }
-    // Une feuille est une fenêtre, et elle survit au démontage de la rangée qui l'a ouverte — or
-    // les pages de liste sont en `LazyVStack` (une rangée qui sort de l'écran est démontée), et la
-    // tâche elle-même peut partir d'ailleurs (⌘Z, synchro Rappels). `SchedulePlannerView` tient la
-    // tâche en `@Bindable` : laissée ouverte, elle lirait un modèle effacé. On referme en partant.
-    //
-    // Les panneaux de date, eux, ne sont plus ici : c'est le socle qui les présente, et il ne se
-    // démonte pas quand une rangée s'en va (cf. `TaskDatePickerRequest`).
     // Ces deux états pilotent une FENÊTRE, hors de l'arbre de vues : ils survivraient au démontage
-    // de la rangée. Or les pages de liste sont en `LazyVStack` (une rangée qui sort de l'écran est
-    // démontée), et la tâche elle-même peut partir d'ailleurs (⌘Z, synchro Rappels) — les contenus
-    // la tiennent en `@Bindable` et liraient un modèle effacé. On referme donc en partant. Le
-    // survol, la sélection, l'édition meurent avec la rangée : rien à faire pour eux.
+    // de la rangée, et leurs contenus tiennent la tâche en `@Bindable` — laissés ouverts, ils
+    // liraient un modèle effacé. On referme donc en partant. Le survol, la sélection, l'édition
+    // meurent avec la rangée : rien à faire pour eux.
+    //
+    // Ce commentaire invoquait le `LazyVStack` des pages de liste (« une rangée qui sort de l'écran
+    // est démontée »). Il n'y en a plus — les trois pages qui glissent sont en `VStack` (cf.
+    // l'en-tête de `TaskListView`). La raison qui RESTE est la vraie : la tâche peut partir
+    // d'ailleurs, sans que la rangée n'y soit pour rien (⌘Z, synchro Rappels, suppression depuis
+    // une autre fenêtre).
     .onDisappear {
       activePicker = nil
       showReminderSheet = false
@@ -293,8 +305,22 @@ struct TaskRow: View {
         }
       }
     }
-    // Pas de .animation(value:) ici : les transitions sont déclenchées en explicite
-    // (withAnimation) côté page. Une ligne au repos ne porte donc rien à animer → fluide.
+    // Les transitions d'ÉTAT (normal ↔ select ↔ édition) sont déclenchées en explicite
+    // (`withAnimation`) côté page : une ligne au repos ne porte rien à animer pour elles.
+    //
+    // Ce commentaire affirmait « Pas de .animation(value:) ici ». C'était faux — il y en avait
+    // trois, dont une qui cassait l'ouverture de la carte (cf. plus haut). Il en reste DEUX, et
+    // chacune anime quelque chose que le `withAnimation` de la page ne peut pas atteindre :
+    //
+    // - `value: task.subtasks.count` — SwiftData notifie un changement de relation HORS de la
+    //   transaction, un `withAnimation` autour de la mutation ne le capture donc pas ;
+    // - `value: hovering` dans `trailing` — le survol est un état local à la rangée, aucune page
+    //   ne le déclenche.
+    //
+    // La règle qui s'en dégage, et qui vaut pour la prochaine : un `.animation(value:)` ne se
+    // justifie que pour un changement qu'AUCUNE transaction de page ne couvre. Dès qu'une page
+    // pilote l'état, c'est elle qui anime, et un modificateur posé ici entre en concurrence avec
+    // elle sur une partie seulement de la rangée.
   }
 
   // MARK: Titre
