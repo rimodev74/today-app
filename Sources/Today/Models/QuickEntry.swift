@@ -118,6 +118,32 @@ struct QuickEntry {
       .filter { !$0.isWhitespace }
   }
 
+  /// Un jeton `#Ancien` dont la LISTE a été renommée depuis, réconcilié contre les titres
+  /// COURANTS — même résolution que `match`, ci-dessus. Sert aux Réglages (`ActionPicker`) : son
+  /// menu suit le titre courant d'une liste, mais un raccourci déjà enregistré garde le nom du
+  /// jour où il a été posé tant que rien ne le retouche — sans réconciliation, le menu ne retrouve
+  /// alors plus aucune option pour lui et la ligne semble orpheline.
+  ///
+  /// Rend le jeton tel quel s'il ne vise pas une liste (`@today`, `!today`), ou si aucun titre
+  /// courant ne s'y retrouve (liste supprimée, ou déjà à jour).
+  static func reconciledListToken(_ token: String, against listTitles: [String]) -> String {
+    guard token.hasPrefix("#") else { return token }
+    guard let name = match(String(token.dropFirst()), in: listTitles) else { return token }
+    return "#" + name.filter { !$0.isWhitespace }
+  }
+
+  /// `false` seulement pour un jeton `#Nom` qu'AUCUN titre courant ne reconnaît : liste supprimée,
+  /// ou renommée au point de perdre tout préfixe commun avec son nom d'origine. Un jeton de date ou
+  /// de commande (`@today`, `!today`) est toujours vivant — il ne vise aucune liste.
+  ///
+  /// Sert à ÉLAGUER les raccourcis (cf. `[TextShortcut].reconciled(against:)`), pas à les
+  /// réafficher : `reconciledListToken`, ci-dessus, reste la version qui rend le jeton tel quel,
+  /// pour le `Picker` des Réglages qui doit continuer de montrer une valeur même orpheline.
+  static func listTokenIsAlive(_ token: String, against listTitles: [String]) -> Bool {
+    guard token.hasPrefix("#") else { return true }
+    return match(String(token.dropFirst()), in: listTitles) != nil
+  }
+
   // MARK: Dates
 
   private static let weekdays: [String: Int] = [

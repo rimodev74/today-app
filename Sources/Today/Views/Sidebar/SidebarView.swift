@@ -21,6 +21,16 @@ struct SidebarView: View {
   @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
   private var projects: [Project]
 
+  /// Change de destination SANS animer. Une simple `selection = …` hérite de la transaction
+  /// ambiante posée par le geste de clic (`sidebarRow`/`DragGesture`), qui porte une animation
+  /// implicite côté AppKit — d'où le fondu des lignes de la page qui apparaissait à chaque clic
+  /// alors qu'aucun `withAnimation` ne le demandait.
+  private func navigate(to destination: SidebarSelection) {
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction) { selection = destination }
+  }
+
   /// Un seul état de renommage pour toute la sidebar : projets et listes ne peuvent
   /// pas être édités en même temps, deux états séparés se désynchroniseraient.
   @State private var editingID: PersistentIdentifier?
@@ -229,7 +239,7 @@ struct SidebarView: View {
     VStack(alignment: .leading, spacing: 2) {
       ForEach(smartLists, id: \.self) { list in
         sidebarRow(isSelected: { selection == .smartList(list) }) {
-          selection = .smartList(list)
+          navigate(to: .smartList(list))
         } label: {
           HStack(spacing: 8) {
             Label {
@@ -258,7 +268,7 @@ struct SidebarView: View {
 
   private var pomodoroRow: some View {
     sidebarRow(isSelected: { selection == .pomodoro }) {
-      selection = .pomodoro
+      navigate(to: .pomodoro)
     } label: {
       Label {
         Text("Pomodoro")
@@ -409,7 +419,7 @@ struct SidebarView: View {
     let row = sidebarRow(
       id: id, isSelected: { selection == .project(project) }, verticalPadding: 5
     ) {
-      selection = .project(project)
+      navigate(to: .project(project))
     } label: {
       HStack(spacing: 6) {
         // Icône « dossier » sur le flanc gauche : à l'œil, un projet (dossier) se distingue
@@ -509,7 +519,7 @@ struct SidebarView: View {
     let id = list.persistentModelID
     let count = counts[list]
     let row = sidebarRow(id: id, isSelected: { selection == .list(list) }) {
-      selection = .list(list)
+      navigate(to: .list(list))
     } label: {
       HStack(spacing: 8) {
         // Trait seul (pas de camembert plein) : une liste vide reste un anneau GRIS ; le bleu

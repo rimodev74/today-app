@@ -67,6 +67,30 @@ final class QuickEntryTests: XCTestCase {
     XCTAssertEqual(entry.title, "Lait")
   }
 
+  // MARK: Réconciliation d'un jeton de liste (Réglages)
+
+  func testReconciledListTokenFollowsARenamedList() {
+    // « Courses » est devenue « Courses de la semaine » : le jeton enregistré, lui, n'a pas bougé.
+    XCTAssertEqual(
+      QuickEntry.reconciledListToken("#Courses", against: ["Courses de la semaine"]),
+      "#Coursesdelasemaine")
+  }
+
+  func testReconciledListTokenLeavesNonListTokensAlone() {
+    XCTAssertEqual(QuickEntry.reconciledListToken("@today", against: ["Courses"]), "@today")
+    XCTAssertEqual(QuickEntry.reconciledListToken("!today", against: ["Courses"]), "!today")
+  }
+
+  func testReconciledListTokenLeavesAnAlreadyCorrectTokenAlone() {
+    XCTAssertEqual(QuickEntry.reconciledListToken("#Courses", against: ["Courses"]), "#Courses")
+  }
+
+  /// Liste supprimée entre-temps : rien à quoi se raccrocher, le jeton reste tel quel plutôt que
+  /// de sauter vers une autre liste par accident.
+  func testReconciledListTokenKeepsAnOrphanedTokenWhenNothingMatches() {
+    XCTAssertEqual(QuickEntry.reconciledListToken("#Courses", against: ["Travail"]), "#Courses")
+  }
+
   func testCombinedTokens() {
     let entry = parse("@demain #Courses Acheter du lait", names: ["Courses"])
     XCTAssertEqual(entry.title, "Acheter du lait")

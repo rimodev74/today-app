@@ -89,7 +89,11 @@ struct TaskRow: View {
         TaskCheckbox(isCompleted: task.isCompleted) {
           withAnimation(taskInsert) {
             task.toggleCompletion()
-            if task.isCompleted { task.list?.moveToEndOfSection(task) }
+            if task.isCompleted {
+              task.list?.moveToEndOfSection(task)
+            } else {
+              task.list?.moveAboveCompleted(task)
+            }
           }
           Task { await remindersService.pushCompletion(for: task) }
           onCompletionChanged()
@@ -219,6 +223,13 @@ struct TaskRow: View {
     .padding(.bottom, isEditing ? 14 : (showsSubtasks ? 10 : 6))
     .padding(.horizontal, isEditing ? 16 : rowInset)
     .background { rowBackground }
+    // Repos/sélection : décale tout le bloc (fond ET case) de `rowInset` vers la droite — pas de
+    // retrait en moins. Le double retrait interne reste intact (la case garde son écart avec le
+    // bord du fond) ; c'est le bloc entier qui glisse pour amener le bord gauche du fond sur la
+    // même colonne qu'une en-tête (`gutter + rowInset`, cf. `HeaderRow.pill`), au lieu de `gutter`.
+    // Première tentative fausse : supprimer le retrait gauche interne collait la case au bord du
+    // fond au lieu de la faire suivre.
+    .padding(.leading, isEditing ? 0 : rowInset)
     .contentShape(Rectangle())
     // Survol : révèle le ••• à droite. Clic droit : même menu que le •••, via contentShape ;
     // bascule aussi en édition, via `RightClickObserver` posé par la page (cf. ce type).
@@ -289,7 +300,26 @@ struct TaskRow: View {
         showEditor = true
         // Toujours le titre : c'est le seul champ qu'on ouvre. Il y avait une exception quand
         // l'édition partait de l'icône « note » du survol, retirée depuis.
-        titleFocused = true
+        //
+        // DÉCALÉ D'UN TICK, et c'est délibéré. La même transaction qui pose `isEditing` retire
+        // aussi les badges (date, durée, provenance) de la `HStack` du titre — `titleView` reçoit
+        // donc une largeur PLUS GRANDE dans cette même transaction. Mesuré le 7 août 2026 (cadre
+        // loggé sur une tâche dont le titre portait un badge de durée) : `TextField(axis: .vertical)`
+        // fige sa hauteur à 0 dès cette première image, AVANT même que le focus n'arrive — et n'en
+        // ressort JAMAIS une fois que le field editor d'AppKit prend le relais sur ce cadre cassé.
+        // Un premier passage NON focalisé, à la largeur déjà stable, mesure la bonne hauteur (le
+        // rendu SwiftUI natif d'un `TextField` non focalisé sait le faire) ; le focus arrivant un
+        // tick plus tard, le field editor hérite d'un cadre déjà correct au lieu d'en recalculer un.
+        //
+        // Dans la MÊME courbe que le reste de la carte (`taskFlow`), et pas hors transaction :
+        // posé nu, le tout petit réajustement que fait le field editor en prenant le relais
+        // (quelques points, entre le rendu SwiftUI et le sien) sautait sans s'animer — imperceptible
+        // sur un titre seul, visible en à-coup sur une carte haute (beaucoup de sous-tâches).
+        let session = editSession
+        DispatchQueue.main.async {
+          guard session == editSession else { return }
+          withAnimation(taskFlow) { titleFocused = true }
+        }
         // Réouverture alors que le corps est encore monté (fermeture en cours) : `onAppear` ne
         // rejoue pas, on redéploie ici. La 1re ouverture passe, elle, par la mesure (onPreferenceChange).
         if editorHeight > 0 { withAnimation(taskFlow) { editorReveal = editorHeight } }

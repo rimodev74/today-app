@@ -47,11 +47,15 @@ enum SidebarFiling {
     SidebarDropRow(row: project.persistentModelID, list: nil)
   }
 
-  /// Le point d'accroche de la ligne en vol : son bord avant, à mi-hauteur.
+  /// Le point d'accroche : le bord avant d'un cadre, à mi-hauteur — c'est là que le calque
+  /// (`SidebarDropGhost`) est dessiné, donc ce qu'on voit est ce qui vise.
   ///
-  /// Ce n'est PAS le curseur, et c'est délibéré : c'est là que le calque est dessiné, donc **ce
-  /// qu'on voit est ce qui vise**. Le curseur en diverge dès qu'on empoigne une ligne ailleurs qu'à
-  /// son bord — on croirait viser une ligne et rater d'un demi-cran, sans rien pour l'expliquer.
+  /// L'appelant (`SidebarDrop.hovered`) lui passe un cadre déjà translaté du point d'empoignade
+  /// (`grabOffsetX`), pas `draggedFrame` brut : posé tel quel, ce bord avant est celui de la
+  /// RANGÉE, pas celui du curseur — juste tant qu'on empoigne près de son bord. Empoignée à son
+  /// EXTRÉMITÉ opposée, l'écart devient la largeur de la ligne entière : le point visé sortait de
+  /// l'écran, aucune ligne de la sidebar ne s'allumait et le calque n'apparaissait pas sous le
+  /// curseur. Mesuré le 7 août 2026, en glissant délibérément par le bord droit d'une tâche.
   static func anchor(of frame: CGRect) -> CGPoint {
     CGPoint(x: frame.minX, y: frame.midY)
   }
@@ -135,6 +139,14 @@ final class SidebarDrop {
   /// connaître la largeur courante (elle se replie, elle se tire).
   var sidebarEdge: CGFloat = 0
 
+  /// Distance entre le bord avant de la ligne et le point où on l'a empoignée, constante sur tout
+  /// le geste. Sans elle, `isAirborne` comparait le bord de la rangée au bord de la sidebar — juste
+  /// tant qu'on empoigne une ligne PAR son bord, faux dès qu'on la prend ailleurs (son extrémité
+  /// opposée, son centre) : le bord AVANT franchit alors la sidebar bien avant que le curseur ne
+  /// l'atteigne, et le calque bascule trop tôt. Posée par `arm`, aux deux moteurs de glissement de
+  /// l'app (page intelligente comme page d'une liste).
+  private(set) var grabOffsetX: CGFloat = 0
+
   /// La ligne a franchi le bord de la page : c'est le CALQUE qui la représente désormais.
   ///
   /// Un seul état pour les deux moitiés du geste, et c'est tout l'intérêt : la fenêtre l'utilise
@@ -146,16 +158,22 @@ final class SidebarDrop {
   /// rangée qui doit s'afficher par-dessus la sidebar est forcément une SECONDE vue. La question
   /// n'est donc pas de « détacher » la ligne, elle est de savoir laquelle des deux on montre — et
   /// ce booléen est la réponse.
+  ///
+  /// Comparé au CURSEUR (`draggedFrame.minX + grabOffsetX`), pas au seul bord de la rangée : voir
+  /// `grabOffsetX`. Même correction que `hovered`, pour la même raison.
   var isAirborne: Bool {
     guard let draggedFrame else { return false }
-    return draggedFrame.minX < sidebarEdge
+    return draggedFrame.minX + grabOffsetX < sidebarEdge
   }
 
   /// La ligne survolée. Calculée à la lecture — un troisième état à tenir synchronisé avec les deux
   /// autres est exactement la façon dont deux vues se mettent à diverger sans qu'on le voie.
+  ///
+  /// Vise le cadre TRANSLATÉ de `grabOffsetX`, pas `draggedFrame` brut : cf. `SidebarFiling.anchor`.
   var hovered: SidebarDropRow? {
     guard let draggedFrame else { return nil }
-    return SidebarFiling.target(at: SidebarFiling.anchor(of: draggedFrame), in: rows)
+    let cursorFrame = draggedFrame.offsetBy(dx: grabOffsetX, dy: 0)
+    return SidebarFiling.target(at: SidebarFiling.anchor(of: cursorFrame), in: rows)
   }
 
   /// Nouvelle mesure de la sidebar — publiée même PENDANT un geste, depuis que survoler un projet
@@ -177,6 +195,14 @@ final class SidebarDrop {
     draggedFrame = frame
   }
 
+  /// Pose `grabOffsetX` pour le geste en cours. Appelable à chaque image du drag (le résultat est
+  /// le même tout du long) : le garde d'égalité évite d'invalider les deux colonnes pour une valeur
+  /// inchangée, même motif que `track` et `measured`.
+  func arm(grabOffsetX: CGFloat) {
+    guard self.grabOffsetX != grabOffsetX else { return }
+    self.grabOffsetX = grabOffsetX
+  }
+
   /// **Le relâchement du geste** : la liste où ranger, s'il y en a une, et fin du vol.
   ///
   /// Rend la LISTE et pas la ligne visée, parce que c'est la seule chose qu'un appelant en fasse —
@@ -184,7 +210,10 @@ final class SidebarDrop {
   /// côté. Et elle désarme au passage : la cible se déduit d'un geste qui n'existe plus après, il
   /// n'y a donc pas d'ordre correct autre que celui-là.
   func drop(in lists: [TodoList]) -> TodoList? {
-    defer { draggedFrame = nil }
+    defer {
+      draggedFrame = nil
+      grabOffsetX = 0
+    }
     // `list` vaut `nil` pour une ligne de PROJET : la survoler la déplie, elle ne range rien.
     guard let hovered, let listID = hovered.list else { return nil }
     return lists.first { $0.persistentModelID == listID }

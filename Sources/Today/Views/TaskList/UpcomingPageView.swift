@@ -117,7 +117,11 @@ struct UpcomingPageView: View {
   private func toggle(_ task: TaskItem) {
     withAnimation(taskInsert) {
       task.toggleCompletion()
-      if task.isCompleted { task.list?.moveToEndOfSection(task) }
+      if task.isCompleted {
+        task.list?.moveToEndOfSection(task)
+      } else {
+        task.list?.moveAboveCompleted(task)
+      }
     }
     Task { await remindersService.pushCompletion(for: task) }
   }

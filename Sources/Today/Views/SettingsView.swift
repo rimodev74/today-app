@@ -19,6 +19,8 @@ struct SettingsView: View {
         .tabItem { Label("Pomodoro", systemImage: "timer") }
     }
     .frame(width: 460)
+    // Sans ça, `TabView` fait fondre l'ancien panneau dans le nouveau à chaque clic d'onglet.
+    .transaction { $0.disablesAnimations = true }
   }
 }
 
@@ -242,6 +244,14 @@ private struct ActionPicker: View {
     }
     .labelsHidden()
     .frame(maxWidth: .infinity, alignment: .leading)
+    // Une liste renommée depuis que ce raccourci la vise casse la correspondance du `Picker` :
+    // ses options suivent le titre COURANT (ci-dessus), le jeton enregistré reste à l'ancien nom
+    // tant que rien ne l'écrit. `initial: true` répare une liste déjà renommée avant l'ouverture
+    // des Réglages ; le déclenchement sur `destinations` répare un renommage vécu PENDANT qu'ils
+    // sont ouverts — les deux écrivent la même correction (`QuickEntry.reconciledListToken`).
+    .onChange(of: destinations.map(\.title), initial: true) {
+      token = QuickEntry.reconciledListToken(token, against: destinations.map(\.title))
+    }
   }
 }
 

@@ -33,6 +33,12 @@ struct ContentView: View {
   @AppStorage(RemindersSync.listStorageKey) private var remindersListID = ""
   @AppStorage(RemindersSync.dueHourStorageKey) private var remindersDueHour = RemindersSync.dueHour
 
+  /// Les raccourcis de saisie rapide (abréviations et combinaisons globales) qui visent une LISTE
+  /// portent son nom au jour où ils ont été posés (cf. `reconcileShortcuts`) — lus ici pour pouvoir
+  /// les corriger dès qu'une liste est renommée, pas seulement quand les Réglages sont ouverts.
+  @AppStorage(TextShortcut.storageKey) private var textShortcutData = Data()
+  @AppStorage(KeyShortcut.storageKey) private var keyShortcutData = Data()
+
   /// La passe de synchro EN ATTENTE — annulée et rearmée à chaque notification (cf.
   /// `syncWithReminders`). C'est ce qui empêche l'app de se réveiller pour son propre bruit.
   @State private var syncPass: Task<Void, Never>?
@@ -243,6 +249,11 @@ struct ContentView: View {
     .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
       syncWithReminders()
     }
+    // Une liste renommée doit recoller ses raccourcis tout de suite, pas seulement quand les
+    // Réglages passent dessus (cf. `reconcileShortcuts`).
+    .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+      reconcileShortcuts()
+    }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     {
       _ in syncWithReminders()
@@ -310,10 +321,17 @@ struct ContentView: View {
     GeometryReader { proxy in
       let origin = proxy.frame(in: .global).origin
       if filing.isAirborne, let flying = filing.draggedFrame {
+        // `.position`, pas `.offset` : elle CENTRE la pilule sur le curseur
+        // (`flying.minX + filing.grabOffsetX`), quel que soit l'endroit où la ligne a été
+        // empoignée — un bord avant ancré au curseur (essayé d'abord) traînait tout son corps
+        // (110 pt) du côté du contenu au moment de basculer, ce qui se lisait comme prématuré. Et
+        // pas de rognage à la largeur de la sidebar (essayé aussi) : ce calque doit rester
+        // au-dessus de TOUT, sidebar et page confondues — un `.frame().clipped()` posé ici le
+        // faisait passer sous les fonds opaques des deux colonnes.
         SidebarDropGhost()
-          .offset(
-            x: flying.minX - origin.x,
-            y: flying.midY - origin.y - SidebarDropGhost.height / 2)
+          .position(
+            x: flying.minX + filing.grabOffsetX - origin.x,
+            y: flying.midY - origin.y)
       }
     }
     .allowsHitTesting(false)
@@ -579,6 +597,35 @@ struct ContentView: View {
     let descriptor = FetchDescriptor<TaskItem>(
       predicate: #Predicate { $0.reminderIdentifier != nil })
     return (try? modelContext.fetch(descriptor)) ?? []
+  }
+
+  /// Recolle les raccourcis (abréviation de la capsule, combinaison globale) qui visent une LISTE
+  /// renommée depuis leur pose. `ActionPicker` (Réglages ▸ Raccourcis) le fait déjà, mais seulement
+  /// pendant que cette fenêtre est ouverte et affichée ; sans ce passage-ci, une liste renommée
+  /// fenêtre fermée laisse le raccourci pointer vers un nom qui n'existe plus jusqu'à la prochaine
+  /// ouverture des Réglages — l'abréviation tapée dans la capsule écrit alors le vieux jeton, qui ne
+  /// route plus nulle part.
+  ///
+  /// Fetch à la demande et pas un `@Query` : même raison que `linkedTasks`, posé sur cette vue
+  /// racine il ferait dépendre tout l'arbre de la moindre mutation d'une liste.
+  private func reconcileShortcuts() {
+    let titles = ((try? modelContext.fetch(FetchDescriptor<TodoList>())) ?? []).map(\.title)
+
+    let text = TextShortcut.decode(textShortcutData)
+    let reconciledText = text.reconciled(against: titles)
+    if reconciledText != text {
+      textShortcutData = TextShortcut.encode(reconciledText)
+    }
+
+    let keys = KeyShortcut.decode(keyShortcutData)
+    let reconciledKeys = keys.reconciled(against: titles)
+    if reconciledKeys != keys {
+      keyShortcutData = KeyShortcut.encode(reconciledKeys)
+      // Les jetons des combinaisons globales sont capturés dans la closure Carbon à l'enregistrement
+      // (cf. `GlobalHotKey.reload`) : sans ce rechargement, la touche continuerait de router vers
+      // l'ancien nom jusqu'au prochain réglage touché dans Réglages ▸ Raccourcis.
+      GlobalHotKey.shared.reload()
+    }
   }
 
   /// Seules les listes et projets sont des destinations « récentes » ; les vues intelligentes

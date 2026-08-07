@@ -167,4 +167,51 @@ final class TextShortcutTests: XCTestCase {
       XCTAssertTrue(tokens.contains(shortcut.expansion), shortcut.expansion)
     }
   }
+
+  /// Le pendant tableau de `QuickEntry.reconciledListToken`, appelé par `ContentView` à chaque
+  /// sauvegarde — pas seulement quand les Réglages affichent le `Picker`. Sans lui, « crs » ⇥
+  /// continuerait d'écrire l'ancien nom de la liste après un renommage fenêtre fermée.
+  func testTextShortcutsReconcileRenamedListsAndLeaveTheRestAlone() {
+    let stored = [
+      TextShortcut(trigger: "crs", expansion: "#Courses"),
+      TextShortcut(trigger: "ajd", expansion: "@today"),
+    ]
+
+    let reconciled = stored.reconciled(against: ["Achats"])
+
+    XCTAssertEqual(reconciled.count, 1, "aucune liste ne s'y retrouve : la ligne morte est retirée")
+    XCTAssertEqual(reconciled[0].expansion, "@today", "pas un jeton de liste : inchangé")
+
+    XCTAssertEqual(
+      stored.reconciled(against: ["Courses de la semaine"])[0].expansion,
+      "#Coursesdelasemaine", "la liste renommée est retrouvée par préfixe, et le raccourci suit")
+  }
+
+  func testKeyShortcutsReconcileRenamedLists() {
+    let stored = [
+      KeyShortcut(expansion: "#Courses", key: KeyCombo(keyCode: 17, modifiers: 1_048_576, label: "⌘T"))
+    ]
+
+    let reconciled = stored.reconciled(against: ["Courses de la semaine"])
+
+    XCTAssertEqual(reconciled[0].expansion, "#Coursesdelasemaine")
+    XCTAssertEqual(reconciled[0].key, stored[0].key, "la combinaison elle-même ne bouge pas")
+  }
+
+  /// Le bug remonté : supprimer une liste doit emporter ses raccourcis, pas les laisser viser un
+  /// nom qui n'existe plus. `reconciled` tourne à chaque sauvegarde (cf. `ContentView`), donc la
+  /// suppression d'une liste — qui en déclenche une — élague la ligne dans la foulée.
+  func testDeletingAListRemovesItsTextAndKeyShortcuts() {
+    let texts = [
+      TextShortcut(trigger: "crs", expansion: "#Courses"),
+      TextShortcut(trigger: "ajd", expansion: "@today"),
+    ]
+    XCTAssertEqual(texts.reconciled(against: []), [texts[1]])
+
+    let keys = [
+      KeyShortcut(expansion: "#Courses", key: KeyCombo(keyCode: 17, modifiers: 0, label: "⌃C")),
+      KeyShortcut(expansion: "@today", key: KeyCombo(keyCode: 18, modifiers: 0, label: "⌃T")),
+    ]
+    XCTAssertEqual(keys.reconciled(against: []), [keys[1]])
+  }
 }

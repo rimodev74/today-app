@@ -87,6 +87,28 @@ final class TodoList {
     for (index, t) in ordered.enumerated() { t.sortIndex = index }
   }
 
+  /// Symétrique de `moveToEndOfSection` : une tâche qu'on DÉCOCHE remonte en TÊTE de sa section.
+  ///
+  /// Une première version la remontait juste au-dessus des autres tâches encore cochées — l'ancre
+  /// d'`appendAnchor`. Faux : quand c'est la SEULE tâche cochée de la section (le cas le plus
+  /// courant, cocher puis décocher la même tâche), cette ancre est déjà sa position courante —
+  /// `moveToEndOfSection` l'avait posée juste après la dernière active, qui est exactement là
+  /// qu'une ancre « au-dessus des cochées » retombe. Résultat : aucun mouvement, symptôme rapporté
+  /// telle quelle (« je décoche, elle reste en bas »). La tête de section est le seul repère qui ne
+  /// coïncide jamais avec la position qu'on quitte.
+  func moveAboveCompleted(_ task: TaskItem) {
+    guard Self.autoSortCompletedEnabled else { return }
+    var ordered = orderedTasks
+    guard
+      let taskIndex = ordered.firstIndex(where: { $0.persistentModelID == task.persistentModelID })
+    else { return }
+    let sectionStart = ordered[..<taskIndex].lastIndex(where: \.isHeader).map { $0 + 1 } ?? 0
+    guard sectionStart < taskIndex else { return }  // déjà en tête de section
+    let moved = ordered.remove(at: taskIndex)
+    ordered.insert(moved, at: sectionStart)
+    for (index, t) in ordered.enumerated() { t.sortIndex = index }
+  }
+
   /// Où une tâche NEUVE doit s'accrocher dans `tasks` (déjà triées par `sortIndex`) : la dernière
   /// tâche NON cochée, jamais la toute dernière — sans quoi la neuve atterrirait sous les cochées
   /// que `moveToEndOfSection` repousse en bas, l'inverse du geste qui vient de les y envoyer.

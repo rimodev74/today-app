@@ -109,8 +109,11 @@ struct RowPressGesture: ViewModifier {
   let isEditing: Bool
   var onSelect: () -> Void
   var onEdit: () -> Void
-  /// Glissement en cours, quand la page en accepte un. Reçoit la translation depuis l'empoignade.
-  var onDrag: ((CGSize) -> Void)?
+  /// Glissement en cours, quand la page en accepte un. Reçoit la translation depuis l'empoignade et
+  /// le point d'empoignade lui-même (`startLocation`, constant sur tout le geste) — c'est ce
+  /// second point qui permet à `SidebarDrop.isAirborne` de suivre le CURSEUR plutôt que le bord de
+  /// la ligne empoignée (cf. `SidebarDrop.grabOffsetX`).
+  var onDrag: ((CGSize, CGPoint) -> Void)?
   /// Relâchement après un glissement. N'est PAS appelé pour un simple clic.
   var onDrop: (() -> Void)?
 
@@ -147,7 +150,7 @@ struct RowPressGesture: ViewModifier {
             if !isEditing && !isSelected { onSelect() }
           }
           guard !isEditing, moved(value.translation) else { return }
-          onDrag?(value.translation)
+          onDrag?(value.translation, value.startLocation)
         }
         .onEnded { value in
           pressing = false
@@ -168,7 +171,7 @@ extension View {
   func rowPressGesture(
     isSelected: Bool, isEditing: Bool, onSelect: @escaping () -> Void,
     onEdit: @escaping () -> Void,
-    onDrag: ((CGSize) -> Void)? = nil,
+    onDrag: ((CGSize, CGPoint) -> Void)? = nil,
     onDrop: (() -> Void)? = nil
   ) -> some View {
     modifier(

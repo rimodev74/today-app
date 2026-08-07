@@ -59,23 +59,32 @@ struct AllTasksPageView: View {
     // refiltrait et retriait toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
     let offsets = reorder.offsets()
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 0) {
-        header
+    // `GeometryReader` + largeur EXPLICITE, pas `maxWidth: .infinity` : un `ScrollView` ne borne
+    // pas la largeur de son contenu, et un `VStack` ne propose pas la sienne à ses enfants — un
+    // `TextField` focalisé (le titre en édition) délègue alors son rendu au field editor d'AppKit,
+    // de largeur idéale nulle, et le titre disparaît purement et simplement. Même correctif que
+    // `ListPageView` (cf. son en-tête de fichier), qui manquait ici. Les `.frame(maxWidth: .infinity)`
+    // plus bas (sections, lignes) restent tels quels : une fois la racine bornée à une largeur
+    // CONCRÈTE, ils la relaient sans avoir besoin de la recalculer eux-mêmes.
+    return GeometryReader { geo in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
+          header
 
-        // UNE seule énumération, celle que le socle clavier reçoit aussi. La boîte de réception a
-        // longtemps été rendue à part, et c'est exactement comme ça qu'elle a fini par manquer à
-        // l'ordre du clavier sans que rien ne le montre.
-        ForEach(page.sections) { section in
-          sectionView(section, offsets: offsets)
-          // Juste après le jour : ce que le calendrier impose aujourd'hui se lit avec ce qu'on a
-          // décidé d'y faire, comme sur « Aujourd'hui » qui les montre l'un au-dessus de l'autre.
-          if section.kind == .today { calendarSection }
+          // UNE seule énumération, celle que le socle clavier reçoit aussi. La boîte de réception a
+          // longtemps été rendue à part, et c'est exactement comme ça qu'elle a fini par manquer à
+          // l'ordre du clavier sans que rien ne le montre.
+          ForEach(page.sections) { section in
+            sectionView(section, offsets: offsets)
+            // Juste après le jour : ce que le calendrier impose aujourd'hui se lit avec ce qu'on a
+            // décidé d'y faire, comme sur « Aujourd'hui » qui les montre l'un au-dessus de l'autre.
+            if section.kind == .today { calendarSection }
+          }
         }
+        .frame(width: max(geo.size.width - 2 * gutter, 1), alignment: .leading)
+        .padding(.horizontal, gutter)
+        .padding(.top, 30)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, gutter)
-      .padding(.top, 30)
     }
     // Le socle commun des pages de tâches : ⌫ et ↑/↓. Les mêmes sections que le `body` rend.
     // Le trou d'insertion : même brique que « Aujourd'hui », même courbe.
@@ -174,7 +183,9 @@ struct AllTasksPageView: View {
     }
     // Même retrait que les lignes, qui portent `rowInset` À L'INTÉRIEUR de leur fond (même règle
     // que `TodayPageView.header`).
-    .padding(.leading, rowInset)
+    // ×2 depuis que le fond de sélection d'une `TaskRow` est flush avec une en-tête (cf. TaskRow) :
+    // la case a suivi d'un `rowInset` de plus, cette icône doit la suivre pour rester sur sa colonne.
+    .padding(.leading, rowInset * 2)
     .padding(.bottom, 14)
   }
 
@@ -350,7 +361,13 @@ struct AllTasksPageView: View {
       isEditing: focus.isEditing(task),
       onSelect: { select(task) },
       onEdit: { beginEditing(task) },
-      onDrag: { reorder.track(task, by: $0, in: rows) },
+      onDrag: { translation, start in
+        reorder.track(task, by: translation, in: rows)
+        // Cadre de repos gelé dès l'empoignade : toujours la même valeur pendant tout le geste.
+        if let restingMinX = reorder.frames[.task(task.persistentModelID)]?.minX {
+          filing.arm(grabOffsetX: start.x - restingMinX)
+        }
+      },
       onDrop: { dropDraggedTask() }
     )
     .taskRowDragLayer(reorder, task: task, offset: offset, airborne: filing.isAirborne)
@@ -440,6 +457,9 @@ struct AllTasksPageView: View {
     // Mêmes paddings qu'une `TaskRow` au repos : la rangée de création garde le rythme des tâches.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+    // Même décalage que `TaskRow` (cf. son fond de sélection) : la case garde sa colonne, ce ＋
+    // doit la suivre pour rester sur la même verticale.
+    .padding(.leading, rowInset)
     // Pendant un glisser, le champ s'efface — il encombrerait le déplacement, et une page de liste
     // le fait depuis toujours (cf. `ListPageView`, même modificateur). Deux pages qui se comportent
     // différemment pendant le MÊME geste, c'est exactement ce que le socle commun sert à éviter.

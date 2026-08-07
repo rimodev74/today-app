@@ -88,25 +88,34 @@ struct TodayPageView: View {
     // Calculés UNE fois et distribués aux rangées : les interroger par ligne referait le même
     // balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
     let offsets = reorder.offsets()
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 0) {
-        header
+    // `GeometryReader` + largeur EXPLICITE, pas `maxWidth: .infinity` : un `ScrollView` ne borne
+    // pas la largeur de son contenu, et un `VStack` ne propose pas la sienne à ses enfants — un
+    // `TextField` focalisé (le titre en édition) délègue alors son rendu au field editor d'AppKit,
+    // de largeur idéale nulle, et le titre disparaît purement et simplement. Même correctif que
+    // `ListPageView` (cf. son en-tête de fichier), qui manquait ici — mesuré le 7 août 2026 : le
+    // titre d'une tâche en édition s'effondrait sur « Aujourd'hui » et « Tâches », jamais sur une
+    // liste.
+    return GeometryReader { geo in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
+          header
 
-        Group {
-          eventsSection
+          Group {
+            eventsSection
 
-          ForEach(rows) { task in
-            taskRow(
-              for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, draggable: true,
-              rows: rows)
+            ForEach(rows) { task in
+              taskRow(
+                for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, draggable: true,
+                rows: rows)
+            }
+            newTaskRow
+            remindersSection
           }
-          newTaskRow
-          remindersSection
         }
+        .frame(width: max(geo.size.width - 2 * gutter, 1), alignment: .leading)
+        .padding(.horizontal, gutter)
+        .padding(.top, 30)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, gutter)
-      .padding(.top, 30)
     }
     // Le trou d'insertion, la couche de glissement des rangées, la courbe : tout vient de
     // `TaskPageChrome`. Une page qui glisse ne redécrit rien de ce qui se voit.
@@ -155,7 +164,9 @@ struct TodayPageView: View {
     // Même retrait que les lignes : depuis que la page rend des `TaskRow`, celles-ci portent
     // `rowInset` à l'intérieur de leur fond. Sans ça l'icône du titre déborde de 10 pt à gauche
     // de la colonne des cases à cocher (cf. `ListPageView.inboxHeader`, même règle).
-    .padding(.leading, rowInset)
+    // ×2 depuis que le fond de sélection d'une `TaskRow` est flush avec une en-tête (cf. TaskRow) :
+    // la case a suivi d'un `rowInset` de plus, cette icône doit la suivre pour rester sur sa colonne.
+    .padding(.leading, rowInset * 2)
     .padding(.bottom, 14)
   }
 
@@ -169,7 +180,17 @@ struct TodayPageView: View {
   ) -> some View {
     // Typés ici : un ternaire entre une closure et `nil` ne s'infère pas au milieu d'une chaîne de
     // modificateurs, et le compilateur n'en dit rien d'utile.
-    let onDrag: ((CGSize) -> Void)? = draggable ? { reorder.track(task, by: $0, in: rows) } : nil
+    let onDrag: ((CGSize, CGPoint) -> Void)? =
+      draggable
+      ? { translation, start in
+        reorder.track(task, by: translation, in: rows)
+        // Le cadre de repos est gelé dès l'empoignade (`TaskPageReorder.measured`) : le lire ici,
+        // à chaque image du glissement, rend toujours la même valeur — cf. `SidebarDrop.arm`.
+        if let restingMinX = reorder.frames[.task(task.persistentModelID)]?.minX {
+          filing.arm(grabOffsetX: start.x - restingMinX)
+        }
+      }
+      : nil
     let onDrop: (() -> Void)? = draggable ? { dropDraggedTask() } : nil
     return TaskRow(
       task: task,
@@ -289,6 +310,9 @@ struct TodayPageView: View {
     // création garde exactement le rythme des tâches — même règle que `ListPageView.draftRow`.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+    // Même décalage que `TaskRow` (cf. son fond de sélection) : la case garde sa colonne, ce ＋
+    // doit la suivre pour rester sur la même verticale.
+    .padding(.leading, rowInset)
   }
 
   /// ⌘N : la tâche est créée VIDE et s'ouvre AUSSITÔT en édition — carte complète, avec notes,

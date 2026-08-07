@@ -474,6 +474,9 @@ private struct ListPageView: View {
     let archived = archivedTasks
     let plural = archived.count > 1 ? "s" : ""
     if !archived.isEmpty {
+      // `rowInset` sur tout le bloc : même colonne que le fond d'une `TaskRow` (`gutter + rowInset`,
+      // cf. son commentaire), sans quoi le dépliant et son divider partaient du bord de page, `rowInset`
+      // trop à gauche de la case à cocher des tâches vivantes juste au-dessus.
       VStack(alignment: .leading, spacing: 0) {
         Divider().padding(.vertical, 10)
 
@@ -481,12 +484,13 @@ private struct ListPageView: View {
           withAnimation(disclosureFlow) { archivesExpanded.toggle() }
         } label: {
           HStack(spacing: 6) {
-            Image(systemName: "chevron.right")
-              .font(.app(10, weight: .semibold))
-              .rotationEffect(.degrees(archivesExpanded ? 90 : 0))
             Text("\(archived.count) tâche\(plural) archivée\(plural)")
               .font(.app(.subheadline).weight(.semibold))
             Spacer(minLength: 0)
+            // À droite, comme les bandeaux de section de « Tâches » (cf. `AllTasksPageView`).
+            Image(systemName: "chevron.right")
+              .font(.app(10, weight: .semibold))
+              .rotationEffect(.degrees(archivesExpanded ? 90 : 0))
           }
           .foregroundStyle(.secondary)
           .contentShape(Rectangle())
@@ -510,6 +514,7 @@ private struct ListPageView: View {
           .transition(.opacity)
         }
       }
+      .padding(.leading, rowInset)
       .transition(.opacity)
     }
   }
@@ -633,6 +638,7 @@ private struct ListPageView: View {
         onEndEditing: { endEditingHeader(task) },
         onMove: { moveHeader(task, to: $0) },
         onCopy: { copyHeaderToClipboard(task) },
+        onDuplicate: { duplicateHeader(task) },
         onDelete: { delete(task) }
       )
     } else {
@@ -1019,6 +1025,11 @@ private struct ListPageView: View {
             blocks.first { $0.header?.persistentModelID == task.persistentModelID }
             .flatMap { rowFrames[.field($0.id)]?.height } ?? 0
           dragStart = value.startLocation
+          // Cadre de repos gelé dès l'empoignade (même garde que `rowFrames` ci-dessus) : posé une
+          // fois, il vaut pour tout le geste — cf. `SidebarDrop.grabOffsetX`.
+          if let restingMinX = rowFrames[.task(task.persistentModelID)]?.minX {
+            filing.arm(grabOffsetX: dragStart.x - restingMinX)
+          }
         }
         guard draggingID == task.persistentModelID else { return }
         dragOffset = value.translation
@@ -1140,6 +1151,9 @@ private struct ListPageView: View {
     // création garde exactement le rythme des tâches, sans détachement visuel.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+    // Même décalage que `TaskRow` (cf. son fond de sélection) : la case garde sa colonne, ce ＋
+    // doit la suivre pour rester sur la même verticale.
+    .padding(.leading, rowInset)
     .contentShape(Rectangle())
     .onTapGesture { focusedDraft = block.id }
   }
@@ -1243,7 +1257,10 @@ private struct ListPageView: View {
     // cocher, elle se lit donc comme la tête de cette colonne. Même règle dans « Aujourd'hui »,
     // qui rend les mêmes `TaskRow`. L'en-tête d'une liste nommée, lui, porte un anneau plus large
     // et l'encadré de notes : c'est le bord de section qui lui sert d'aplomb.
-    .padding(.leading, rowInset)
+    // ×2 depuis que le fond de sélection d'une `TaskRow` est flush avec une en-tête (cf. TaskRow) :
+    // la case a suivi d'un `rowInset` de plus, cette icône doit la suivre pour rester sur sa
+    // colonne.
+    .padding(.leading, rowInset * 2)
   }
 
   private var header: some View {
@@ -1270,7 +1287,9 @@ private struct ListPageView: View {
       // (cf. `gutter`), comme l'icône des bandeaux d'« Aujourd'hui » et « Tâches ». Le `notesBox`,
       // lui, ne prend rien : c'est un fond, il part du bord de section comme les pilules de ligne —
       // et son propre retrait intérieur de 10 pt remet son texte sur la même colonne que l'anneau.
-      .padding(.leading, rowInset)
+      // ×2 : la case a suivi le fond de sélection d'un `rowInset` de plus (cf. TaskRow), l'anneau la
+      // suit. `notesBox` n'a rien à changer — son propre retrait de 10 pt l'y amenait déjà.
+      .padding(.leading, rowInset * 2)
 
       notesBox
     }
@@ -1450,6 +1469,47 @@ private struct ListPageView: View {
     try? modelContext.save()
   }
 
+  /// Duplique une en-tête ET son bloc (les tâches rattachées) juste après l'original. La copie de
+  /// l'en-tête reçoit " copie" au titre et une couleur différente de l'original (cycle à travers
+  /// la palette).
+  private func duplicateHeader(_ header: TaskItem) {
+    let block = dragGroup(for: header)
+    guard let first = block.first, let last = block.last else { return }
+
+    let headerCopy = first.copy(into: list)
+    headerCopy.title += " copie"
+
+    // Une couleur différente de l'original : deux en-têtes identiques côte à côte se
+    // distingueraient mal au premier coup d'œil.
+    let colors = PaletteColor.allCases
+    if let currentColor = first.headerColor, let currentIndex = colors.firstIndex(of: currentColor)
+    {
+      headerCopy.headerColor = colors[(currentIndex + 1) % colors.count]
+    } else {
+      headerCopy.headerColor = colors.first
+    }
+
+    // Insère le bloc copié juste APRÈS la fin du bloc d'origine (dernière tâche rattachée,
+    // ou l'en-tête elle-même si elle n'en a aucune) — jamais après l'en-tête seule, sinon les
+    // tâches d'origine (sortIndex > en-tête) se retrouvent décalées SOUS la copie au lieu de
+    // rester attachées à leur en-tête.
+    var next = last.sortIndex + 1
+    for item in list.tasks where item.sortIndex >= next { item.sortIndex += block.count }
+
+    headerCopy.sortIndex = next
+    next += 1
+    modelContext.insert(headerCopy)
+
+    for task in block.dropFirst() {
+      let taskCopy = task.copy(into: list)
+      taskCopy.sortIndex = next
+      modelContext.insert(taskCopy)
+      next += 1
+    }
+
+    try? modelContext.save()
+  }
+
   /// Duplique une tâche juste sous l'originale (les suivantes glissent d'un cran).
   private func duplicate(_ task: TaskItem) {
     let clone = task.copy(into: list)
@@ -1601,7 +1661,8 @@ private struct ProjectPageView: View {
       // `ListPageView.header`). Le `NotesBox`, lui, est un FOND : il part du bord de section et
       // son retrait intérieur de 10 pt ramène « Notes » sur la même colonne que l'anneau. Sans ce
       // retrait ici, l'anneau tombait 10 pt à gauche de l'encadré.
-      .padding(.leading, rowInset)
+      // ×2 : même ajustement que `ListPageView.header`, pour que les deux pages restent une seule.
+      .padding(.leading, rowInset * 2)
 
       // Même encadré que la page de liste (cf. `NotesBox`).
       NotesBox(notes: $project.notes, font: .app(), textColor: .labelColor, focused: $notesFocused)

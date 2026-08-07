@@ -24,6 +24,7 @@ struct HeaderRow: View {
   var onEndEditing: () -> Void
   var onMove: (TodoList) -> Void
   var onCopy: () -> Void
+  var onDuplicate: () -> Void
   var onDelete: () -> Void
 
   @FocusState private var titleFocused: Bool
@@ -260,6 +261,7 @@ struct HeaderRow: View {
     } label: {
       Text("Déplacer vers…")
     }
+    Button("Dupliquer", action: onDuplicate)
     Divider()
     Button("Supprimer", role: .destructive, action: onDelete)
   }

@@ -276,6 +276,47 @@ final class SidebarDropTests: XCTestCase {
     XCTAssertFalse(filing.isAirborne)
   }
 
+  /// Empoignée à son EXTRÉMITÉ droite (loin de son bord avant), la ligne franchit la sidebar bien
+  /// avant que le curseur ne l'atteigne — sauf si `isAirborne` vise le curseur (`grabOffsetX`),
+  /// pas le bord de la rangée. Cf. les Pièges de CLAUDE.md, mesuré le 7 août 2026.
+  @MainActor
+  func testIsAirborneFollowsTheGrabPointNotTheRowEdge() {
+    let filing = SidebarDrop()
+    filing.sidebarEdge = 282
+    // Ligne large (400 pt), empoignée à 380 pt de son bord avant (proche de son bord droit).
+    filing.arm(grabOffsetX: 380)
+
+    // Le bord avant a déjà franchi la sidebar, mais le point d'empoignade (280 + 380 = 660) ne l'a
+    // pas encore atteinte.
+    filing.track(CGRect(x: 100, y: 100, width: 400, height: 30))
+    XCTAssertFalse(filing.isAirborne, "le curseur (à 480) n'a pas encore franchi le bord (282)")
+
+    filing.track(CGRect(x: -100, y: 100, width: 400, height: 30))
+    XCTAssertTrue(filing.isAirborne, "le curseur (à 280) a franchi le bord (282)")
+  }
+
+  /// Même correction, côté cible : sans elle, un dépôt empoigné loin du bord de sa ligne pouvait
+  /// résoudre vers une liste que le curseur ne survole pourtant plus.
+  @MainActor
+  func testHoveredFollowsTheGrabPointNotTheRowEdge() throws {
+    let ctx = try makeContext()
+    let list = TodoList(title: "cible")
+    ctx.insert(list)
+
+    let filing = SidebarDrop()
+    filing.measured([SidebarFiling.dropRow(for: list): CGRect(x: 0, y: 0, width: 200, height: 30)])
+    // Bord avant (40) dans la ligne — mais la ligne tirée fait 400 pt et on l'a empoignée à 380 pt
+    // de ce bord : le curseur (40 + 380 = 420) n'y est plus.
+    filing.track(CGRect(x: 40, y: 0, width: 400, height: 30))
+
+    filing.arm(grabOffsetX: 380)
+    XCTAssertNil(filing.hovered, "le curseur est hors de la ligne, même si le bord avant y est encore")
+
+    filing.arm(grabOffsetX: 0)
+    XCTAssertEqual(
+      filing.hovered, SidebarFiling.dropRow(for: list), "sans décalage, le bord avant seul vise juste")
+  }
+
   /// Sidebar repliée : son bord est à 0, donc plus rien ne peut voler — et c'est juste, il n'y a
   /// aucune destination à viser.
   @MainActor

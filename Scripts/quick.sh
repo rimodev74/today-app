@@ -57,6 +57,17 @@ gh auth status >/dev/null 2>&1 || {
   exit 1
 }
 
+# Le DROIT d'écrire, pas seulement d'être connecté : `gh` a plusieurs comptes et
+# un seul est actif. Actif sur le mauvais, tout le build passe (2 min) et c'est
+# la création de la release qui échoue — sur un message trompeur parlant du scope
+# « workflow », alors que c'est un 403 de permission.
+gh api repos/rimodev74/today-dist -q '.permissions.push' 2>/dev/null | grep -qx true || {
+  echo "✗ Le compte gh actif ($(gh api user -q .login 2>/dev/null || echo '?')) ne peut pas écrire"
+  echo "  dans rimodev74/today-dist. Bascule dessus :"
+  echo "      gh auth switch -u rimodev74 -h github.com"
+  exit 1
+}
+
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 [[ "${BRANCH}" != "HEAD" ]] || { echo "✗ HEAD détachée : place-toi sur une branche."; exit 1; }
 
