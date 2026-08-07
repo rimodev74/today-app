@@ -84,29 +84,41 @@ struct HeaderRow: View {
     // de plus en plus transparents). Le compte réel vit dans la bulle rouge, pas dans la pile.
     let layers = min(max(attachedTaskCount, 0), 2)
     VStack(alignment: .leading, spacing: 6) {
-      ZStack(alignment: .topLeading) {
-        // Calques en cascade DERRIÈRE la pilule (dessinés avant elle), décalés vers le bas et
-        // rétrécis. Chacun est une pilule périwinkle OPAQUE globalement atténuée : nettement visible
-        // (pas noyée comme un simple lavande translucide) mais de plus en plus transparente.
-        if isDragging {
-          // Du plus LOINTAIN au plus proche : le calque le plus décalé/clair est dessiné en premier
-          // (donc DERRIÈRE), sinon il passait par-dessus le plus proche et la cascade s'inversait.
-          ForEach(Array((0..<layers).reversed()), id: \.self) { i in
-            let step = CGFloat(i + 1)
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .fill(i == 0 ? Self.dragLayer1 : Self.dragLayer2)
-              // Plus étroit (centré) + décalé vers le bas → l'empilement de papiers. Ombre propre et
-              // douce par calque : chaque carte se détache de celle du dessous, proprement.
-              .padding(.horizontal, step * Self.layerInset)
-              .offset(y: step * Self.layerStep)
-              .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-              // Apparition/disparition NETTE (pas de fondu) : au drop, un fondu de sortie suivrait
-              // l'en-tête en vol et se lirait comme une doublure fantôme.
-              .transition(.identity)
+      // Calques en cascade DERRIÈRE la pilule, décalés vers le bas et rétrécis. Chacun est une
+      // pilule périwinkle OPAQUE globalement atténuée : nettement visible (pas noyée comme un
+      // simple lavande translucide) mais de plus en plus transparente.
+      //
+      // En `.background` de la pilule et NON en frères dans un `ZStack`, et ce n'est pas cosmétique.
+      // Un `RoundedRectangle` est une forme : flexible dans les DEUX dimensions, elle prend la
+      // taille qu'on lui propose. Frère de la pilule, elle proposait donc sa propre hauteur au
+      // conteneur — et comme ces calques n'existent QUE pendant le drag, la rangée d'en-tête
+      // devenait flexible à cet instant précis. Depuis que la page est en `VStack` (cf. l'en-tête de
+      // `TaskListView`), la hauteur restante est distribuée aux enfants flexibles : l'en-tête tirée
+      // avalait tout l'espace libre de la page et s'affichait en pavé bleu géant, le trou
+      // d'insertion mesurant du même coup n'importe quoi. Invisible en `LazyVStack`, qui ne
+      // distribue rien. Un `.background`, lui, reçoit la taille de ce qu'il habille : les calques
+      // valent exactement la pilule, quoi qu'il arrive.
+      pill(active: active)
+        .background(alignment: .topLeading) {
+          if isDragging {
+            // Du plus LOINTAIN au plus proche : le calque le plus décalé/clair est dessiné en
+            // premier (donc DERRIÈRE), sinon il passait par-dessus le plus proche et la cascade
+            // s'inversait.
+            ForEach(Array((0..<layers).reversed()), id: \.self) { i in
+              let step = CGFloat(i + 1)
+              RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(i == 0 ? Self.dragLayer1 : Self.dragLayer2)
+                // Plus étroit (centré) + décalé vers le bas → l'empilement de papiers. Ombre propre
+                // et douce par calque : chaque carte se détache de celle du dessous, proprement.
+                .padding(.horizontal, step * Self.layerInset)
+                .offset(y: step * Self.layerStep)
+                .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+                // Apparition/disparition NETTE (pas de fondu) : au drop, un fondu de sortie suivrait
+                // l'en-tête en vol et se lirait comme une doublure fantôme.
+                .transition(.identity)
+            }
           }
         }
-        pill(active: active)
-      }
     }
     .padding(.top, Self.topInset)
     .padding(.bottom, Self.bottomInset)
