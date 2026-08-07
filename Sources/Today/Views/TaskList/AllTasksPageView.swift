@@ -151,7 +151,7 @@ struct AllTasksPageView: View {
         }
         .buttonStyle(.plain)
         // Même retrait que les sections de tâches juste au-dessus (cf. `sectionView`).
-        .padding(.horizontal, rowInset)
+        .padding(.horizontal, rowInset * 2)
 
         if calendarExpanded {
           VStack(alignment: .leading, spacing: 6) {
@@ -234,10 +234,11 @@ struct AllTasksPageView: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Même retrait que les lignes (`rowInset`, À L'INTÉRIEUR de leur propre padding) : sans
-        // lui, l'icône du bandeau partait du bord de la page pendant que les cases des tâches
-        // restaient décalées de `rowInset` — un désalignement visible d'un coup d'œil.
-        .padding(.horizontal, rowInset)
+        // Même retrait que les lignes, qui portent `rowInset` DEUX fois : une fois autour de leur
+        // fond, une fois à l'intérieur (cf. `TaskRow`). Un seul `rowInset` laissait l'icône du
+        // bandeau 10 pt à gauche des cases — le désalignement visible d'un coup d'œil, et la même
+        // correction que le titre de page (cf. `header`).
+        .padding(.horizontal, rowInset * 2)
 
         if open {
           rowsView(of: section, offsets: offsets)

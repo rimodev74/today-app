@@ -217,10 +217,10 @@ struct TaskRow: View {
     // Sélection et normal partagent le même padding — le texte ne saute donc pas au clic simple.
     // Bas en édition : les sous-tâches sont désormais le dernier élément de la carte (après
     // l'éditeur), il leur faut une respiration jusqu'au bord bas.
-    .padding(.top, isEditing ? 16 : 6)
+    .padding(.top, isEditing ? 16 : 4)
     // Au repos, une tâche DÉPLIÉE finit sur une rangée de sous-tâche et non sur son titre : il lui
-    // faut un peu plus de fond que les 6 pt d'une ligne simple. Repliée, elle EST une ligne simple.
-    .padding(.bottom, isEditing ? 14 : (showsSubtasks ? 10 : 6))
+    // faut un peu plus de fond que les 4 pt d'une ligne simple. Repliée, elle EST une ligne simple.
+    .padding(.bottom, isEditing ? 14 : (showsSubtasks ? 8 : 4))
     .padding(.horizontal, isEditing ? 16 : rowInset)
     .background { rowBackground }
     // Repos/sélection : décale tout le bloc (fond ET case) de `rowInset` vers la droite — pas de
