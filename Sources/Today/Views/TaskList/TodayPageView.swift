@@ -97,7 +97,7 @@ struct TodayPageView: View {
 
           ForEach(rows) { task in
             taskRow(
-              for: task, offset: offsets[task.persistentModelID] ?? .zero, draggable: true,
+              for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, draggable: true,
               rows: rows)
           }
           newTaskRow

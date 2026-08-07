@@ -795,10 +795,11 @@ private struct ListPageView: View {
   /// déplaçable de plus dans la séquence — c'est cette uniformité qui lui garantit une continuité
   /// exacte au drop (même principe que la rangée « + Nouvelle liste » de la sidebar, cf.
   /// `SidebarView.RowKey.addList`, qui participe déjà à son propre moteur de réordonnancement).
-  fileprivate enum RowKey: Hashable {
-    case task(PersistentIdentifier)
-    case field(String)
-  }
+  /// La clé de ligne est désormais celle du moteur partagé (`TaskRowKey`), pas un type propre à
+  /// cette page. C'était un doublon exact — et l'une des trois raisons pour lesquelles ce fichier
+  /// a dû garder son propre moteur de glissement. L'alias garde les points d'appel intacts le
+  /// temps de la bascule ; il partira avec eux.
+  fileprivate typealias RowKey = TaskRowKey
 
   /// Séquence physique complète, dans l'ordre d'affichage : chaque bloc = son en-tête (s'il y en a
   /// une), ses tâches, puis son champ « Nouvelle tâche ». Base commune du calcul de décalage pour

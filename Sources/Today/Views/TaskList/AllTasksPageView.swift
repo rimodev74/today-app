@@ -183,7 +183,7 @@ struct AllTasksPageView: View {
   /// Un seul rendu pour toutes les sections — y compris « Aujourd'hui », qui s'ouvre par défaut
   /// mais se replie comme les autres si l'on ne veut voir que ses projets.
   @ViewBuilder private func sectionView(
-    _ section: AllTasksPage.Section, offsets: [PersistentIdentifier: CGSize]
+    _ section: AllTasksPage.Section, offsets: [TaskRowKey: CGSize]
   ) -> some View {
     if section.hasHeader {
       // **Dépliant fait main, et PAS un `DisclosureGroup`** — le seul écart au « natif d'abord » du
@@ -265,13 +265,13 @@ struct AllTasksPageView: View {
   /// déplacement-là existe déjà, et il est plus sûr — le menu ▸ *Déplacer vers…* et le sélecteur
   /// *Quand…* disent explicitement ce que le glisser devait deviner.
   private func rowsView(
-    of section: AllTasksPage.Section, offsets: [PersistentIdentifier: CGSize]
+    of section: AllTasksPage.Section, offsets: [TaskRowKey: CGSize]
   ) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(section.tasks) { task in
         taskRow(
           for: task, isToday: section.kind == .today,
-          offset: offsets[task.persistentModelID] ?? .zero, rows: section.tasks)
+          offset: offsets[.task(task.persistentModelID)] ?? .zero, rows: section.tasks)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)

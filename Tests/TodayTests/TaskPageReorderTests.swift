@@ -14,10 +14,11 @@ final class TaskPageReorderTests: XCTestCase {
     [TaskItem(title: "a"), TaskItem(title: "b"), TaskItem(title: "c")]
   }
 
-  private func frames(_ rows: [TaskItem]) -> [PersistentIdentifier: CGRect] {
-    var result: [PersistentIdentifier: CGRect] = [:]
+  private func frames(_ rows: [TaskItem]) -> [TaskRowKey: CGRect] {
+    var result: [TaskRowKey: CGRect] = [:]
     for (index, task) in rows.enumerated() {
-      result[task.persistentModelID] = CGRect(x: 0, y: CGFloat(index) * 20, width: 100, height: 20)
+      result[.task(task.persistentModelID)] = CGRect(
+        x: 0, y: CGFloat(index) * 20, width: 100, height: 20)
     }
     return result
   }
@@ -65,8 +66,8 @@ final class TaskPageReorderTests: XCTestCase {
     reorder.drag(CGSize(width: 0, height: 45))
 
     let offsets = reorder.offsets()
-    XCTAssertEqual(offsets[rows[0].persistentModelID]?.height, 45)
-    XCTAssertEqual(offsets[rows[1].persistentModelID]?.height, 45)
+    XCTAssertEqual(offsets[.task(rows[0].persistentModelID)]?.height, 45)
+    XCTAssertEqual(offsets[.task(rows[1].persistentModelID)]?.height, 45)
   }
 
   /// **La place libérée est celle du groupe ENTIER**, pas de la seule ligne tirée : `others` doit
@@ -185,10 +186,12 @@ final class TaskPageReorderTests: XCTestCase {
     reorder.drag(CGSize(width: 0, height: 25))
 
     let offsets = reorder.offsets()
-    XCTAssertEqual(offsets[rows[0].persistentModelID]?.height, 25, "la ligne tirée suit le curseur")
     XCTAssertEqual(
-      offsets[rows[1].persistentModelID]?.height, -20, "la traversée remonte d'un cran")
-    XCTAssertEqual(offsets[rows[2].persistentModelID]?.height, 0, "hors du trajet : immobile")
+      offsets[.task(rows[0].persistentModelID)]?.height, 25, "la ligne tirée suit le curseur")
+    XCTAssertEqual(
+      offsets[.task(rows[1].persistentModelID)]?.height, -20, "la traversée remonte d'un cran")
+    XCTAssertEqual(
+      offsets[.task(rows[2].persistentModelID)]?.height, 0, "hors du trajet : immobile")
   }
 
   // MARK: Hors geste

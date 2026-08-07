@@ -21,7 +21,11 @@ import SwiftData
 /// liste où elle a atterri. C'est la même frontière que celle posée en tête de `Reorder.swift`.
 struct TaskPageReorder {
   /// Cadres des lignes dans le repère `taskPageSpace`, publiés par `measureTaskRow`.
-  private(set) var frames: [PersistentIdentifier: CGRect] = [:]
+  ///
+  /// Clés en `TaskRowKey` et non en identités de tâche : une page peut intercaler des rangées qui
+  /// ne sont pas des tâches (le champ « Nouvelle tâche » d'un bloc) et qui occupent pourtant de la
+  /// hauteur. Les pages qui n'ont que des tâches n'émettent que des `.task`.
+  private(set) var frames: [TaskRowKey: CGRect] = [:]
 
   /// Ce qui VOYAGE : la ligne empoignée, et ce qu'elle emporte.
   ///
@@ -81,7 +85,7 @@ struct TaskPageReorder {
   /// la seule question à laquelle l'ordre des lignes ne répond pas, quand la section visée est vide.
   /// Le calcul est déjà celui de `layout()`, sorti ici pour ne pas être réécrit à l'identique.
   var draggedCenterY: CGFloat? {
-    guard let dragging, let frame = frames[dragging] else { return nil }
+    guard let dragging, let frame = frames[.task(dragging)] else { return nil }
     return frame.midY + translation.height
   }
 
@@ -92,7 +96,7 @@ struct TaskPageReorder {
   /// REPOS boucle (décalage → cadre → décalage…), ce que SwiftUI signale par « update multiple
   /// times per frame » et que l'œil voit comme une saccade. Le layout de repos, lui, ne bouge pas
   /// d'un glissement : les cadres pris avant l'empoignade restent valides jusqu'au relâchement.
-  mutating func measured(_ new: [PersistentIdentifier: CGRect]) {
+  mutating func measured(_ new: [TaskRowKey: CGRect]) {
     guard !isDragging else { return }
     frames = new
   }
@@ -137,8 +141,8 @@ struct TaskPageReorder {
 
   /// La mise en page du glissement dans `rows`, l'ordre affiché. `nil` hors glissement, ou tant que
   /// la ligne tirée n'est pas mesurée.
-  func layout() -> ReorderLayout<PersistentIdentifier>? {
-    guard let dragging, let dragFrame = frames[dragging],
+  func layout() -> ReorderLayout<TaskRowKey>? {
+    guard let dragging, let dragFrame = frames[.task(dragging)],
       let origin = rows.firstIndex(where: { $0.persistentModelID == dragging })
     else { return nil }
 
@@ -151,10 +155,11 @@ struct TaskPageReorder {
     // créneau sert de pivot (cf. `ReorderTarget.byBoundary`).
     let raw = ReorderTarget.byBoundary(
       center: dragFrame.midY + translation.height,
-      centers: rows.map { frames[$0.persistentModelID]?.midY })
+      centers: rows.map { frames[.task($0.persistentModelID)]?.midY })
 
     return ReorderLayout(
-      others: rows.map(\.persistentModelID).filter { !carried.contains($0) },
+      others: rows.filter { !carried.contains($0.persistentModelID) }
+        .map { TaskRowKey.task($0.persistentModelID) },
       origin: origin,
       insert: insertIndex(from: raw, carried: carried),
       unit: dragFrame.height)
@@ -182,18 +187,18 @@ struct TaskPageReorder {
   /// Le décalage de CHAQUE ligne, en un passage : la ligne tirée suit le curseur, les autres
   /// s'écartent pour ouvrir le trou. À calculer une fois par rendu — une recherche par rangée
   /// coûterait un balayage quadratique à chaque image.
-  func offsets() -> [PersistentIdentifier: CGSize] {
+  func offsets() -> [TaskRowKey: CGSize] {
     guard let layout = layout() else { return [:] }
     var result = layout.offsets().mapValues { CGSize(width: 0, height: $0) }
     // Tout le groupe suit le curseur, pas seulement la ligne tirée. Une page qui estompe ses
     // passagères (cf. `carries`) ne le verra pas ; une page qui les montre, si.
-    for id in dragged { result[id] = translation }
+    for id in dragged { result[.task(id)] = translation }
     return result
   }
 
   /// Le trou d'insertion, dans le repère des cadres. `nil` s'il n'y a rien à montrer.
   func placeholder() -> CGRect? {
-    guard let dragging, let dragFrame = frames[dragging], let layout = layout(),
+    guard let dragging, let dragFrame = frames[.task(dragging)], let layout = layout(),
       let top = layout.placeholderTop(frames: frames, draggedTop: dragFrame.minY)
     else { return nil }
     return CGRect(x: dragFrame.minX, y: top, width: dragFrame.width, height: dragFrame.height)

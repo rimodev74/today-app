@@ -215,10 +215,10 @@ let taskPageSpace = "taskPage"
 /// mesure. C'est le pendant exact de `TaskPageBlock`, qui répond, lui, à « quelles lignes, dans
 /// quel ordre ».
 struct TaskRowFrameKey: PreferenceKey {
-  static let defaultValue: [PersistentIdentifier: CGRect] = [:]
+  static let defaultValue: [TaskRowKey: CGRect] = [:]
   static func reduce(
-    value: inout [PersistentIdentifier: CGRect],
-    nextValue: () -> [PersistentIdentifier: CGRect]
+    value: inout [TaskRowKey: CGRect],
+    nextValue: () -> [TaskRowKey: CGRect]
   ) {
     value.merge(nextValue()) { _, new in new }
   }
@@ -250,7 +250,7 @@ extension View {
       GeometryReader { proxy in
         Color.clear.preference(
           key: TaskRowFrameKey.self,
-          value: [task.persistentModelID: proxy.frame(in: .named(taskPageSpace))])
+          value: [.task(task.persistentModelID): proxy.frame(in: .named(taskPageSpace))])
       }
     }
   }
@@ -427,9 +427,9 @@ struct TaskPageBase: ViewModifier {
 
   /// Le repli de secours pour une page SANS glissement (« À venir », « Archives », une liste) : elle
   /// n'a pas de `TaskPageReorder` à elle, mais elle a droit au clic dans le vide.
-  @State private var ownFrames: [PersistentIdentifier: CGRect] = [:]
+  @State private var ownFrames: [TaskRowKey: CGRect] = [:]
 
-  private var rowFrames: [PersistentIdentifier: CGRect] {
+  private var rowFrames: [TaskRowKey: CGRect] {
     reorder?.wrappedValue.frames ?? ownFrames
   }
 
@@ -439,7 +439,7 @@ struct TaskPageBase: ViewModifier {
   private func selectAtRightClick(_ point: CGPoint) {
     guard
       let task = rows.first(where: {
-        rowFrames[$0.persistentModelID]?.contains(point) == true
+        rowFrames[.task($0.persistentModelID)]?.contains(point) == true
       })
     else { return }
     withAnimation(taskSelectFade) { focus.select(task) }
