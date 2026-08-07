@@ -63,6 +63,36 @@ struct TaskPageReorder {
   /// quatre pages intelligentes ; seule la page d'une liste intercale des champs.
   private(set) var physicalRows: [TaskRowKey] = []
 
+  /// Comment viser quand ce qui voyage est un BLOC et non une ligne. `nil` = visée ligne à ligne.
+  private(set) var blockTargeting: BlockTargeting?
+
+  /// La visée d'un groupe qui voyage REPLIÉ — une en-tête de section et son bloc.
+  ///
+  /// Deux différences avec une ligne seule, et elles vont ensemble :
+  ///
+  /// - **on se pose au DÉBUT d'un bloc, jamais au milieu.** Un bloc est un tout ; l'insérer entre
+  ///   deux tâches d'un autre bloc ne veut rien dire. Même politique que le glisser d'un projet
+  ///   dans la barre latérale, d'où `ReorderTarget.byBlockStart`, partagé avec elle ;
+  /// - **le bloc se REPLIE sous le curseur** : ses tâches s'estompent, il ne reste que l'en-tête.
+  ///   Tout ce qui était sous lui remonte d'autant (`collapse`), et les centres des blocs candidats
+  ///   doivent être corrigés de ce repli — sinon on vise le mauvais bloc dès qu'on descend.
+  ///
+  /// **L'énumération des blocs appartient à la PAGE**, pas au moteur : lui ne connaît qu'une
+  /// séquence de lignes, elle seule sait ce qui fait un bloc. C'est la frontière posée en tête de
+  /// `Reorder.swift` — l'arithmétique est commune, la règle métier ne l'est pas.
+  struct BlockTargeting {
+    /// Le début d'un bloc candidat : son rang dans la séquence des tâches restantes, et le centre
+    /// de son pavé au repos, DÉJÀ corrigé du repli par la page.
+    struct Candidate {
+      let insert: Int
+      let center: CGFloat
+    }
+
+    let candidates: [Candidate]
+    /// Hauteur que le groupe perd en se repliant. 0 s'il ne se replie pas.
+    let collapse: CGFloat
+  }
+
   init() {}
 
   var isDragging: Bool { !dragged.isEmpty }
@@ -121,10 +151,10 @@ struct TaskPageReorder {
   /// empoignée ; un appel avec un groupe vide ne fait rien plutôt que d'armer un geste sans sujet.
   mutating func track(
     _ carrying: [TaskItem], by translation: CGSize, in rows: [TaskItem],
-    physical: [TaskRowKey] = []
+    physical: [TaskRowKey] = [], blocks: BlockTargeting? = nil
   ) {
     guard !carrying.isEmpty else { return }
-    if !isDragging { begin(carrying, in: rows, physical: physical) }
+    if !isDragging { begin(carrying, in: rows, physical: physical, blocks: blocks) }
     drag(translation)
   }
 
@@ -134,11 +164,15 @@ struct TaskPageReorder {
 
   /// `physical` : la séquence complète des lignes qui occupent de la hauteur, champs compris. À
   /// omettre quand la page n'a que des tâches — les deux mises en page se confondent alors.
-  mutating func begin(_ carrying: [TaskItem], in rows: [TaskItem], physical: [TaskRowKey] = []) {
+  mutating func begin(
+    _ carrying: [TaskItem], in rows: [TaskItem], physical: [TaskRowKey] = [],
+    blocks: BlockTargeting? = nil
+  ) {
     dragged = carrying.map(\.persistentModelID)
     translation = .zero
     self.rows = rows
     physicalRows = physical
+    blockTargeting = blocks
   }
 
   mutating func drag(_ translation: CGSize) {
@@ -151,6 +185,7 @@ struct TaskPageReorder {
     translation = .zero
     rows = []
     physicalRows = []
+    blockTargeting = nil
   }
 
   /// La mise en page du glissement dans `rows`, l'ordre affiché. `nil` hors glissement, ou tant que
@@ -164,16 +199,32 @@ struct TaskPageReorder {
     // seul tenant que `ReorderLayout` réinsère. `origin`, lui, reste l'index de la LIGNE TIRÉE dans
     // la séquence complète — pour un groupe contigu, c'est aussi le rang de la place qu'il libère.
     let carried = Set(dragged)
+    let others = rows.filter { !carried.contains($0.persistentModelID) }
+      .map { TaskRowKey.task($0.persistentModelID) }
+    let center = dragFrame.midY + translation.height
+
+    // Un BLOC se pose au début d'un autre bloc, jamais au milieu — et il voyage replié, ce que
+    // `collapse` fait remonter à tout ce qui était sous lui (cf. `BlockTargeting`).
+    if let blockTargeting {
+      return ReorderLayout(
+        others: others,
+        origin: origin,
+        insert: ReorderTarget.byBlockStart(
+          center: center,
+          blocks: blockTargeting.candidates.map { (insert: $0.insert, center: $0.center) },
+          fallback: others.count),
+        unit: dragFrame.height,
+        collapse: blockTargeting.collapse)
+    }
 
     // Visée par frontières, sur la séquence de repos COMPLÈTE — le groupe y compris, dont le
     // créneau sert de pivot (cf. `ReorderTarget.byBoundary`).
     let raw = ReorderTarget.byBoundary(
-      center: dragFrame.midY + translation.height,
+      center: center,
       centers: rows.map { frames[.task($0.persistentModelID)]?.midY })
 
     return ReorderLayout(
-      others: rows.filter { !carried.contains($0.persistentModelID) }
-        .map { TaskRowKey.task($0.persistentModelID) },
+      others: others,
       origin: origin,
       insert: insertIndex(from: raw, carried: carried),
       unit: dragFrame.height)
@@ -197,6 +248,10 @@ struct TaskPageReorder {
   /// quelle. Les quatre pages intelligentes sont dans ce cas.
   func rowLayout() -> ReorderLayout<TaskRowKey>? {
     guard let tasks = layout() else { return nil }
+    // Un BLOC qui voyage n'a qu'un espace : pendant son transport, tous les champs « Nouvelle
+    // tâche » sont masqués (ils encombreraient le déplacement), et les voisines se calculent donc
+    // en tâches seulement. Les deux mises en page sont alors la même.
+    guard blockTargeting == nil else { return tasks }
     guard !physicalRows.isEmpty else { return tasks }
     guard let dragging, let dragFrame = frames[.task(dragging)] else { return nil }
 

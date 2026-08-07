@@ -174,6 +174,75 @@ final class TaskPageReorderTests: XCTestCase {
     XCTAssertEqual(reorder.rowLayout()?.insert, reorder.layout()?.insert)
   }
 
+  // MARK: Un BLOC qui voyage — visée bloc à bloc, et repli
+
+  /// Deux blocs de section, cinq lignes de 20 pt (centres 10, 30, 50, 70, 90) :
+  ///
+  ///     hA (en-tête)  0..20     ┐ bloc A
+  ///     a1           20..40     │
+  ///     a2           40..60     ┘
+  ///     hB (en-tête) 60..80     ┐ bloc B
+  ///     b1           80..100    ┘
+  private func blocks() -> [TaskItem] {
+    [
+      TaskItem(title: "hA", isHeader: true), TaskItem(title: "a1"), TaskItem(title: "a2"),
+      TaskItem(title: "hB", isHeader: true), TaskItem(title: "b1"),
+    ]
+  }
+
+  /// Empoigne le bloc A (en-tête + ses deux tâches). Le bloc B est le seul candidat : son pavé
+  /// s'étend de 60 à 100, centre 80, dont on retire le repli du bloc tiré (60 − 20 = 40) puisqu'il
+  /// est SOUS lui. Frontière effective : 40.
+  private func armedBlock(_ rows: [TaskItem]) -> TaskPageReorder {
+    var reorder = TaskPageReorder()
+    reorder.measured(frames(rows))
+    reorder.begin(
+      Array(rows[0..<3]), in: rows,
+      blocks: .init(candidates: [.init(insert: 0, center: 40)], collapse: 40))
+    return reorder
+  }
+
+  /// **On se pose au DÉBUT d'un bloc, jamais au milieu.** Le bloc A passe sous le bloc B d'un seul
+  /// tenant : il ne peut pas s'insérer entre `hB` et `b1`.
+  func testABlockLandsAtTheStartOfAnotherBlock() {
+    let rows = blocks()
+    var reorder = armedBlock(rows)
+    reorder.drag(CGSize(width: 0, height: 45))  // centre 10 + 45 = 55, au-delà de 40
+
+    XCTAssertEqual(reorder.dropped()?.map(\.title), ["hB", "b1", "hA", "a1", "a2"])
+  }
+
+  /// Sous la frontière du bloc candidat, rien ne bouge — même en ayant déjà traversé des tâches.
+  /// C'est toute la différence avec une visée ligne à ligne.
+  func testStayingAboveTheBlockBoundaryKeepsTheOrder() {
+    let rows = blocks()
+    var reorder = armedBlock(rows)
+    reorder.drag(CGSize(width: 0, height: 20))  // centre 30, sous 40
+
+    XCTAssertEqual(reorder.dropped()?.map(\.title), ["hA", "a1", "a2", "hB", "b1"])
+  }
+
+  /// **Le repli, à lui seul, fait remonter ce qui était dessous.** Dès l'empoignade et sans avoir
+  /// bougé d'un point : le bloc se réduit à son en-tête, les 40 pt de ses tâches sont rendus.
+  func testFoldingAloneLiftsWhatWasBelow() {
+    let rows = blocks()
+    var reorder = armedBlock(rows)
+    reorder.drag(.zero)
+
+    XCTAssertEqual(reorder.offsets()[.task(rows[3].persistentModelID)]?.height, -40)
+  }
+
+  /// Et quand le bloc passe dessous, les deux termes s'ajoutent : le repli (40) plus l'écartement
+  /// d'une hauteur d'en-tête (20).
+  func testFoldingAndSteppingAsideAddUp() {
+    let rows = blocks()
+    var reorder = armedBlock(rows)
+    reorder.drag(CGSize(width: 0, height: 45))
+
+    XCTAssertEqual(reorder.offsets()[.task(rows[3].persistentModelID)]?.height, -60)
+    XCTAssertEqual(reorder.offsets()[.task(rows[4].persistentModelID)]?.height, -60)
+  }
+
   // MARK: Ce qui est gelé
 
   /// **Le gel des cadres.** `frame(in:)` inclut le décalage appliqué aux lignes tirées : accepter
