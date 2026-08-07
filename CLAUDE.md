@@ -505,6 +505,85 @@ les métriques `gutter`/`rowInset`. Une page se construit AVEC ces briques, jama
 - `// ponytail:` marque une simplification délibérée et son plafond.
 - Pas de trailer `Co-Authored-By` ni de mention d'outil dans les commits.
 
+## Le contrôle systématique — à relire AVANT d'écrire, pas après
+
+Ce ne sont pas des bonnes intentions : **chaque ligne ci-dessous a coûté un bug MESURÉ**, et la
+plupart la même journée, le 6 août 2026. Un correctif ou une fonctionnalité qui arrive se confronte
+à cette liste AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
+
+### 1. Ce qui se rend à chaque image
+
+- **Une page qui se réordonne au doigt se construit EN ENTIER.** Jamais `LazyVStack` : les décalages
+  font entrer et sortir les rangées du viewport paresseux, qui les détruit et les reconstruit en
+  boucle, menus contextuels compris. Mesuré : fil principal **saturé à 100 % contre 9 %**.
+- **Une propriété calculée d'un `@Model` ne se lit JAMAIS depuis une rangée** — `progress`,
+  `remainingCount`, `orderedTasks`… Chaque lecture traverse SwiftData. Elle se calcule UNE fois en
+  tête du `body` qui rend la collection, puis se distribue (cf. `SidebarCounts`, `TodayPage.build`).
+- **Le corps d'une vue qui porte un `@Query` se rejoue bien plus souvent qu'on ne le croit** :
+  SwiftData l'invalide sans qu'AUCUNE écriture n'ait lieu (vérifié — ni `didSave`, ni `willSave`, ni
+  `ObjectsDidChange`). Il doit donc être **bon marché**, pas rare.
+- Pour savoir QUI invalide : `Self._printChanges()`. Un `sample` dit où part le temps, jamais quelle
+  dépendance a bougé.
+
+### 2. Deux pièges de layout que le compilateur ne voit pas
+
+- **`VStack` ne propose pas sa largeur à ses enfants**, contrairement à `LazyVStack` : chacun se
+  réduit à sa taille idéale. Invisible sur du texte (qui a une largeur intrinsèque), **fatal sur un
+  `TextField` focalisé** — son rendu passe au field editor d'AppKit, de largeur idéale nulle, et le
+  champ disparaît purement et simplement. D'où une largeur EXPLICITE ; `maxWidth: .infinity` ne
+  résout rien quand la proposition entrante est déjà indéterminée.
+- **`VStack` distribue la hauteur restante à ses enfants FLEXIBLES.** Une forme (`RoundedRectangle`,
+  `Circle`, `Capsule`) est flexible dans les deux dimensions : posée en FRÈRE dans un `ZStack`, elle
+  fait gonfler sa rangée jusqu'à avaler la page. Une décoration se pose en `.background` /
+  `.overlay` de ce qu'elle habille — elle en reçoit alors la taille. Jamais en frère.
+
+### 3. Les animations
+
+- **Une transition d'état est déclenchée par la PAGE, en `withAnimation`.** Un `.animation(value:)`
+  posé sur la rangée ne couvre que ce qui le PRÉCÈDE dans la chaîne : le contenu part sur une
+  courbe, le cadre sur une autre, et la carte se déforme en s'ouvrant.
+- Un `.animation(value:)` ne se justifie que pour un changement qu'AUCUNE transaction de page ne
+  couvre — une relation SwiftData notifiée hors transaction, un survol local à la rangée.
+- Une courbe partagée (`taskInsert`, `taskFlow`, `disclosureFlow`, `taskDrop`) est partagée : la
+  changer change TOUTES les pages. Si le besoin est local, il faut une courbe nommée, pas un
+  ajustement en douce de celle des autres.
+
+### 4. Les fenêtres
+
+- **Un popover est une FENÊTRE, et SwiftUI la présente depuis le LAYOUT.** Dans cette app, ça tue le
+  process. Une palette, un sélecteur, un panneau se révèlent DANS la fenêtre.
+
+### 5. Le fil principal
+
+- **Rien de synchrone vers un service système sur le fil qui dessine.** EventKit interrogé par
+  identifiant est un aller-retour XPC bloquant : 97 échantillons de fil principal gelés, app AU
+  REPOS. Une passe qui interroge N éléments fait UNE requête asynchrone, pas N.
+
+### 6. Ce qui doit rester vrai après
+
+- `swift build` et `swift test` verts, **et le cliquet d'avertissements** (`FULL_WARNING_CHECK=1`).
+- **Un changement d'UI se REGARDE.** `screencapture` fonctionne, et un `.task` temporaire piloté par
+  une variable d'environnement rejoue un geste sans souris — c'est ainsi qu'ont été trouvés le titre
+  disparu en édition et le pavé bleu géant d'une en-tête tirée.
+- **Aucun banc de mesure ne se committe.**
+- Un commentaire devenu faux se corrige DANS le même commit. Ce fichier a menti sur cinq points ;
+  chacun a coûté une fausse piste.
+
+### 7. Quand REFUSER, et le dire
+
+Une demande qui exige l'un de ces points ne s'implémente pas en l'état :
+
+- rétablir `LazyVStack` sur une page qui glisse ;
+- lire un compteur de `@Model` par rangée « juste pour cette fois » ;
+- présenter un popover depuis un item de menu ;
+- poser un `.animation(value:)` sur une rangée dont la page pilote déjà l'état ;
+- appeler un service système en synchrone depuis une vue.
+
+La conduite à tenir : **dire lequel des sept points est en cause, proposer l'alternative qui le
+respecte — et si elle n'existe pas, proposer d'ABANDONNER la fonctionnalité** plutôt que de la
+livrer en dette. Ce projet a déjà retiré trois faux-semblants pour cette raison : *une
+fonctionnalité est branchée ou elle n'existe pas.*
+
 ## Déjà essayé et REJETÉ — ne pas refaire
 
 Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont été DEUX fois, par oubli.
