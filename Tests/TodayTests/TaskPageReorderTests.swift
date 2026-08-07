@@ -108,6 +108,72 @@ final class TaskPageReorderTests: XCTestCase {
     XCTAssertEqual(solo.offsets().count, legacy.offsets().count)
   }
 
+  // MARK: Deux espaces — les lignes physiques, et les tâches seules
+
+  /// Une page de liste miniature : deux blocs, chacun terminé par sa rangée « Nouvelle tâche ».
+  /// Cinq lignes physiques de 20 pt (centres 10, 30, 50, 70, 90), mais seulement TROIS tâches.
+  ///
+  ///     .task(a)   0..20
+  ///     .task(b)   20..40
+  ///     .field(A)  40..60
+  ///     .task(c)   60..80
+  ///     .field(B)  80..100
+  private func pageWithFields() -> (
+    tasks: [TaskItem], physical: [TaskRowKey], frames: [TaskRowKey: CGRect]
+  ) {
+    let tasks = ["a", "b", "c"].map { TaskItem(title: $0) }
+    let physical: [TaskRowKey] = [
+      .task(tasks[0].persistentModelID), .task(tasks[1].persistentModelID), .field("A"),
+      .task(tasks[2].persistentModelID), .field("B"),
+    ]
+    var frames: [TaskRowKey: CGRect] = [:]
+    for (index, key) in physical.enumerated() {
+      frames[key] = CGRect(x: 0, y: CGFloat(index) * 20, width: 100, height: 20)
+    }
+    return (tasks, physical, frames)
+  }
+
+  private func armedPage() -> (TaskPageReorder, [TaskItem]) {
+    let page = pageWithFields()
+    var reorder = TaskPageReorder()
+    reorder.measured(page.frames)
+    reorder.begin([page.tasks[0]], in: page.tasks, physical: page.physical)
+    // « a » descend sous « b » : centre 10 + 25 = 35, au-delà de la frontière a|b (20).
+    reorder.drag(CGSize(width: 0, height: 25))
+    return (reorder, page.tasks)
+  }
+
+  /// **Un champ s'écarte comme une tâche.** C'est tout l'objet du second espace : il occupe de la
+  /// hauteur, donc une ligne qui le traverse doit le pousser. Le laisser immobile ouvrirait un trou
+  /// d'une hauteur de ligne de moins que celle qu'on transporte.
+  func testACreationFieldStepsAsideLikeATask() {
+    let (reorder, _) = armedPage()
+    let offsets = reorder.offsets()
+
+    XCTAssertEqual(offsets[.field("A")]?.height, -20, "le champ du bloc traversé remonte")
+    XCTAssertEqual(offsets[.field("B")]?.height, 0, "celui d'un bloc non traversé ne bouge pas")
+  }
+
+  /// L'ordre ÉCRIT, lui, ne connaît que les tâches : `sortIndex` n'en numérote pas d'autres, et un
+  /// champ n'a rien à faire dans la séquence persistée.
+  func testTheWrittenOrderIgnoresFields() {
+    let (reorder, tasks) = armedPage()
+
+    XCTAssertEqual(reorder.dropped()?.map(\.title), ["b", "a", "c"])
+    XCTAssertEqual(reorder.dropped()?.count, tasks.count, "aucun champ ne s'invite dans l'ordre")
+  }
+
+  /// Le cas des quatre pages intelligentes : sans séquence physique, il n'y a qu'un espace et les
+  /// deux mises en page sont la même. C'est ce qui leur permet d'ignorer complètement ce mécanisme.
+  func testWithoutAPhysicalSequenceBothLayoutsAreTheSame() {
+    let rows = rows()
+    var reorder = armed(rows, grabbing: 0)
+    reorder.drag(CGSize(width: 0, height: 25))
+
+    XCTAssertEqual(reorder.rowLayout()?.others, reorder.layout()?.others)
+    XCTAssertEqual(reorder.rowLayout()?.insert, reorder.layout()?.insert)
+  }
+
   // MARK: Ce qui est gelé
 
   /// **Le gel des cadres.** `frame(in:)` inclut le décalage appliqué aux lignes tirées : accepter

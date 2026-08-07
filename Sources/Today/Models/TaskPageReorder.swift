@@ -56,6 +56,13 @@ struct TaskPageReorder {
   /// rangée déposée partirait à l'opposé avant de revenir.
   private(set) var rows: [TaskItem] = []
 
+  /// La séquence PHYSIQUE figée à l'empoignade : TOUT ce qui occupe de la hauteur, dans l'ordre
+  /// d'affichage — les tâches et les rangées « Nouvelle tâche ».
+  ///
+  /// Vide = la page n'a que des tâches, et les deux mises en page se confondent. C'est le cas des
+  /// quatre pages intelligentes ; seule la page d'une liste intercale des champs.
+  private(set) var physicalRows: [TaskRowKey] = []
+
   init() {}
 
   var isDragging: Bool { !dragged.isEmpty }
@@ -112,9 +119,12 @@ struct TaskPageReorder {
 
   /// La variante qui emporte un groupe (une en-tête et son bloc). `carrying.first` est la ligne
   /// empoignée ; un appel avec un groupe vide ne fait rien plutôt que d'armer un geste sans sujet.
-  mutating func track(_ carrying: [TaskItem], by translation: CGSize, in rows: [TaskItem]) {
+  mutating func track(
+    _ carrying: [TaskItem], by translation: CGSize, in rows: [TaskItem],
+    physical: [TaskRowKey] = []
+  ) {
     guard !carrying.isEmpty else { return }
-    if !isDragging { begin(carrying, in: rows) }
+    if !isDragging { begin(carrying, in: rows, physical: physical) }
     drag(translation)
   }
 
@@ -122,10 +132,13 @@ struct TaskPageReorder {
     begin([task], in: rows)
   }
 
-  mutating func begin(_ carrying: [TaskItem], in rows: [TaskItem]) {
+  /// `physical` : la séquence complète des lignes qui occupent de la hauteur, champs compris. À
+  /// omettre quand la page n'a que des tâches — les deux mises en page se confondent alors.
+  mutating func begin(_ carrying: [TaskItem], in rows: [TaskItem], physical: [TaskRowKey] = []) {
     dragged = carrying.map(\.persistentModelID)
     translation = .zero
     self.rows = rows
+    physicalRows = physical
   }
 
   mutating func drag(_ translation: CGSize) {
@@ -137,6 +150,7 @@ struct TaskPageReorder {
     dragged = []
     translation = .zero
     rows = []
+    physicalRows = []
   }
 
   /// La mise en page du glissement dans `rows`, l'ordre affiché. `nil` hors glissement, ou tant que
@@ -165,6 +179,39 @@ struct TaskPageReorder {
       unit: dragFrame.height)
   }
 
+  /// La mise en page des lignes PHYSIQUES — celle qui produit les décalages visibles.
+  ///
+  /// **Deux espaces d'index, et c'est délibéré.** `layout()` raisonne en TÂCHES : c'est là que le
+  /// trou d'insertion s'ancre et que l'ordre s'écrit. Un trou calé sous un champ « Nouvelle tâche »
+  /// se poserait un cran trop bas (le champ est invisible pendant le transport), et `sortIndex` ne
+  /// numérote que des tâches. Mais les DÉCALAGES, eux, doivent compter toutes les lignes qui
+  /// occupent de la hauteur, champs compris : c'est cette uniformité qui donne au champ la même
+  /// continuité qu'aux autres au relâchement, sans traitement séparé.
+  ///
+  /// Le dépôt visé est le MÊME dans les deux espaces — on le traduit par l'IDENTITÉ de la ligne
+  /// devant laquelle on se pose, jamais par un calcul d'indices. Les deux séquences ont le même
+  /// ordre relatif ; c'est tout ce qu'il faut, et ça reste vrai quels que soient les champs
+  /// intercalés.
+  ///
+  /// Sans séquence physique, il n'y a qu'un espace : on rend la mise en page des tâches telle
+  /// quelle. Les quatre pages intelligentes sont dans ce cas.
+  func rowLayout() -> ReorderLayout<TaskRowKey>? {
+    guard let tasks = layout() else { return nil }
+    guard !physicalRows.isEmpty else { return tasks }
+    guard let dragging, let dragFrame = frames[.task(dragging)] else { return nil }
+
+    let carried = Set(dragged.map(TaskRowKey.task))
+    let others = physicalRows.filter { !carried.contains($0) }
+    guard let origin = physicalRows.firstIndex(of: .task(dragging)) else { return nil }
+
+    let insert =
+      tasks.insert < tasks.others.count
+      ? (others.firstIndex(of: tasks.others[tasks.insert]) ?? others.count)
+      : others.count
+
+    return ReorderLayout(others: others, origin: origin, insert: insert, unit: dragFrame.height)
+  }
+
   /// Traduit le rang rendu par `byBoundary` — qui compte dans la séquence COMPLÈTE — vers celui
   /// qu'attend `ReorderLayout`, qui compte dans `others`.
   ///
@@ -187,8 +234,10 @@ struct TaskPageReorder {
   /// Le décalage de CHAQUE ligne, en un passage : la ligne tirée suit le curseur, les autres
   /// s'écartent pour ouvrir le trou. À calculer une fois par rendu — une recherche par rangée
   /// coûterait un balayage quadratique à chaque image.
+  /// Sur la mise en page PHYSIQUE : un champ « Nouvelle tâche » s'écarte comme une ligne de tâche,
+  /// parce qu'il occupe de la hauteur comme elle (cf. `rowLayout`).
   func offsets() -> [TaskRowKey: CGSize] {
-    guard let layout = layout() else { return [:] }
+    guard let layout = rowLayout() else { return [:] }
     var result = layout.offsets().mapValues { CGSize(width: 0, height: $0) }
     // Tout le groupe suit le curseur, pas seulement la ligne tirée. Une page qui estompe ses
     // passagères (cf. `carries`) ne le verra pas ; une page qui les montre, si.
