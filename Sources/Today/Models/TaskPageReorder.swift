@@ -22,7 +22,22 @@ import SwiftData
 struct TaskPageReorder {
   /// Cadres des lignes dans le repère `taskPageSpace`, publiés par `measureTaskRow`.
   private(set) var frames: [PersistentIdentifier: CGRect] = [:]
-  private(set) var dragging: PersistentIdentifier?
+
+  /// Ce qui VOYAGE : la ligne empoignée, et ce qu'elle emporte.
+  ///
+  /// Une tâche voyage seule ; une EN-TÊTE de section emporte tout son bloc. C'est la seule chose
+  /// que la page d'une liste savait faire et que ce moteur ignorait — au prix d'un second moteur
+  /// entier, écrit à côté, qui a fini par diverger sur des sujets sans rapport (son conteneur, ses
+  /// lectures SwiftData). D'où la généralisation ici plutôt qu'une troisième implémentation.
+  ///
+  /// **Le PREMIER élément est celui qui suit le curseur** : c'est lui qu'on mesure, lui dont le
+  /// créneau sert de pivot, et lui dont la hauteur est l'unité d'écartement. Les suivants ne font
+  /// que l'accompagner. Ils doivent être CONTIGUS dans `rows` — `ReorderLayout` suppose que la
+  /// place laissée par le groupe est d'un seul tenant.
+  private(set) var dragged: [PersistentIdentifier] = []
+
+  /// La ligne empoignée — celle qui suit le curseur.
+  var dragging: PersistentIdentifier? { dragged.first }
   /// Translation du geste en cours, depuis l'empoignade.
   private(set) var translation: CGSize = .zero
   /// La séquence de lignes FIGÉE à l'empoignade, pour le CALCUL.
@@ -39,11 +54,26 @@ struct TaskPageReorder {
 
   init() {}
 
-  var isDragging: Bool { dragging != nil }
+  var isDragging: Bool { !dragged.isEmpty }
+
+  /// Cette ligne est-elle celle qu'on TIRE ? Vrai pour la seule ligne qui suit le curseur — pas
+  /// pour celles qu'elle emporte, qui restent à leur place et s'estompent (cf. `carries`).
   func isDragging(_ task: TaskItem) -> Bool { dragging == task.persistentModelID }
+
+  /// Cette ligne est-elle EMPORTÉE par le glissement en cours ? Vrai pour la ligne tirée comme
+  /// pour ses passagères. C'est ce que regarde une page pour estomper le reste d'un bloc pendant
+  /// que son en-tête voyage.
+  func carries(_ task: TaskItem) -> Bool { dragged.contains(task.persistentModelID) }
+
   /// La tâche empoignée, tant que le geste dure. Une page en a besoin au relâchement : ce qu'elle
   /// écrit dépend d'OÙ cette tâche-là a atterri, pas seulement de l'ordre obtenu.
   var draggedTask: TaskItem? { rows.first { $0.persistentModelID == dragging } }
+
+  /// Tout ce qui voyage, dans l'ordre d'affichage.
+  var draggedTasks: [TaskItem] {
+    let carried = Set(dragged)
+    return rows.filter { carried.contains($0.persistentModelID) }
+  }
 
   /// Où en est le CENTRE de la ligne tirée, dans le repère des cadres. `nil` hors glissement.
   ///
@@ -63,7 +93,7 @@ struct TaskPageReorder {
   /// times per frame » et que l'œil voit comme une saccade. Le layout de repos, lui, ne bouge pas
   /// d'un glissement : les cadres pris avant l'empoignade restent valides jusqu'au relâchement.
   mutating func measured(_ new: [PersistentIdentifier: CGRect]) {
-    guard dragging == nil else { return }
+    guard !isDragging else { return }
     frames = new
   }
 
@@ -73,23 +103,34 @@ struct TaskPageReorder {
   /// Deux lignes recopiées, c'est déjà deux occasions de diverger — et l'ordre des deux appels
   /// n'est pas anodin : empoigner APRÈS avoir suivi perdrait la première translation.
   mutating func track(_ task: TaskItem, by translation: CGSize, in rows: [TaskItem]) {
-    if !isDragging { begin(task, in: rows) }
+    track([task], by: translation, in: rows)
+  }
+
+  /// La variante qui emporte un groupe (une en-tête et son bloc). `carrying.first` est la ligne
+  /// empoignée ; un appel avec un groupe vide ne fait rien plutôt que d'armer un geste sans sujet.
+  mutating func track(_ carrying: [TaskItem], by translation: CGSize, in rows: [TaskItem]) {
+    guard !carrying.isEmpty else { return }
+    if !isDragging { begin(carrying, in: rows) }
     drag(translation)
   }
 
   mutating func begin(_ task: TaskItem, in rows: [TaskItem]) {
-    dragging = task.persistentModelID
+    begin([task], in: rows)
+  }
+
+  mutating func begin(_ carrying: [TaskItem], in rows: [TaskItem]) {
+    dragged = carrying.map(\.persistentModelID)
     translation = .zero
     self.rows = rows
   }
 
   mutating func drag(_ translation: CGSize) {
-    guard dragging != nil else { return }
+    guard isDragging else { return }
     self.translation = translation
   }
 
   mutating func end() {
-    dragging = nil
+    dragged = []
     translation = .zero
     rows = []
   }
@@ -101,24 +142,52 @@ struct TaskPageReorder {
       let origin = rows.firstIndex(where: { $0.persistentModelID == dragging })
     else { return nil }
 
+    // `others` écarte TOUT le groupe, pas seulement la ligne tirée : c'est la place laissée d'un
+    // seul tenant que `ReorderLayout` réinsère. `origin`, lui, reste l'index de la LIGNE TIRÉE dans
+    // la séquence complète — pour un groupe contigu, c'est aussi le rang de la place qu'il libère.
+    let carried = Set(dragged)
+
+    // Visée par frontières, sur la séquence de repos COMPLÈTE — le groupe y compris, dont le
+    // créneau sert de pivot (cf. `ReorderTarget.byBoundary`).
+    let raw = ReorderTarget.byBoundary(
+      center: dragFrame.midY + translation.height,
+      centers: rows.map { frames[$0.persistentModelID]?.midY })
+
     return ReorderLayout(
-      others: rows.map(\.persistentModelID).filter { $0 != dragging },
+      others: rows.map(\.persistentModelID).filter { !carried.contains($0) },
       origin: origin,
-      // Visée par frontières, sur la séquence de repos COMPLÈTE — la ligne tirée y comprise, dont
-      // le créneau sert de pivot (cf. `ReorderTarget.byBoundary`).
-      insert: ReorderTarget.byBoundary(
-        center: dragFrame.midY + translation.height,
-        centers: rows.map { frames[$0.persistentModelID]?.midY }),
+      insert: insertIndex(from: raw, carried: carried),
       unit: dragFrame.height)
+  }
+
+  /// Traduit le rang rendu par `byBoundary` — qui compte dans la séquence COMPLÈTE — vers celui
+  /// qu'attend `ReorderLayout`, qui compte dans `others`.
+  ///
+  /// Pour UNE ligne tirée, les deux espaces se recollent d'eux-mêmes : son propre créneau sert de
+  /// pivot, et l'index maximal (`n`) tombe pile sur la fin des `n − 1` restantes. C'est ce que
+  /// documente `ReorderTarget.byBoundary`, et c'est vrai — mais **seulement pour k = 1**. Pour un
+  /// groupe de `k` lignes, tout rang situé après le groupe compte encore ses `k` créneaux alors
+  /// qu'`others` n'en a plus aucun : il dépasse de `k − 1` (le pivot, lui, reste dû).
+  ///
+  /// Sans cette correction, tirer un bloc de deux lignes de trois crans vers le bas l'envoyait tout
+  /// en bas de la liste — l'index dépassait, `ReorderLayout` le bornait à la fin, et le bloc
+  /// atterrissait ailleurs que là où on le voyait. Trouvé par le test, pas à l'écran.
+  private func insertIndex(from raw: Int, carried: Set<PersistentIdentifier>) -> Int {
+    let before = rows.prefix(raw).reduce(into: 0) {
+      if carried.contains($1.persistentModelID) { $0 += 1 }
+    }
+    return raw - max(before - 1, 0)
   }
 
   /// Le décalage de CHAQUE ligne, en un passage : la ligne tirée suit le curseur, les autres
   /// s'écartent pour ouvrir le trou. À calculer une fois par rendu — une recherche par rangée
   /// coûterait un balayage quadratique à chaque image.
   func offsets() -> [PersistentIdentifier: CGSize] {
-    guard let dragging, let layout = layout() else { return [:] }
+    guard let layout = layout() else { return [:] }
     var result = layout.offsets().mapValues { CGSize(width: 0, height: $0) }
-    result[dragging] = translation
+    // Tout le groupe suit le curseur, pas seulement la ligne tirée. Une page qui estompe ses
+    // passagères (cf. `carries`) ne le verra pas ; une page qui les montre, si.
+    for id in dragged { result[id] = translation }
     return result
   }
 
@@ -132,9 +201,10 @@ struct TaskPageReorder {
 
   /// L'ordre obtenu si on relâchait maintenant. `nil` hors glissement.
   func dropped() -> [TaskItem]? {
-    guard let dragging, let layout = layout(),
-      let task = rows.first(where: { $0.persistentModelID == dragging })
-    else { return nil }
-    return layout.reordered([task], among: rows.filter { $0.persistentModelID != dragging })
+    guard let layout = layout() else { return nil }
+    let carried = Set(dragged)
+    let moving = rows.filter { carried.contains($0.persistentModelID) }
+    guard !moving.isEmpty else { return nil }
+    return layout.reordered(moving, among: rows.filter { !carried.contains($0.persistentModelID) })
   }
 }
