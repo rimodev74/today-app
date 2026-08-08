@@ -115,4 +115,50 @@ final class TodoListTests: XCTestCase {
     list.moveAboveCompleted(b)
     XCTAssertEqual(list.orderedTasks.map(\.title), ["a", "b"])
   }
+
+  /// Une liste vide n'a rien à confirmer — sauf si un raccourci la vise : sans lui la suppression
+  /// est immédiate, et l'utilisateur ne voit jamais qu'un raccourci vient de mourir avec elle.
+  func testConfirmationDemandeeSiUnRaccourciViseUneListeVide() {
+    let list = TodoList(title: "Courses")
+    XCTAssertFalse(list.needsDeleteConfirmation)
+
+    let texts = [TextShortcut(trigger: "crs", expansion: "#Courses")]
+    UserDefaults.standard.set(TextShortcut.encode(texts), forKey: TextShortcut.storageKey)
+    defer { UserDefaults.standard.removeObject(forKey: TextShortcut.storageKey) }
+
+    XCTAssertTrue(list.needsDeleteConfirmation)
+    XCTAssertTrue(
+      list.deleteConfirmationMessage.contains("« crs »"), list.deleteConfirmationMessage)
+  }
+
+  /// Même annonce pour une combinaison globale, et le message d'une liste qui porte des tâches
+  /// mentionne les deux à la fois.
+  func testConfirmationMentionneLaCombinaisonEtLesTaches() throws {
+    let ctx = try makeContext()
+    let list = TodoList(title: "Courses")
+    ctx.insert(list)
+    ctx.insert(TaskItem(title: "a", list: list))
+
+    let combo = KeyCombo(keyCode: 17, modifiers: 0, label: "⌃C")
+    UserDefaults.standard.set(
+      KeyShortcut.encode([KeyShortcut(expansion: "#Courses", key: combo)]),
+      forKey: KeyShortcut.storageKey)
+    defer { UserDefaults.standard.removeObject(forKey: KeyShortcut.storageKey) }
+
+    let message = list.deleteConfirmationMessage
+    XCTAssertTrue(message.contains("1 tâche"), message)
+    XCTAssertTrue(message.contains("⌃C"), message)
+  }
+
+  /// Une liste sans raccourci n'en invente pas un — le message reste celui d'avant.
+  func testPasDeMentionDeRaccourciSansCorrespondance() {
+    let list = TodoList(title: "Courses")
+    UserDefaults.standard.set(
+      TextShortcut.encode([TextShortcut(trigger: "ajd", expansion: "@today")]),
+      forKey: TextShortcut.storageKey)
+    defer { UserDefaults.standard.removeObject(forKey: TextShortcut.storageKey) }
+
+    XCTAssertFalse(list.needsDeleteConfirmation)
+    XCTAssertEqual(list.deleteConfirmationMessage, "« Courses » sera supprimée.")
+  }
 }

@@ -2,16 +2,48 @@ import SwiftData
 import SwiftUI
 
 extension TodoList {
-  /// Une liste vide s'efface sans rien demander ; dès qu'elle porte des tâches, l'appelant doit
-  /// confirmer d'abord. La sidebar posait déjà la question, la page de la liste PAS DU TOUT.
-  var needsDeleteConfirmation: Bool { !tasks.isEmpty }
+  /// Une liste vide et sans raccourci s'efface sans rien demander ; dès qu'elle porte des tâches
+  /// OU qu'un raccourci la vise, l'appelant doit confirmer d'abord — sans quoi une liste neuve à
+  /// peine créée, juste rattachée à une abréviation, part avec elle sans qu'on ait pu le voir.
+  var needsDeleteConfirmation: Bool { !tasks.isEmpty || linkedShortcutLabel != nil }
+
+  /// Le déclencheur texte ou la combinaison globale qui vise CETTE liste, s'il y en a un — lu
+  /// directement dans `UserDefaults` (même contournement que `autoSortCompletedEnabled` ci-dessous :
+  /// ce fichier ne connaît pas de contexte SwiftUI). Même résolution que
+  /// `[TextShortcut].reconciled(against:)`, réduite à ce seul titre.
+  private var linkedShortcutLabel: String? {
+    guard !title.isEmpty else { return nil }
+    let token = "#" + title.filter { !$0.isWhitespace }
+    if let trigger = TextShortcut.decode(
+      UserDefaults.standard.data(forKey: TextShortcut.storageKey) ?? Data()
+    ).first(where: { QuickEntry.reconciledListToken($0.expansion, against: [title]) == token })?
+      .trigger {
+      return "« \(trigger) »"
+    }
+    if let combo = KeyShortcut.decode(
+      UserDefaults.standard.data(forKey: KeyShortcut.storageKey) ?? Data()
+    ).first(where: { QuickEntry.reconciledListToken($0.expansion, against: [title]) == token })?
+      .key {
+      return combo.label
+    }
+    return nil
+  }
 
   /// Ce que l'alerte annonce. Ici et pas dans une vue : deux alertes la posent (sidebar, carte
   /// d'un projet), et deux textes auraient fini par ne plus dire la même chose.
   var deleteConfirmationMessage: String {
     let name = title.isEmpty ? "Cette liste" : "« \(title) »"
-    let n = tasks.count
-    return "\(name) contient \(n) tâche\(n > 1 ? "s" : ""). Elles seront aussi supprimées."
+    var message: String
+    if tasks.isEmpty {
+      message = "\(name) sera supprimée."
+    } else {
+      let n = tasks.count
+      message = "\(name) contient \(n) tâche\(n > 1 ? "s" : ""). Elles seront aussi supprimées."
+    }
+    if let label = linkedShortcutLabel {
+      message += " Son raccourci \(label) sera aussi retiré."
+    }
+    return message
   }
 
   /// LA suppression d'une liste, pour les trois endroits qui l'offrent (clic droit dans la
