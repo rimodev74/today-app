@@ -738,7 +738,7 @@ private struct QuickEntryView: View {
 
   @ViewBuilder private var destinationIcon: some View {
     if let destination, !destination.isInbox {
-      ProgressRing(progress: destination.progress, size: 11, lineWidth: 1.8)
+      ProgressRing(progress: destination.progress(), size: 11, lineWidth: 1.8)
         .tint(destination.project?.color?.color)
     } else {
       Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
@@ -793,7 +793,7 @@ private struct QuickEntryView: View {
           if list.isInbox {
             Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
           } else {
-            ProgressRing(progress: list.progress, size: 11, lineWidth: 1.8)
+            ProgressRing(progress: list.progress(), size: 11, lineWidth: 1.8)
               .tint(list.project?.color?.color)
           }
         }

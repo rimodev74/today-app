@@ -103,12 +103,13 @@ enum SidebarSelection: Hashable {
 struct DayBounds {
   let calendar: Calendar
   let now: Date
+  let startOfToday: Date
   let startOfTomorrow: Date
 
   init(now: Date = Date(), calendar: Calendar = .current) {
     self.calendar = calendar
     self.now = now
-    let startOfToday = calendar.startOfDay(for: now)
+    startOfToday = calendar.startOfDay(for: now)
     // Repli plutôt que force-unwrap : `date(byAdding:)` ne rend `nil` pour aucune date qu'on peut
     // représenter, mais la garantie n'a pas besoin d'un `!` pour tenir.
     startOfTomorrow =

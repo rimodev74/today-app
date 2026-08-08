@@ -53,9 +53,10 @@ final class Project {
   }
 
   /// Progression du projet = celle de toutes ses tâches confondues, en-têtes exclues. Même règle
-  /// que `TodoList.progress`, y compris pour ce qu'elle ne fait plus (cf. son commentaire).
-  var progress: Double {
-    let countable = allTasks.filter { !$0.isHeader }
+  /// que `TodoList.progress` — ancrée sur le jour calendaire, pas sur `CompletedTaskRetention`
+  /// (cf. son commentaire pour ce que ça a remplacé, et pourquoi).
+  func progress(bounds: DayBounds = DayBounds()) -> Double {
+    let countable = allTasks.filter { !$0.isHeader && $0.countsTowardProgress(bounds) }
     guard !countable.isEmpty else { return 0 }
     return Double(countable.filter(\.isCompleted).count) / Double(countable.count)
   }

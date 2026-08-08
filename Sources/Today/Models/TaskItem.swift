@@ -143,6 +143,19 @@ final class TaskItem {
     completedAt = isCompleted ? Date() : nil
   }
 
+  /// Compte-t-elle encore dans une progression (anneau d'une liste ou d'un projet) ? Une tâche à
+  /// faire compte toujours ; une COCHÉE cesse de compter une fois archivée — passé minuit.
+  ///
+  /// La borne est le JOUR CALENDAIRE de `bounds`, jamais `CompletedTaskRetention` : le mode
+  /// « 1,5 s » y ferait remonter puis retomber l'anneau à chaque coche, exactement le bug déjà
+  /// mesuré et écarté une première fois (cf. `TodoList.progress`). `completedAt` manquant (donnée
+  /// d'avant l'ajout du champ) compte comme « pas encore archivée » : on ne sait pas trancher, donc
+  /// on ne masque pas une progression qu'on ne peut pas dater.
+  func countsTowardProgress(_ bounds: DayBounds) -> Bool {
+    guard isCompleted, let completedAt else { return true }
+    return completedAt >= bounds.startOfToday
+  }
+
   /// Ordre manuel des sous-tâches ; `createdAt` départage les ex æquo (même pattern que
   /// `TodoList.orderedTasks`).
   var orderedSubtasks: [Subtask] {

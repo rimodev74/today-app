@@ -93,6 +93,6 @@ final class SidebarCountsTests: XCTestCase {
 
     let counts = SidebarCounts(tasks: list.tasks)
     XCTAssertEqual(counts[list].remaining, list.remainingCount)
-    XCTAssertEqual(counts[list].progress, list.progress)
+    XCTAssertEqual(counts[list].progress, list.progress())
   }
 }

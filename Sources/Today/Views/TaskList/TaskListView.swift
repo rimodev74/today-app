@@ -1266,7 +1266,7 @@ private struct ListPageView: View {
   private var header: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 12) {
-        ProgressRing(progress: list.progress, size: 26, lineWidth: 3, showsFill: true)
+        ProgressRing(progress: list.progress(), size: 26, lineWidth: 3, showsFill: true)
           .tint(list.project?.color?.color)
         TextField("Nom de la liste", text: $list.title)
           .textFieldStyle(.plain)
@@ -1651,7 +1651,7 @@ private struct ProjectPageView: View {
     // encadré de notes) : les deux pages doivent se lire comme une seule.
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 12) {
-        ProgressRing(progress: project.progress, size: 26, lineWidth: 3)
+        ProgressRing(progress: project.progress(), size: 26, lineWidth: 3)
           .tint(project.color?.color)
         TextField("Nom du projet", text: $project.title)
           .textFieldStyle(.plain)
@@ -1803,7 +1803,7 @@ private struct ListCardView: View {
 
   private var title: some View {
     HStack(spacing: 8) {
-      ProgressRing(progress: card.list.progress, size: 18)
+      ProgressRing(progress: card.list.progress(), size: 18)
         .tint(card.list.project?.color?.color)
       Text(card.list.title.isEmpty ? "Sans titre" : card.list.title)
         .font(.app(.headline))

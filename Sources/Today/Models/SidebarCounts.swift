@@ -39,9 +39,11 @@ struct SidebarCounts {
   private var rows: [PersistentIdentifier: Row] = [:]
 
   /// Une seule passe. Les en-têtes ne comptent pas : ce ne sont pas des tâches — même règle que
-  /// `TodoList.countableTasks`, dont ceci est le déplacement, pas une seconde version.
-  init(tasks: [TaskItem]) {
-    for task in tasks where !task.isHeader {
+  /// `TodoList.countableTasks`, dont ceci est le déplacement, pas une seconde version. Une tâche
+  /// archivée (cochée avant `bounds.startOfToday`) ne compte plus non plus — même règle que
+  /// `TodoList.progress`, calculée une fois pour toutes les rangées plutôt qu'à chaque lecture.
+  init(tasks: [TaskItem], bounds: DayBounds = DayBounds()) {
+    for task in tasks where !task.isHeader && task.countsTowardProgress(bounds) {
       guard let list = task.list?.persistentModelID else { continue }
       rows[list, default: Row()].countable += 1
       if task.isCompleted { rows[list]!.done += 1 }

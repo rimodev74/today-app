@@ -770,7 +770,7 @@ private struct SidebarMenu: View {
 
   private func listRow(_ list: TodoList) -> some View {
     row(.list(list), title: title(list.title)) {
-      ProgressRing(progress: list.progress, size: 16)
+      ProgressRing(progress: list.progress(), size: 16)
         .tint(list.project?.color?.color)
     }
   }
@@ -986,7 +986,7 @@ private struct QuickFindPanel: View {
         isCurrent: current == selection,
         action: { onSelect(selection) }
       ) {
-        ProgressRing(progress: list.progress, size: 16)
+        ProgressRing(progress: list.progress(), size: 16)
           .tint(list.project?.color?.color)
       }
     case .project(let project):
