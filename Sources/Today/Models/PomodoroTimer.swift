@@ -128,6 +128,19 @@ final class PomodoroTimer {
     // .common (pas .default) : continue de tick pendant le tracking du menu (menu bar ouvert, resize, etc.)
     RunLoop.main.add(newTimer, forMode: .common)
     timer = newTimer
+    syncMusic()
+  }
+
+  /// La musique suit une règle UNIQUE — elle joue si et seulement si un travail est en cours — et
+  /// les trois chemins qui touchent à l'un des deux termes passent tous par ici. Décidée au coup par
+  /// coup dans `start`, `halt` et `advancePhase`, elle aurait divergé au premier chemin ajouté :
+  /// c'est le même raisonnement que `PomodoroSound.starting(_:)`, un cran plus haut.
+  private func syncMusic() {
+    if isRunning, phase == .work {
+      MusicPlayer.shared.play()
+    } else {
+      MusicPlayer.shared.stop()
+    }
   }
 
   /// Le GESTE « mettre en pause » : il sonne. Muet si rien ne tournait — sans cette garde, une
@@ -146,6 +159,7 @@ final class PomodoroTimer {
     isRunning = false
     timer?.invalidate()
     timer = nil
+    syncMusic()
   }
 
   func reset() {
@@ -154,6 +168,9 @@ final class PomodoroTimer {
     completedWorkSessions = 0
     remaining = duration(for: .work)
     hasStarted = false  // retour au repos : la barre de menus reprend son icône
+    // Une session neuve reprend sa playlist au début. C'est ici et nulle part ailleurs : les pauses
+    // d'une même session doivent la retrouver là où le fondu l'avait laissée.
+    MusicPlayer.shared.rewindPlaylist()
   }
 
   /// Bascule sur une phase et la lance depuis sa durée PLEINE. C'est ce que veut dire « démarrer une
@@ -187,11 +204,18 @@ final class PomodoroTimer {
       phase = .work
     }
     remaining = duration(for: phase)
+    syncMusic()
   }
 
   private func tick() {
     guard remaining > 0 else { return }
     remaining -= 1
+    // Le fondu s'amorce UNE fois par phase, à la seconde exacte : `remaining` décroît de 1 en 1
+    // depuis un entier, l'égalité est donc atteinte pile une fois. Un `<=` la rejouerait à chaque
+    // tick, et chaque relance repartirait du volume plein — la musique remonterait en escalier.
+    if phase == .work, Int(remaining) == MusicPlayer.shared.fadeSeconds {
+      MusicPlayer.shared.fadeOut()
+    }
     if remaining <= 0 {
       handlePhaseCompletion()
     }
@@ -199,9 +223,14 @@ final class PomodoroTimer {
 
   // Sépare de `tick()` pour être testable sans attendre un vrai `Timer`.
   func handlePhaseCompletion() {
+    // La musique se tait AVANT l'alarme. Le fondu l'a normalement déjà fait ; pas quand la phase est
+    // plus courte que le fondu, ni quand la musique vient d'être activée en cours de phase.
+    MusicPlayer.shared.stop()
     let soundName =
       UserDefaults.standard.string(forKey: Self.alertSoundStorageKey) ?? Self.defaultAlertSound
     NSSound(named: soundName)?.play()
+    // `advancePhase` resynchronise la musique : avec l'enchaînement automatique, le minuteur tourne
+    // toujours et personne n'appellera `start()` — c'est donc là que le travail retrouve sa musique.
     advancePhase()
     if !UserDefaults.standard.bool(forKey: Self.autoStartStorageKey) {
       halt()  // l'alarme vient de sonner : elle EST le signal, rien à ajouter derrière

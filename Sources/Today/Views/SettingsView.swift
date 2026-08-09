@@ -513,13 +513,19 @@ private struct TextShortcutsSection: View {
 /// AppKit reste la seule couche où l'alignement s'applique vraiment.
 private struct AlignedTextField: NSViewRepresentable {
   @Binding var text: String
+  /// Centré pour une abréviation (une poignée de lettres dans une colonne étroite), à GAUCHE pour
+  /// une valeur qu'on lit de son début — un nom de playlist, un lien qui déborde de sa colonne.
+  var alignment: NSTextAlignment = .center
+  /// `placeholderString` d'AppKit, et pas un `Text` en fond : c'est le champ lui-même qui l'efface
+  /// à la première frappe, sans qu'on ait à suivre l'état de la saisie.
+  var placeholder: String = ""
 
   func makeNSView(context: Context) -> NSTextField {
     let field = NSTextField()
     field.isBordered = false
     field.drawsBackground = false
     field.focusRingType = .none
-    field.alignment = .center
+    field.alignment = alignment
     field.font = .systemFont(ofSize: NSFont.systemFontSize)
     field.delegate = context.coordinator
     return field
@@ -527,10 +533,19 @@ private struct AlignedTextField: NSViewRepresentable {
 
   func updateNSView(_ field: NSTextField, context: Context) {
     if field.stringValue != text { field.stringValue = text }
+    // L'invite suit le LECTEUR choisi : elle change sous la rangée, sans que celle-ci soit refaite.
+    if field.placeholderString != placeholder { field.placeholderString = placeholder }
+    if field.alignment != alignment { field.alignment = alignment }
   }
 
   func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
+  // ponytail: le champ GARDE le focus quand on clique à côté — AppKit ne le retire pas tout seul, et
+  // la fenêtre de réglages le donne d'office au premier champ venu. Un moniteur `NSEvent` posé à la
+  // prise de focus a été écrit puis RETIRÉ le 9 août 2026 : impossible de démontrer qu'il marchait
+  // (un clic synthétique envoyé par `NSApp.sendEvent` ne réveille pas les moniteurs locaux, donc le
+  // banc ne prouvait rien dans un sens ni dans l'autre). Le rétablir demande d'abord un moyen de
+  // rejouer un VRAI clic — sans quoi on rachète du code qu'on ne peut pas juger.
   final class Coordinator: NSObject, NSTextFieldDelegate {
     let text: Binding<String>
     init(text: Binding<String>) { self.text = text }
@@ -665,15 +680,291 @@ private struct RemindersSyncSection: View {
   }
 }
 
+/// Ce que le champ « Playlist » a compris du lien Spotify collé. Un état de VUE, pas une règle
+/// métier : il ne dit rien de plus que « où en est la vérification », et c'est pour ça qu'il vit ici.
+private enum SpotifyLinkCheck {
+  case idle
+  case checking
+  case found(String)
+  case unknown
+
+  var message: String? {
+    switch self {
+    case .idle: return nil
+    case .checking: return "Vérification…"
+    case .found(let title): return title
+    case .unknown: return "Lien Spotify non reconnu."
+    }
+  }
+
+  var icon: String {
+    switch self {
+    case .found: return "checkmark.circle.fill"
+    case .unknown: return "exclamationmark.triangle.fill"
+    case .idle, .checking: return "ellipsis.circle"
+    }
+  }
+
+  /// `.secondary` et pas une couleur figée pour les deux états neutres — et pour les deux autres,
+  /// des couleurs SÉMANTIQUES, qui s'adaptent seules au thème sombre (cf. CLAUDE.md, Conventions).
+  var tint: Color {
+    switch self {
+    case .found: return .green
+    case .unknown: return .orange
+    case .idle, .checking: return .secondary
+    }
+  }
+}
+
+/// Les playlists enregistrées, au MÊME patron que `TextShortcutsSection` : en-têtes de colonnes,
+/// une rangée par entrée avec ses champs et son « − » au survol, un lien d'ajout accentué en pied.
+/// Le maître-détail qui l'a précédée (un menu qui choisit, des champs qui éditent l'entrée choisie)
+/// forçait à apprendre un second vocabulaire pour la même idée — retiré le 9 août 2026.
+///
+/// Le rond en tête de rangée porte ce que la liste des raccourcis n'a pas à porter : là-bas chaque
+/// ligne agit, ici une seule joue.
+///
+/// Le choix du LECTEUR vit ici, et pas dans la section « Musique » d'à côté, parce que c'est lui qui
+/// pilote ce tableau : il change le titre de la colonne, filtre les entrées affichées, et décide
+/// d'un champ ou d'un menu. Rangé à côté du volume, la cause était dans un bloc et l'effet dans
+/// l'autre — « Musique » dit désormais COMMENT ça joue, « Playlists » dit QUOI, et où.
+private struct MusicPlaylistsSection: View {
+  @AppStorage(MusicPlayer.appKey) private var musicApp = MusicApp.spotify.rawValue
+  @AppStorage(SavedPlaylist.storageKey) private var libraryData = Data()
+  @AppStorage(MusicPlayer.selectionKey) private var selection = ""
+  @AppStorage(MusicPlayer.legacyPlaylistKey) private var legacyPlaylist = ""
+
+  @State private var hovered: SavedPlaylist.ID?
+  @State private var linkCheck = SpotifyLinkCheck.idle
+  /// Les noms lus dans Musique. Chargés ici depuis que le choix du lecteur y est : c'est cette
+  /// section qui sait quand il change, et elle seule qui s'en sert.
+  @State private var musicPlaylists: [String] = []
+
+  private var player: MusicApp { MusicApp(rawValue: musicApp) ?? .spotify }
+
+  private static let nameWidth: CGFloat = 104
+  private static let columns: CGFloat = 12
+  private static let radioWidth: CGFloat = 16
+
+  /// Même idiome que les deux sections de raccourcis : on n'AFFICHE que les entrées du lecteur
+  /// courant, mais l'écriture réinjecte les autres — sans quoi passer à Musique effacerait les
+  /// playlists Spotify, sans un mot.
+  private var playlists: Binding<[SavedPlaylist]> {
+    Binding(
+      get: { SavedPlaylist.decode(libraryData).filter { $0.app == player } },
+      set: { edited in
+        let others = SavedPlaylist.decode(libraryData).filter { $0.app != player }
+        libraryData = SavedPlaylist.encode(others + edited)
+      })
+  }
+
+  /// Comparé en `UUID` et pas en chaîne : `uuidString` sort en MAJUSCULES, et une sélection écrite
+  /// autrement ne désignerait plus rien — une liste où aucun rond n'est plein, sans explication.
+  private func isSelected(_ id: UUID) -> Bool { UUID(uuidString: selection) == id }
+
+  private var selected: SavedPlaylist? {
+    playlists.wrappedValue.first { isSelected($0.id) }
+  }
+
+  var body: some View {
+    Section {
+      Picker("Lecteur", selection: $musicApp) {
+        ForEach(MusicApp.allCases) { app in
+          Text(app.label).tag(app.rawValue)
+        }
+      }
+
+      columnHeaders
+
+      if playlists.wrappedValue.isEmpty {
+        Text("Aucune playlist")
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+
+      ForEach(playlists) { $entry in row($entry) }
+
+      addButton
+    } header: {
+      Text("Playlists")
+    } footer: {
+      footer
+    }
+    .task(id: musicApp) {
+      adoptLegacyPlaylist()
+      musicPlaylists = player == .music ? await MusicPlayer.shared.musicPlaylistNames() : []
+      await checkSelectedLink()
+    }
+    .task(id: selected) { await checkSelectedLink() }
+  }
+
+  private var columnHeaders: some View {
+    HStack(spacing: Self.columns) {
+      Color.clear.frame(width: Self.radioWidth, height: 0)
+      // Retraits optiques : le texte d'un champ bordé commence à l'intérieur de son cadre, l'en-tête
+      // s'aligne sur les LETTRES (cf. `TextShortcutsSection.columnHeaders`).
+      Text("Nom")
+        .padding(.leading, 5)
+        .frame(width: Self.nameWidth, alignment: .leading)
+      Text(player.linkColumn)
+        .padding(.leading, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Color.clear.frame(width: RemoveButton.width, height: 0)
+    }
+    .font(.caption)
+    .foregroundStyle(.secondary)
+  }
+
+  private func row(_ entry: Binding<SavedPlaylist>) -> some View {
+    let id = entry.wrappedValue.id
+    return HStack(spacing: Self.columns) {
+      // Un rond et pas une case à cocher : une seule playlist joue à la fois, et c'est exactement ce
+      // qu'un radio dit sur macOS. Recliquer le rond plein le VIDE — sinon, une fois une playlist
+      // choisie, on ne pourrait plus revenir à « reprendre la lecture en cours ».
+      Button {
+        selection = isSelected(id) ? "" : id.uuidString
+      } label: {
+        Image(systemName: isSelected(id) ? "largecircle.fill.circle" : "circle")
+          .foregroundStyle(isSelected(id) ? Color.accentColor : .secondary)
+      }
+      .buttonStyle(.plain)
+      .frame(width: Self.radioWidth)
+      .help("La playlist qui se lance avec un pomodoro")
+
+      field(entry.name, prompt: "Deep Focus")
+        .frame(width: Self.nameWidth)
+
+      // Spotify se COLLE, Musique se CHOISIT : sa bibliothèque est lisible (cf.
+      // `MusicPlayer.musicPlaylistNames`), celle de Spotify ne l'est pas. Un menu là où l'on peut
+      // proposer, un champ là où il faut coller — le même partage que `ActionPicker` dans la rangée
+      // d'un raccourci. Musique fermée, rien à proposer : le champ reprend la main, sans quoi la
+      // rangée deviendrait inéditable.
+      if player == .music, !musicPlaylists.isEmpty {
+        Picker("", selection: entry.link) {
+          // La valeur enregistrée peut ne plus exister dans Musique (playlist renommée) : sans cette
+          // entrée, le menu s'afficherait vide et l'effacerait au premier rendu.
+          if !musicPlaylists.contains(entry.wrappedValue.link) {
+            Text(entry.wrappedValue.link.isEmpty ? "Choisir…" : entry.wrappedValue.link)
+              .tag(entry.wrappedValue.link)
+          }
+          ForEach(musicPlaylists, id: \.self) { name in
+            Text(name).tag(name)
+          }
+        }
+        .labelsHidden()
+        .frame(maxWidth: .infinity)
+      } else {
+        field(entry.link, prompt: player.playlistPrompt)
+          .frame(maxWidth: .infinity)
+      }
+
+      RemoveButton(isHighlighted: hovered == id) {
+        withAnimation(.snappy(duration: 0.2)) {
+          playlists.wrappedValue.removeAll { $0.id == id }
+          if isSelected(id) { selection = "" }
+        }
+      }
+    }
+    .onHover { inside in
+      if inside {
+        hovered = id
+      } else if hovered == id {
+        hovered = nil
+      }
+    }
+    .animation(.easeOut(duration: 0.12), value: hovered)
+  }
+
+  /// `AlignedTextField` et pas un `TextField` SwiftUI : mêmes métriques exactement que la rangée
+  /// d'un raccourci — le `TextField` rendait une boîte plus haute, texte flottant vers le bas
+  /// (vérifié à la capture le 9 août 2026). C'est la raison d'être de ce composant.
+  private func field(_ text: Binding<String>, prompt: String) -> some View {
+    AlignedTextField(text: text, alignment: .left, placeholder: prompt)
+      .padding(.horizontal, 5)
+      .padding(.vertical, 3)
+      .background(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.2)))
+  }
+
+  private var addButton: some View {
+    AddRowButton("Ajouter une playlist") {
+      let entry = SavedPlaylist(app: player)
+      playlists.wrappedValue.append(entry)
+      // La nouvelle joue d'office : on vient de demander une playlist, pas de garder l'ancienne.
+      selection = entry.id.uuidString
+    }
+    // Une rangée vierge de plus n'apporte rien tant que la précédente n'a pas de destination — même
+    // règle que les raccourcis, et c'est elle qui empêche d'empiler des lignes vides d'un doigt.
+    .disabled(
+      playlists.wrappedValue.contains { $0.link.trimmingCharacters(in: .whitespaces).isEmpty })
+  }
+
+  @ViewBuilder private var footer: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      if let message = linkCheck.message {
+        Label(message, systemImage: linkCheck.icon)
+          .foregroundStyle(linkCheck.tint)
+      }
+      Text(
+        "Le rond désigne la playlist qui se lance avec un pomodoro — sans lui, Today reprend "
+          + "simplement la lecture en cours. Elle repart du début à chaque remise à zéro du "
+          + "minuteur, pas après une pause."
+      )
+      .foregroundStyle(.secondary)
+    }
+  }
+
+  /// Spotify ne sait pas lister ses playlists, alors la section dit au moins ce qu'elle a COMPRIS du
+  /// lien de celle qui joue — la vraie question devant un identifiant de 22 caractères. Et le titre
+  /// obtenu la NOMME quand elle n'a pas de nom : celui qu'on taperait est déjà celui de Spotify.
+  private func checkSelectedLink() async {
+    linkCheck = .idle
+    guard player == .spotify, let entry = selected,
+      let uri = MusicPlaylist.spotifyURI(from: entry.link)
+    else { return }
+    // Le champ se remplit caractère par caractère. `.task(id:)` annule la passe précédente à chaque
+    // frappe : cette attente fait qu'une seule part vraiment sur le réseau, la dernière.
+    try? await Task.sleep(for: .milliseconds(500))
+    guard !Task.isCancelled else { return }
+    linkCheck = .checking
+    guard let title = await MusicPlayer.spotifyTitle(for: uri) else {
+      linkCheck = .unknown
+      return
+    }
+    linkCheck = .found(title)
+    guard entry.name.isEmpty else { return }
+    var all = playlists.wrappedValue
+    guard let index = all.firstIndex(where: { $0.id == entry.id }) else { return }
+    all[index].name = title
+    playlists.wrappedValue = all
+  }
+
+  /// Le lien d'avant la bibliothèque, promu en première entrée. `libraryData` vide et pas « décodée
+  /// vide » : une bibliothèque que l'utilisateur a VIDÉE contient « [] », et ne doit pas voir
+  /// l'ancien lien ressusciter à chaque ouverture des réglages.
+  private func adoptLegacyPlaylist() {
+    guard libraryData.isEmpty, !legacyPlaylist.isEmpty else { return }
+    let entry = SavedPlaylist(link: legacyPlaylist, app: player)
+    libraryData = SavedPlaylist.encode([entry])
+    selection = entry.id.uuidString
+    legacyPlaylist = ""
+  }
+}
+
 private struct PomodoroSettingsTab: View {
   @AppStorage(PomodoroTimer.autoStartStorageKey) private var pomodoroAutoStart = false
   @AppStorage(PomodoroTimer.alertSoundStorageKey) private var pomodoroAlertSound = PomodoroTimer
     .defaultAlertSound
+  @AppStorage(MusicPlayer.enabledKey) private var musicEnabled = false
+  @AppStorage(MusicPlayer.volumeKey) private var musicVolume = MusicPlayer.defaultVolume
+  @AppStorage(MusicPlayer.fadeKey) private var musicFade = MusicPlayer.defaultFadeSeconds
 
   var body: some View {
-    // ponytail: 640 est une estimation (pas re-mesurée à l'écran comme les 610 d'origine) — à
-    // ajuster si les deux sections de raccourcis débordent une fois quelques lignes ajoutées.
-    SettingsPane(height: 640) {
+    // 760 : ce qu'il faut pour que « Minuteur », « Alerte » et « Musique » tiennent SANS défiler —
+    // vérifié à la capture d'écran le 8 août 2026. Les deux sections de raccourcis, elles, débordent
+    // et déborderont toujours : leurs tableaux grandissent d'une ligne à chaque raccourci ajouté,
+    // aucune hauteur fixe ne peut les contenir. Elles sont en dernier pour cette raison, et c'est le
+    // défilement du `Form` qui les sert.
+    SettingsPane(height: 760) {
       Section("Minuteur") {
         Toggle("Enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
       }
@@ -689,6 +980,18 @@ private struct PomodoroSettingsTab: View {
           NSSound(named: pomodoroAlertSound)?.play()
         }
       }
+
+      // Ce que fait la musique, pas ce qu'elle joue : le choix du lecteur est parti avec le tableau
+      // qu'il pilote (cf. `MusicPlaylistsSection`).
+      Section("Musique") {
+        Toggle("Jouer pendant les phases de travail", isOn: $musicEnabled)
+
+        Stepper("Volume : \(musicVolume) %", value: $musicVolume, in: 0...100, step: 5)
+
+        Stepper("Fondu avant l'alarme : \(musicFade) s", value: $musicFade, in: 3...15)
+      }
+
+      MusicPlaylistsSection()
 
       PomodoroKeyShortcutsSection()
       PomodoroTextShortcutsSection()

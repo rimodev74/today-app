@@ -129,6 +129,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSRemindersFullAccessUsageDescription</key> <string>Today crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>
     <key>NSCalendarsFullAccessUsageDescription</key> <string>Today affiche les événements de votre calendrier sur la page Aujourd'hui.</string>
+    <key>NSAppleEventsUsageDescription</key> <string>Today met votre musique en marche pendant un pomodoro et la fait descendre avant la fin de la phase.</string>
 </dict>
 </plist>
 PLIST

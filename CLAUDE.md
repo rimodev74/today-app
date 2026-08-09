@@ -586,6 +586,22 @@ fonctionnalité est branchée ou elle n'existe pas.*
 
 ## Déjà essayé et REJETÉ — ne pas refaire
 
+- **YouTube comme source de la musique du pomodoro** (8 août 2026). La seule voie sanctionnée est
+  une `WKWebView` + l'API IFrame, et une WebView demande une FENÊTRE — or on joue justement quand la
+  fenêtre de Today est fermée. Ordonner une fenêtre est la famille de plantages non résolue de ce
+  projet (cf. `NSRemoteView` plus haut), et on n'a aucun `WKWebView` à nous aujourd'hui : WebKit
+  n'est là que traîné par Sparkle. S'ajoute que le lecteur caché est contraire aux conditions de
+  YouTube, ce qui compte pour une app destinée à être vendue. Retenu à la place : AppleScript vers
+  Spotify ou Musique, qui exposent déjà `play`, `pause` et `sound volume`.
+- **L'API web de Spotify pour lister les playlists de l'utilisateur** (8 août 2026). Son dictionnaire
+  AppleScript n'expose que `application` et `track` — aucun accès à la bibliothèque, rien à
+  contourner. L'API web le ferait, au prix d'un compte développeur, d'OAuth PKCE, du Trousseau, et
+  d'un plafond à **25 utilisateurs** tant qu'une extension de quota n'est pas accordée par Spotify.
+  Écarté pour épargner un collage qu'on fait une fois. Retenu à la place : l'endpoint `oembed`
+  PUBLIC, sans authentification, qui rend le NOM d'une playlist depuis son lien — de quoi nommer
+  l'entrée toute seule et dire « lien non reconnu ». Musique, lui, expose bien `user playlist` : là,
+  le menu déroulant existe.
+
 Chacune de ces approches a été écrite, essayée, et retirée. Deux l'ont été DEUX fois, par oubli.
 
 - **Un fond transparent (`.background { Color.clear … onTapGesture }`) pour attraper le clic dans le
@@ -681,7 +697,11 @@ Ce qui marche : listes, tâches, en-têtes de section, réordonnancement (tâche
 rangement par glisser vers la barre latérale (cf. `Models/SidebarDrop.swift` — seules les LISTES
 accueillent ; survoler un projet le déplie pour montrer les siennes),
 renommage, complétion, projets, sous-tâches, notes en texte riche, saisie rapide (`@demain`,
-`#liste`), raccourcis texte et combinaisons globales, archivage, pomodoro, rappels et calendrier
+`#liste`), raccourcis texte et combinaisons globales, archivage, pomodoro (avec sa musique de
+session — cf. `Services/MusicPlayer.swift` : le lecteur de l'utilisateur piloté par AppleScript,
+fondu jusqu'au silence avant l'alarme, playlists enregistrées dans les défauts comme les raccourcis ;
+la règle qui porte tout est `PomodoroTimer.syncMusic` — *elle joue si et seulement si un travail est
+en cours*), rappels et calendrier
 Apple (lecture, report de complétion, et pont bidirectionnel optionnel — cf. `RemindersSync` : une
 liste Rappels désignée dans les Réglages, les tâches datées y partent, ses rappels datés en
 reviennent ; c'est `needsPush` qui empêche la boucle — il compare les JOURS quand la tâche n'a pas
