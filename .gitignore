@@ -9,6 +9,7 @@ DerivedData/
 # Artefacts de build : régénérés par Scripts/make-app.sh et make-dmg.sh,
 # distribués via les releases GitHub — jamais versionnés.
 Today.app/
+TodayDev.app/
 *.dmg
 
 # Clone local du dépôt public de distribution (voir Scripts/release.sh).

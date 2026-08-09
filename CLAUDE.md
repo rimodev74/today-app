@@ -8,7 +8,13 @@ de `ThingsCloneApp.swift`.
 ## Lancer
 
 ```bash
-./run.sh          # build RELEASE → bundle .app → open. Le seul moyen correct de lancer l'app.
+./run-dev.sh      # POUR TOUT DEV/TEST : build → bundle "TodayDev.app" séparé → open. Process,
+                  # base SwiftData, sauvegardes et raccourci global (⌃⌥Espace) tous isolés de
+                  # l'instance du quotidien (cf. TODAY_APP_SUPPORT_DIR, StoreLocation) — elle ne
+                  # tue et ne lit jamais "Today". C'est CE script qui vérifie un changement d'UI.
+./run.sh          # L'INSTANCE DU QUOTIDIEN. build RELEASE → bundle "Today.app" → open. Ne
+                  # jamais l'utiliser pour itérer sur du code en cours d'écriture : il tue le
+                  # process "Today" en cours, donc l'app qu'on utilise pour de vrai.
                   # `./run.sh debug` pour le pas-à-pas. Il construisait en debug PAR DÉFAUT, ce qui
                   # faisait juger la fluidité sur un binaire non optimisé alors qu'on livre l'autre.
 swift build       # compilation seule (~0,2 s incrémental)
@@ -562,7 +568,9 @@ plupart la même journée, le 6 août 2026. Un correctif ou une fonctionnalité 
 ### 6. Ce qui doit rester vrai après
 
 - `swift build` et `swift test` verts, **et le cliquet d'avertissements** (`FULL_WARNING_CHECK=1`).
-- **Un changement d'UI se REGARDE.** `screencapture` fonctionne, et un `.task` temporaire piloté par
+- **Un changement d'UI se REGARDE — via `./run-dev.sh`, jamais `./run.sh`.** Ce dernier tue et
+  remplace l'instance "Today" du quotidien ; `run-dev.sh` build et lance "TodayDev", isolée
+  (process, base, raccourci global). `screencapture` fonctionne, et un `.task` temporaire piloté par
   une variable d'environnement rejoue un geste sans souris — c'est ainsi qu'ont été trouvés le titre
   disparu en édition et le pavé bleu géant d'une en-tête tirée.
 - **Aucun banc de mesure ne se committe.**
@@ -593,6 +601,32 @@ fonctionnalité est branchée ou elle n'existe pas.*
   n'est là que traîné par Sparkle. S'ajoute que le lecteur caché est contraire aux conditions de
   YouTube, ce qui compte pour une app destinée à être vendue. Retenu à la place : AppleScript vers
   Spotify ou Musique, qui exposent déjà `play`, `pause` et `sound volume`.
+
+  **Repris et re-rejeté le 9 août 2026, cette fois avec des CHIFFRES** — la question posée était
+  « l'impact est-il réel ou insignifiant ? », et l'intuition disait insignifiant. Banc jetable :
+  `WKWebView` 256×144 hors écran, lecteur IFrame, lecture VÉRIFIÉE (`state-1`, `t=51 s` — sans cette
+  preuve on mesure une page morte et on conclut « insignifiant »). Mesuré au `ps` sur 30–40 s :
+
+  |  | process | RSS | CPU |
+  |---|---|---|---|
+  | app nue, sans WebView | 1 | 59 Mo | 0 % |
+  | la même + YouTube qui joue | 6 | 423 Mo | 5,7–7,5 % |
+
+  Soit **+330 Mo et ~6 % de CPU en continu** (`WebContent` 220, `GPU` 45, `Networking` 31,
+  `MTLCompilerService` 22, `audio.SandboxHelper` 11) pendant les 25 minutes de chaque pomodoro, pour
+  1,7× la mémoire de Today entière (198 Mo mesurés). **Et ce coût n'est PAS déjà payé** par le WebKit
+  que traîne Sparkle : Today lance bien un helper `SafariPlatformSupport` (28 Mo), mais AUCUN
+  `WebContent` — les process de contenu n'apparaissent qu'avec une `WKWebView`.
+
+  Trois faits mesurés qui tuent le « on l'optimisera au maximum » :
+  1. **la définition ne se choisit pas.** `vq=tiny` dans les `playerVars` ET `setPlaybackQuality('tiny')`
+     appelé deux fois : le lecteur rend `medium` quand même (l'API est dépréciée, YouTube décide).
+     Donc pas d'audio seul — la vidéo se décode, et c'est elle qui allume le process GPU à ~3 % ;
+  2. **beaucoup de vidéos refusent l'intégration** : `error 150` sur le flux lofi de Lofi Girl, soit
+     exactement la musique de pomodoro type. Et `error 152` tant que la page hôte n'a pas d'origine
+     HTTP valide, ce qui obligerait à un serveur local DANS l'app ;
+  3. **la fenêtre reste obligatoire** : il faut `orderFrontRegardless()` pour que ça joue. Le banc
+     n'a pas planté, mais il n'a ni Sparkle ni le flot de préférences — ça ne prouve rien.
 - **L'API web de Spotify pour lister les playlists de l'utilisateur** (8 août 2026). Son dictionnaire
   AppleScript n'expose que `application` et `track` — aucun accès à la bibliothèque, rien à
   contourner. L'API web le ferait, au prix d'un compte développeur, d'OAuth PKCE, du Trousseau, et

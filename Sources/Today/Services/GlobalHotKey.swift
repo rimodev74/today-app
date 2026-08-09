@@ -21,9 +21,20 @@ final class GlobalHotKey {
   static let modifiersStorageKey = "quickEntryHotKeyModifiers"
   static let labelStorageKey = "quickEntryHotKeyLabel"
 
-  /// ⌃Espace au départ, comme la saisie rapide de Things.
-  static let quickEntryDefault = KeyCombo(
-    keyCode: kVK_Space, modifiers: NSEvent.ModifierFlags.control.rawValue, label: "⌃Espace")
+  /// ⌃Espace au départ, comme la saisie rapide de Things — ⌃⌥Espace pour une build de dev
+  /// (`TODAY_APP_SUPPORT_DIR`, posée par `run-dev.sh`), pour que l'instance de dev et celle du
+  /// quotidien ne se disputent pas la même combinaison quand les deux tournent en même temps. Ne
+  /// joue qu'avant tout réglage manuel (cf. `current`) — les préférences elles-mêmes sont déjà
+  /// séparées, `UserDefaults.standard` étant propre à chaque bundle identifier.
+  static var quickEntryDefault: KeyCombo {
+    guard ProcessInfo.processInfo.environment["TODAY_APP_SUPPORT_DIR"] != nil else {
+      return KeyCombo(
+        keyCode: kVK_Space, modifiers: NSEvent.ModifierFlags.control.rawValue, label: "⌃Espace")
+    }
+    return KeyCombo(
+      keyCode: kVK_Space, modifiers: NSEvent.ModifierFlags([.control, .option]).rawValue,
+      label: "⌃⌥Espace")
+  }
 
   /// Ce qu'ouvre la combinaison de la saisie rapide. Posé au lancement par `TodayApp` — la classe ne
   /// connaît pas le panneau, elle ne fait que router une frappe.

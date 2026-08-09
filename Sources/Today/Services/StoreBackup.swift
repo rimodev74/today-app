@@ -28,7 +28,7 @@ enum StoreBackup {
   /// Voisin du store, sous un nom qui dit à qui il appartient : `default.store` vit à la racine de
   /// `~/Library/Application Support/`, sans dossier au nom du bundle (cf. CLAUDE.md), un
   /// `Backups/` générique y serait un squat.
-  static let directoryName = "Today-Backups"
+  static var directoryName: String { "\(StoreLocation.directoryName)-Backups" }
 
   /// ponytail: trois copies gardées, ~3,5 Mo pièce journal SQLite compris. De quoi revenir sur
   /// « je l'ai cassé il y a deux builds » sans surveiller un quota. À passer en réglage si la place

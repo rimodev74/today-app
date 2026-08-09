@@ -15,7 +15,9 @@ cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 TARGET="${2:-Today}"
 APP="${TARGET}.app"
-BIN=".build/${CONFIG}/${TARGET}"
+# Le produit SwiftPM s'appelle "Today" quel que soit TARGET (cf. Package.swift, un seul .executable) —
+# TARGET ne nomme que le bundle et l'exécutable EMBARQUÉ, copié sous ce nom juste après.
+BIN=".build/${CONFIG}/Today"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
@@ -63,7 +65,7 @@ if [[ "${FULL_WARNING_CHECK:-}" == "1" ]]; then
   find Sources -name '*.swift' -exec touch {} +
 fi
 
-if ! swift build -c "${CONFIG}" --product "${TARGET}" >"${BUILD_LOG}" 2>&1; then
+if ! swift build -c "${CONFIG}" --product Today >"${BUILD_LOG}" 2>&1; then
   cat "${BUILD_LOG}" >&2
   echo "✗ La compilation a échoué." >&2
   exit 1
@@ -108,6 +110,14 @@ cp "Sources/App.icns" "${APP}/Contents/Resources/App.icns"
 ditto ".build/arm64-apple-macosx/${CONFIG}/Sparkle.framework" \
       "${APP}/Contents/Frameworks/Sparkle.framework"
 
+# Sparkle uniquement sur la vraie app : sinon une build de dev, à jour du feed public, s'auto-
+# remplacerait par la release publiée — silencieusement, alors qu'on est en train de la tester.
+SPARKLE_KEYS=""
+if [[ "${TARGET}" == "Today" ]]; then
+  SPARKLE_KEYS='    <key>SUFeedURL</key>               <string>https://raw.githubusercontent.com/rimodev74/today-dist/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>           <string>fyuXhkBwVnpJBNSFH2AkeIqyVXCZo9V52foTzkNoZIo=</string>'
+fi
+
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -123,8 +133,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>    <string>${SHORT_VERSION}</string>
     <key>CFBundleVersion</key>         <string>${BUILD}</string>
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>
-    <key>SUFeedURL</key>               <string>https://raw.githubusercontent.com/rimodev74/today-dist/main/appcast.xml</string>
-    <key>SUPublicEDKey</key>           <string>fyuXhkBwVnpJBNSFH2AkeIqyVXCZo9V52foTzkNoZIo=</string>
+${SPARKLE_KEYS}
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSRemindersFullAccessUsageDescription</key> <string>Today crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>

@@ -90,7 +90,12 @@ final class MusicPlayer {
     let wanted = playlistLink
     if launchedPlaylist != wanted, let launch = MusicPlaylist.launchCommand(wanted, for: app) {
       launchedPlaylist = wanted
-      send("set sound volume to \(volume)", launch)
+      // Le lecteur se met AU PREMIER PLAN en recevant l'ordre de lancement, et sa fenêtre saute
+      // devant celle où l'on travaille juste au moment où le pomodoro démarre. On note donc qui
+      // avait le focus AVANT d'envoyer — après, c'est déjà trop tard, c'est lui qui l'a.
+      send(
+        "set sound volume to \(volume)", launch,
+        thenRestoringFocusTo: NSWorkspace.shared.frontmostApplication?.processIdentifier)
       return
     }
     send("set sound volume to \(volume)", "play")
@@ -194,7 +199,18 @@ final class MusicPlayer {
     fade = nil
   }
 
-  private func send(_ commands: String...) {
+  /// `thenRestoringFocusTo` rend le premier plan à qui l'avait, une fois l'ordre passé. Un
+  /// identifiant de process et pas l'objet : `NSRunningApplication` n'est pas `Sendable`, et il
+  /// traverserait deux isolations pour arriver ici.
+  ///
+  /// Seul le LANCEMENT d'une playlist en a besoin — mesuré le 9 août 2026 : `play` tout court,
+  /// `pause` et les pas du fondu ne réveillent aucune fenêtre. Aucune façon de lancer une playlist
+  /// sans ce passage devant n'a été trouvée : `open -g` sur l'URI (qui, lui, n'active rien) se
+  /// contente d'AFFICHER la playlist — lecteur en pause, il ne la lance pas.
+  ///
+  /// ponytail: le lecteur passe donc devant un court instant avant de rendre la main. C'est
+  /// visible, et c'est le plafond de l'approche.
+  private func send(_ commands: String..., thenRestoringFocusTo previous: pid_t? = nil) {
     guard !Self.isTesting else { return }
     let name = app.rawValue
     // `is running` en garde : adresser un Apple Event à une app fermée la LANCERAIT. Personne n'a
@@ -210,6 +226,11 @@ final class MusicPlayer {
     queue.async {
       var error: NSDictionary?
       NSAppleScript(source: source)?.executeAndReturnError(&error)
+      // Juste derrière l'ordre, sans délai : vérifié, le focus rendu tient (le lecteur ne le
+      // reprend pas une seconde fois).
+      if let previous {
+        Task { @MainActor in NSRunningApplication(processIdentifier: previous)?.activate() }
+      }
       guard let error else { return }
       let number = error[NSAppleScript.errorNumber] as? Int ?? 0
       Task { @MainActor in self.report(number, app: name) }

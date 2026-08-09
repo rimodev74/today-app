@@ -17,7 +17,13 @@ import Foundation
 /// supprimé, seulement déplacé — et s'il ne peut pas l'être, l'app s'ouvre sur une base neuve à la
 /// nouvelle adresse plutôt que de retourner écrire dans un fichier qui ne lui appartient pas.
 enum StoreLocation {
-  static let directoryName = "Today"
+  /// "Today" par défaut. Surchargeable par `TODAY_APP_SUPPORT_DIR` (posée par `run-dev.sh` via
+  /// `open --env`) pour qu'une build de dev écrive dans SON propre sous-dossier au lieu de la vraie
+  /// base — sans ça, lancer une deuxième instance revient à empiler deux process sur le même store
+  /// SwiftData (cf. run.sh). Absente en production comme en test : les deux gardent "Today".
+  static var directoryName: String {
+    ProcessInfo.processInfo.environment["TODAY_APP_SUPPORT_DIR"] ?? "Today"
+  }
   static let fileName = "default.store"
 
   /// SQLite écrit TROIS fichiers, pas un. Déménager le seul `.store` en laissant son journal
