@@ -94,7 +94,9 @@ final class PomodoroTimerTests: XCTestCase {
   /// Le test attrape la faute de frappe que le compilateur laisse passer.
   func testEverySoundExistsOnThisSystem() {
     for sound in [PomodoroSound.start, .pause, .rest] {
-      XCTAssertNotNil(NSSound(named: sound.rawValue), "son système introuvable : \(sound.rawValue)")
+      XCTAssertNotNil(
+        NSSound(named: sound.defaultSoundName),
+        "son système introuvable : \(sound.defaultSoundName)")
     }
   }
 

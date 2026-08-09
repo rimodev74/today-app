@@ -17,20 +17,38 @@ enum PomodoroPhase: Equatable {
 }
 
 /// Les retours sonores des GESTES du minuteur — distincts de l'alarme de fin de phase, qui, elle,
-/// se règle (cf. `PomodoroTimer.alertSoundStorageKey`). Ils vivent dans le minuteur et pas dans les
-/// commandes clavier : les boutons de la page Pomodoro et le menu de la barre passent par les mêmes
-/// méthodes, et un son posé sur les seules commandes les aurait laissés muets.
+/// se règle par sa propre clé (cf. `PomodoroTimer.alertSoundStorageKey`). Ils vivent dans le
+/// minuteur et pas dans les commandes clavier : les boutons de la page Pomodoro et le menu de la
+/// barre passent par les mêmes méthodes, et un son posé sur les seules commandes les aurait laissés
+/// muets.
 ///
 /// Des sons SYSTÈME (`/System/Library/Sounds`) : ils suivent déjà le volume d'alerte réglé par
-/// l'utilisateur et ne demandent aucun fichier à embarquer, à signer, ni à faire vivre.
+/// l'utilisateur et ne demandent aucun fichier à embarquer, à signer, ni à faire vivre. Réglables
+/// individuellement (Réglages ▸ Pomodoro ▸ Sons, cf. `SoundPickerRow`) — `defaultSoundName` ne sert
+/// que tant que l'utilisateur n'a rien choisi.
 enum PomodoroSound: String {
-  case start = "Pop"
+  case start
   /// `Purr` et pas `Tink` : un arrêt se dit par un son qui DESCEND, là où le clic sec de `Tink`
   /// s'entendait comme un second départ — deux sons secs de suite ne se distinguent qu'en y pensant.
-  case pause = "Purr"
-  /// Les deux pauses partagent le même son : pour l'oreille, c'est le MÊME événement — le travail
-  /// s'arrête. Leur durée se lit à l'écran, pas au bruit.
-  case rest = "Submarine"
+  case pause
+  /// Les deux pauses partagent le même son PAR DÉFAUT : pour l'oreille, c'est le MÊME événement —
+  /// le travail s'arrête. Leur durée se lit à l'écran, pas au bruit.
+  case rest
+
+  var defaultSoundName: String {
+    switch self {
+    case .start: return "Pop"
+    case .pause: return "Purr"
+    case .rest: return "Submarine"
+    }
+  }
+
+  static let storageKeyPrefix = "pomodoroSound_"
+  var storageKey: String { Self.storageKeyPrefix + rawValue }
+
+  var soundName: String {
+    UserDefaults.standard.string(forKey: storageKey) ?? defaultSoundName
+  }
 
   /// Le son d'une phase qu'on OUVRE. La règle tient en une ligne, et c'est elle qui garantit que
   /// pause courte et pause longue ne divergeront pas le jour où l'une des deux gagne un chemin.
@@ -47,7 +65,7 @@ enum PomodoroSound: String {
 
   func play() {
     guard !Self.isTesting else { return }
-    NSSound(named: rawValue)?.play()
+    NSSound(named: soundName)?.play()
   }
 }
 

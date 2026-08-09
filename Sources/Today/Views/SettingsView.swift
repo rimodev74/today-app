@@ -952,33 +952,38 @@ private struct MusicPlaylistsSection: View {
 
 private struct PomodoroSettingsTab: View {
   @AppStorage(PomodoroTimer.autoStartStorageKey) private var pomodoroAutoStart = false
-  @AppStorage(PomodoroTimer.alertSoundStorageKey) private var pomodoroAlertSound = PomodoroTimer
-    .defaultAlertSound
   @AppStorage(MusicPlayer.enabledKey) private var musicEnabled = false
   @AppStorage(MusicPlayer.volumeKey) private var musicVolume = MusicPlayer.defaultVolume
   @AppStorage(MusicPlayer.fadeKey) private var musicFade = MusicPlayer.defaultFadeSeconds
 
   var body: some View {
-    // 760 : ce qu'il faut pour que « Minuteur », « Alerte » et « Musique » tiennent SANS défiler —
-    // vérifié à la capture d'écran le 8 août 2026. Les deux sections de raccourcis, elles, débordent
-    // et déborderont toujours : leurs tableaux grandissent d'une ligne à chaque raccourci ajouté,
-    // aucune hauteur fixe ne peut les contenir. Elles sont en dernier pour cette raison, et c'est le
-    // défilement du `Form` qui les sert.
-    SettingsPane(height: 760) {
+    // 820 : ce qu'il faut pour que « Minuteur », « Sons » et « Musique » tiennent SANS défiler —
+    // vérifié à la capture d'écran le 9 août 2026 (la section « Sons » est passée d'1 à 4 rangées,
+    // une par événement sonore, chacune alignée sur une seule ligne via `LabeledContent`). Les deux
+    // sections de raccourcis, elles, débordent et déborderont toujours : leurs tableaux grandissent
+    // d'une ligne à chaque raccourci ajouté, aucune hauteur fixe ne peut les contenir. Elles sont en
+    // dernier pour cette raison, et c'est le défilement du `Form` qui les sert.
+    SettingsPane(height: 820) {
       Section("Minuteur") {
         Toggle("Enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
       }
 
-      Section("Alerte") {
-        Picker("Son d'alarme", selection: $pomodoroAlertSound) {
-          ForEach(PomodoroTimer.availableSounds, id: \.self) { name in
-            Text(name).tag(name)
-          }
-        }
-
-        Button("Tester le son") {
-          NSSound(named: pomodoroAlertSound)?.play()
-        }
+      // Les quatre événements sonores du minuteur, chacun réglable indépendamment — sans ça, un son
+      // qui rappelle une autre app (ex. le bruit de fin de tâche d'un outil en ligne de commande) ne
+      // se change pas.
+      Section("Sons") {
+        SoundPickerRow(
+          label: "Démarrage", key: PomodoroSound.start.storageKey,
+          defaultValue: PomodoroSound.start.defaultSoundName)
+        SoundPickerRow(
+          label: "Pause", key: PomodoroSound.pause.storageKey,
+          defaultValue: PomodoroSound.pause.defaultSoundName)
+        SoundPickerRow(
+          label: "Début de pause", key: PomodoroSound.rest.storageKey,
+          defaultValue: PomodoroSound.rest.defaultSoundName)
+        SoundPickerRow(
+          label: "Alarme", key: PomodoroTimer.alertSoundStorageKey,
+          defaultValue: PomodoroTimer.defaultAlertSound)
       }
 
       // Ce que fait la musique, pas ce qu'elle joue : le choix du lecteur est parti avec le tableau
@@ -995,6 +1000,42 @@ private struct PomodoroSettingsTab: View {
 
       PomodoroKeyShortcutsSection()
       PomodoroTextShortcutsSection()
+    }
+  }
+}
+
+/// Une rangée « son système + bouton de test », pour un des quatre événements sonores du pomodoro
+/// (démarrage, pause, début de pause, alarme — cf. `PomodoroSound` et
+/// `PomodoroTimer.alertSoundStorageKey`). Les quatre rangées ne diffèrent que par leur étiquette et
+/// leur clé de réglage, d'où la clé passée à l'initialisation plutôt que quatre blocs Picker+Bouton
+/// recopiés.
+private struct SoundPickerRow: View {
+  let label: String
+  @AppStorage private var sound: String
+
+  init(label: String, key: String, defaultValue: String) {
+    self.label = label
+    _sound = AppStorage(wrappedValue: defaultValue, key)
+  }
+
+  var body: some View {
+    // `LabeledContent`, comme « Recherche manuelle » plus haut : c'est lui qui aligne le picker et
+    // le bouton sur la colonne des autres rangées, seuls, ils flotteraient à gauche l'un sous
+    // l'autre.
+    LabeledContent(label) {
+      HStack(spacing: 12) {
+        Picker("", selection: $sound) {
+          ForEach(PomodoroTimer.availableSounds, id: \.self) { name in
+            Text(name).tag(name)
+          }
+        }
+        .labelsHidden()
+        .frame(width: 130)
+
+        Button("Tester le son") {
+          NSSound(named: sound)?.play()
+        }
+      }
     }
   }
 }
