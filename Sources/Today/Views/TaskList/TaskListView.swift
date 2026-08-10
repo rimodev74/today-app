@@ -118,6 +118,10 @@ private struct ListPageView: View {
   // en-tête — TOUT son bloc (en-tête + ses tâches). Figé à l'empoignade (cf. `dragGroup`) : `blocks`
   // ne bouge pas d'un drag, et le recalculer par ligne/frame serait O(n²).
   @State private var draggedGroup: [TaskItem] = []
+  // Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskRow.collapsedForDrag`).
+  // Posée AVANT `draggingID` — c'est lui qui gèle `rowFrames`, et le trou doit se calculer sur la
+  // hauteur réduite.
+  @State private var dragCollapsedID: PersistentIdentifier?
   // Sélection au mouseDOWN, fusionnée dans le geste de réordonnancement (cf. `dragGesture`) : deux
   // gestes séparés se volaient le drag. `pressID` = ligne dont l'appui est en cours (le premier
   // onChanged est le mouseDown) ; `pressWasSelected` retient son état d'avant l'appui pour n'ouvrir
@@ -169,8 +173,8 @@ private struct ListPageView: View {
             .padding(.bottom, 14)
 
           // Une en-tête ouvre un BLOC : elle et les tâches qui la suivent, jusqu'à la prochaine
-          // en-tête. Chaque bloc porte son propre champ « Nouvelle tâche » en bas — créer y insère
-          // la tâche à la fin de CE bloc (avant l'en-tête suivante), pas tout en bas de la liste.
+          // en-tête. Un bloc VIDE porte un champ « Nouvelle tâche » (cf. `showsNewTaskField`) —
+          // créer y insère la tâche à la fin de CE bloc, pas tout en bas de la liste.
           ForEach(blocks) { block in
             if let header = block.header {
               draggableRow(for: header, offsets: offsets)
@@ -178,38 +182,41 @@ private struct ListPageView: View {
             ForEach(block.tasks) { task in
               draggableRow(for: task, offsets: offsets)
             }
-            // Pendant N'IMPORTE QUEL drag (en-tête OU tâche), TOUS les champs « Nouvelle tâche »
-            // disparaissent : ils encombreraient le déplacement. Restent MONTÉS (juste rendus
-            // invisibles par opacité, pas retirés de l'arbre) : `rowFrames`/`dragState` sont GELÉS
-            // à l'empoignade en supposant que chaque ligne (champs compris) garde sa place dans la
-            // mise en page — les retirer aurait fait s'effondrer cet espace pendant TOUT le drag et
-            // cassé le calcul du trou d'insertion (le placeholder).
-            //
-            // Le décalage vient de `fieldOffset` — EXACTEMENT `rowOffset`, pour un champ : au drop,
-            // la position CIBLE (anticipée dès le live-drag, cf. `dragState`) devient la position
-            // RÉELLE (le tri l'a rendue vraie) et le décalage retombe à 0 sans aucun saut, puisque
-            // affichée et réelle coïncidaient déjà. Un champ n'est plus un cas à part : c'est cette
-            // continuité, pas une astuce d'animation, qui rend sa révélation instantanée et fiable.
-            let blockLifted = block.header != nil && block.header?.persistentModelID == draggingID
-            newTaskRow(for: block)
-              .background {
-                GeometryReader { g in
-                  Color.clear.preference(
-                    key: RowFrameKey.self,
-                    value: [.field(block.id): g.frame(in: .named(Self.dragSpace))])
+            if showsNewTaskField(block) {
+              // Pendant N'IMPORTE QUEL drag (en-tête OU tâche), le champ disparaît : il
+              // encombrerait le déplacement. Reste MONTÉ (juste rendu invisible par opacité, pas
+              // retiré de l'arbre) : `rowFrames`/`dragState` sont GELÉS à l'empoignade en supposant
+              // que chaque ligne (champs compris) garde sa place dans la mise en page — le retirer
+              // aurait fait s'effondrer cet espace pendant TOUT le drag et cassé le calcul du trou
+              // d'insertion (le placeholder).
+              //
+              // Le décalage vient de `fieldOffset` — EXACTEMENT `rowOffset`, pour un champ : au
+              // drop, la position CIBLE (anticipée dès le live-drag, cf. `dragState`) devient la
+              // position RÉELLE (le tri l'a rendue vraie) et le décalage retombe à 0 sans aucun
+              // saut, puisque affichée et réelle coïncidaient déjà. Un champ n'est pas un cas à
+              // part : c'est cette continuité, pas une astuce d'animation, qui rend sa révélation
+              // instantanée et fiable.
+              let blockLifted = block.header != nil && block.header?.persistentModelID == draggingID
+              newTaskRow(for: block)
+                .background {
+                  GeometryReader { g in
+                    Color.clear.preference(
+                      key: RowFrameKey.self,
+                      value: [.field(block.id): g.frame(in: .named(Self.dragSpace))])
+                  }
                 }
-              }
-              .opacity(draggingID != nil ? 0 : 1)
-              .offset(
-                x: blockLifted ? dragOffset.width : 0,
-                y: blockLifted ? dragOffset.height : fieldOffset(for: block, offsets: offsets)
-              )
-              .zIndex(blockLifted ? 1 : 0)
-              .animation(
-                blockLifted ? nil : .snappy(duration: 0.22),
-                value: fieldOffset(for: block, offsets: offsets)
-              )
-              .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
+                .opacity(draggingID != nil ? 0 : 1)
+                .offset(
+                  x: blockLifted ? dragOffset.width : 0,
+                  y: blockLifted ? dragOffset.height : fieldOffset(for: block, offsets: offsets)
+                )
+                .zIndex(blockLifted ? 1 : 0)
+                .animation(
+                  blockLifted ? nil : .snappy(duration: 0.22),
+                  value: fieldOffset(for: block, offsets: offsets)
+                )
+                .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
+            }
           }
 
           // Repliée pendant un drag : elle n'entre pas dans `rowFrames`/`dragState` (gelés à
@@ -231,17 +238,9 @@ private struct ListPageView: View {
         // Espace de référence partagé : mesure des positions de repos ET translation du drag.
         .coordinateSpace(name: Self.dragSpace)
         // Placeholder du trou d'insertion, DERRIÈRE les lignes (il n'est donc visible que dans
-        // le vide ouvert par l'écartement). Sans lui : aucun repère de dépôt, et l'écartement
-        // silencieux des voisines se lit comme une saccade.
-        .background(alignment: .topLeading) {
-          if let placeholder {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .fill(Color.primary.opacity(0.06))
-              .frame(width: placeholder.width, height: placeholder.height)
-              .offset(x: placeholder.minX, y: placeholder.minY)
-              .allowsHitTesting(false)
-          }
-        }
+        // le vide ouvert par l'écartement). Le DESSIN est partagé avec les pages intelligentes
+        // (`taskReorderPlaceholder`) : seul le calcul du rectangle appartient à cette page.
+        .taskReorderPlaceholder(placeholder)
         // Même repère que le placeholder ci-dessus (posé au même point d'ancrage) : ses points
         // sont donc directement comparables à `rowFrames`, mesurées dans le même `Self.dragSpace`.
         .background(RightClickObserver(onRightClick: selectAtRightClick))
@@ -389,6 +388,24 @@ private struct ListPageView: View {
       return
     }
     if attachedTasks(of: task).isEmpty { delete(task) } else { headerDeletionCandidate = task }
+  }
+
+  /// Le champ « Nouvelle tâche » ne s'affiche QUE sur un bloc VIDE — liste neuve, ou en-tête de
+  /// section sans tâche. Sur un bloc rempli, il était une ligne de plus dans la séquence de
+  /// glissement (cf. `physicalRows`) : un trou d'insertion à enjamber par section, pour un raccourci
+  /// que le ⊕ de la barre du bas et ⌘N offrent déjà.
+  ///
+  /// « Ou tant qu'il a le focus » n'est pas une exception : la saisie enchaînée (Entrée puis Entrée)
+  /// remplit justement le bloc qu'on est en train de nourrir — sans ça le champ se déroberait après
+  /// la PREMIÈRE tâche. Il s'efface quand le focus part, et le focus part au mouseDOWN de toute
+  /// sélection (cf. `select`), donc bien avant qu'une empoignade ne gèle les cadres : la mise en page
+  /// ne bouge jamais pendant un geste.
+  ///
+  /// Point d'entrée UNIQUE : le `body` et `physicalRows` s'appuient dessus. Deux conditions séparées
+  /// auraient pu diverger — une ligne physique de plus d'un côté que de l'autre décale TOUS les trous
+  /// d'insertion du bloc.
+  private func showsNewTaskField(_ block: TaskBlock) -> Bool {
+    block.tasks.isEmpty || focusedDraft == block.id
   }
 
   /// Découpe les lignes en blocs : une en-tête et les tâches qui la suivent jusqu'à la prochaine.
@@ -652,7 +669,8 @@ private struct ListPageView: View {
         onMove: { move(task, to: $0) },
         onDuplicate: { duplicate(task) },
         onDelete: { delete(task) },
-        onCompletionChanged: scheduleArchiveRefresh
+        onCompletionChanged: scheduleArchiveRefresh,
+        collapsedForDrag: dragCollapsedID == task.persistentModelID
       )
     }
   }
@@ -729,10 +747,13 @@ private struct ListPageView: View {
 
   /// Entrée sur le titre d'une en-tête : ferme son édition ET enchaîne sur le champ « Nouvelle
   /// tâche » de SON bloc — même logique que le titre de la liste (cf. `header`, plus bas), pour
-  /// écrire directement la 1re tâche de la section qu'on vient de nommer.
+  /// écrire directement la 1re tâche de la section qu'on vient de nommer. Une section qui porte déjà
+  /// des tâches n'a plus de champ (cf. `showsNewTaskField`) : Entrée y referme simplement l'édition,
+  /// plutôt que de viser un champ inexistant.
   private func endEditingHeader(_ header: TaskItem) {
     endEditing(header)
-    focusedDraft = blocks.first { $0.header?.persistentModelID == header.persistentModelID }?.id
+    let block = blocks.first { $0.header?.persistentModelID == header.persistentModelID }
+    focusedDraft = block.map(showsNewTaskField) == true ? block?.id : nil
   }
 
   /// Ferme l'édition en cours, quelle que soit la tâche (Échap au niveau fenêtre, clic dehors).
@@ -815,7 +836,9 @@ private struct ListPageView: View {
     for block in blocks {
       if let header = block.header { rows.append(.task(header.persistentModelID)) }
       for task in block.tasks { rows.append(.task(task.persistentModelID)) }
-      rows.append(.field(block.id))
+      // Même condition que le `body`, via la MÊME propriété : une ligne physique de plus ici que ce
+      // qui est rendu décalerait tous les trous d'insertion du bloc.
+      if showsNewTaskField(block) { rows.append(.field(block.id)) }
     }
     return rows
   }
@@ -955,6 +978,9 @@ private struct ListPageView: View {
   /// à la pilule : une en-tête porte ses marges HORS de son fond, un trou à la hauteur de la rangée
   /// serait visiblement plus grand que ce qu'on transporte. Une tâche a ses marges dedans, l'inset
   /// vaut donc 0 et l'expression retombe sur le cas simple.
+  ///
+  /// Le retrait HORIZONTAL, lui, ne se fait pas ici mais dans `taskReorderPlaceholder` : il vaut
+  /// pour les deux moteurs de glissement, et il valait déjà pour les deux avant qu'on ne le voie.
   private func dragPlaceholderRect(_ state: DragState) -> CGRect? {
     guard let first = state.dragged.first,
       let dragFrame = rowFrames[.task(first.persistentModelID)],
@@ -1014,6 +1040,18 @@ private struct ListPageView: View {
         // Empoignade au-delà du seuil : pas de drag d'une carte/en-tête ouverte en édition.
         if draggingID == nil {
           guard !focus.isEditing(task) else { return }
+          // Repli des sous-tâches à MI-CHEMIN du seuil d'empoignade, et le `return` est le fond de
+          // l'affaire : `rowFrames` se fige avec `draggingID`, donc replier après aurait donné une
+          // ligne d'une hauteur et un trou d'une autre. Entre 3 et 6 pt il passe plusieurs
+          // événements souris — donc au moins une mise en page, où la ligne republie sa hauteur
+          // réduite pendant que les cadres sont encore vivants. Et un simple clic ne parcourt pas
+          // 3 pt : il ne replie rien.
+          if dragCollapsedID == nil, !task.subtasks.isEmpty,
+            abs(value.translation.height) > 3 || abs(value.translation.width) > 3
+          {
+            dragCollapsedID = task.persistentModelID
+            return
+          }
           guard abs(value.translation.height) > 6 || abs(value.translation.width) > 6 else {
             return
           }
@@ -1035,7 +1073,14 @@ private struct ListPageView: View {
         dragOffset = value.translation
       }
       .onEnded { value in
-        defer { pressID = nil }
+        // Le dépliant se rouvre en partant, y compris si le geste s'est arrêté entre le repli
+        // (3 pt) et l'empoignade (6 pt) — sinon un quasi-clic laisserait la ligne fermée.
+        defer {
+          pressID = nil
+          if dragCollapsedID != nil {
+            withAnimation(disclosureFlow) { dragCollapsedID = nil }
+          }
+        }
         if draggingID == task.persistentModelID {
           endDrag()
           return
@@ -1326,14 +1371,12 @@ private struct ListPageView: View {
     .fixedSize()
     .popover(isPresented: $pickingListDate, arrowEdge: .bottom) {
       VStack(spacing: 10) {
-        DatePicker(
-          "",
-          selection: Binding(
-            get: { list.scheduledWhen ?? Date() }, set: { list.scheduledWhen = $0 }),
-          displayedComponents: .date
-        )
-        .datePickerStyle(.graphical)
-        .labelsHidden()
+        // La MÊME grille que les panneaux « Quand » et « Échéance » : trois calendriers de trois
+        // allures pour le même geste, c'était le défaut d'avant.
+        CalendarGrid(selection: list.scheduledWhen) { day in
+          list.scheduledWhen = day
+          pickingListDate = false
+        }
 
         if list.scheduledWhen != nil {
           Divider()
@@ -1382,10 +1425,18 @@ private struct ListPageView: View {
   /// ensuite retirée pour que la surbrillance lavande ne reste pas affichée pendant qu'on tape
   /// dans « Nouvelle tâche » — sinon les deux se lisent comme un focus ambigu. Utilisé par le
   /// bouton « + » de la barre d'outils (saisie rapide, sans ouvrir la carte d'édition complète).
+  ///
+  /// Le champ n'existe plus que sur un bloc VIDE (cf. `showsNewTaskField`) : sans champ à focaliser,
+  /// le ⊕ retombe sur ⌘N (tâche vide ouverte en édition) plutôt que de ne rien faire — un bouton de
+  /// barre d'outils muet est exactement le faux-semblant que ce projet refuse.
   private func focusNewTaskField() {
-    let target = selectedBlockID ?? blocks.last?.id
+    let target = blocks.first { $0.id == selectedBlockID } ?? blocks.last
+    guard let target, showsNewTaskField(target) else {
+      createTaskInEditMode()
+      return
+    }
     withAnimation(taskSelectFade) { focus.deselect() }
-    focusedDraft = target
+    focusedDraft = target.id
   }
 
   /// ⌘N : crée une tâche VIDE directement dans le bloc de la sélection courante (ou le dernier) et

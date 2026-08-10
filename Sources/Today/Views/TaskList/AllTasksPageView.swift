@@ -40,6 +40,8 @@ struct AllTasksPageView: View {
   /// Le glissement en cours. Il est borné à la section de la tâche tirée — chaque dépliant est sa
   /// propre zone, avec ses butées (cf. `rowsView`, qui dit pourquoi la traversée a été retirée).
   @State private var reorder = TaskPageReorder()
+  /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskRow.collapsedForDrag`).
+  @State private var dragCollapsedID: PersistentIdentifier?
   /// Sections dont le repli DIFFÈRE de leur défaut (cf. `expansion(of:)`) — stocker l'écart plutôt
   /// que l'état permet à chaque section de garder son propre défaut sans initialisation.
   /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
@@ -106,7 +108,16 @@ struct AllTasksPageView: View {
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
-        onNewTask: { draftFocused = true }, onInsertHeader: nil,
+        // Sans champ affiché (le pan à nu porte déjà des tâches), le ⊕ retombe sur ⌘N plutôt que de
+        // ne rien faire — un bouton de barre d'outils muet est un faux-semblant.
+        onNewTask: {
+          if page.sections.first(where: { !$0.hasHeader }).map(showsNewTaskField) == true {
+            draftFocused = true
+          } else {
+            createTaskInEditMode()
+          }
+        },
+        onInsertHeader: nil,
         onSearch: { searchPresented = true })
     }
     // Le cache vit dans le service (cf. `RemindersService`), pas ici : cette page est recréée à
@@ -252,8 +263,8 @@ struct AllTasksPageView: View {
         rowsView(of: section, offsets: offsets)
         // Le champ « Nouvelle tâche » appartient au pan à nu : c'est le non-classé, et la seule
         // section où l'on crée (une tâche notée ici n'a ni projet ni date — la définition de
-        // l'Inbox).
-        newTaskRow
+        // l'Inbox). Il ne s'affiche que si ce pan est VIDE, cf. `showsNewTaskField`.
+        if showsNewTaskField(section) { newTaskRow }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -355,7 +366,8 @@ struct AllTasksPageView: View {
       onMove: { move(task, to: $0) },
       onDuplicate: { duplicate(task) },
       onDelete: { delete(task) },
-      onCompletionChanged: {}
+      onCompletionChanged: {},
+      collapsedForDrag: dragCollapsedID == task.persistentModelID
     )
     .rowPressGesture(
       isSelected: focus.isSelected(task),
@@ -363,6 +375,12 @@ struct AllTasksPageView: View {
       onSelect: { select(task) },
       onEdit: { beginEditing(task) },
       onDrag: { translation, start in
+        // Replier AVANT d'armer, et renoncer à CETTE image du geste : les cadres se gèlent dès le
+        // premier `track`. Cf. `TaskRow.collapsedForDrag`.
+        if !reorder.isDragging, dragCollapsedID == nil, !task.subtasks.isEmpty {
+          dragCollapsedID = task.persistentModelID
+          return
+        }
         reorder.track(task, by: translation, in: rows)
         // Cadre de repos gelé dès l'empoignade : toujours la même valeur pendant tout le geste.
         if let restingMinX = reorder.frames[.task(task.persistentModelID)]?.minX {
@@ -381,6 +399,11 @@ struct AllTasksPageView: View {
   /// Relâchement. La mécanique est partagée (`dropTaskDrag`) ; ce qui appartient à cette page,
   /// c'est la règle de rattachement — une tâche lâchée dans un dépliant rejoint sa liste.
   private func dropDraggedTask() {
+    // Le dépliant se rouvre en partant, quoi qu'il arrive ensuite — y compris quand le geste s'est
+    // arrêté sur le repli, avant d'avoir armé le moindre glissement (d'où la place AVANT le garde).
+    if dragCollapsedID != nil {
+      withAnimation(disclosureFlow) { dragCollapsedID = nil }
+    }
     guard let dragged = reorder.draggedTask else { return }
     // Reconstruite ici plutôt que passée de rangée en rangée : ça n'arrive qu'une fois par geste,
     // au relâchement, et la faire descendre jusqu'à chaque ligne pour ce seul usage encombrerait
@@ -433,6 +456,18 @@ struct AllTasksPageView: View {
     withAnimation(taskInsert) {
       modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
     }
+  }
+
+  /// Le champ de création ne s'affiche que sur un pan à nu VIDE — ou tant qu'il a le focus, pour que
+  /// la saisie enchaînée (Entrée puis Entrée) ne se dérobe pas après la PREMIÈRE tâche. Même règle
+  /// que `ListPageView.showsNewTaskField`, qui l'explique. Sous une pile de tâches, ce champ n'était
+  /// plus qu'une ligne à enjamber pendant un glissement, là où le ⊕ de la barre du bas et ⌘N créent
+  /// déjà.
+  ///
+  /// Point d'entrée UNIQUE, lu par `sectionView` ET par le ⊕ de la barre du bas : le bouton ne peut
+  /// pas viser un champ que la page n'affiche pas.
+  private func showsNewTaskField(_ section: AllTasksPage.Section) -> Bool {
+    section.tasks.isEmpty || draftFocused
   }
 
   /// Création dans la boîte de réception, SANS date — c'est ce qui la distingue du champ

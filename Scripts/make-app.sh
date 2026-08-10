@@ -21,8 +21,8 @@ BIN=".build/${CONFIG}/Today"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.32"
-BUILD="31"
+SHORT_VERSION="0.33"
+BUILD="32"
 
 # Reconstruire par-dessus une instance EN COURS lui retire son Info.plist sous les pieds (le
 # `rm -rf` plus bas) : la moindre lecture CFBundle ensuite — AppKit en fait une à chaque réveil de

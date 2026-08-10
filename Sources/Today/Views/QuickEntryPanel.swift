@@ -20,10 +20,12 @@ final class QuickEntryWindow {
   /// La fenêtre est volontairement plus large que la capsule : le verre a besoin de marge où
   /// déborder, et `paneShadow` (rayon 40) plus encore. Élargie de 760 à 900 le 10 août 2026 — la
   /// barre de recherche annonce ce qu'elle cherche (« une vue, un dossier, une liste, une tâche »)
-  /// et ce libellé doit tenir sur UNE ligne.
-  static let panelSize = NSSize(width: 900, height: 620)
-  /// La capsule elle-même, centrée dans la fenêtre. L'écart avec `panelSize` est la marge du verre.
-  static let capsuleWidth: CGFloat = 780
+  /// et ce libellé doit tenir sur UNE ligne (il y est forcé, cf. `lineLimit(1)` du champ) — puis
+  /// resserrée de 50 pt le même jour : à 900 la capsule mangeait trop de l'écran.
+  static let panelSize = NSSize(width: 850, height: 620)
+  /// La capsule elle-même, centrée dans la fenêtre. L'écart avec `panelSize` est la marge du verre :
+  /// les deux se resserrent ENSEMBLE, sinon la marge du verre et de l'ombre change avec.
+  static let capsuleWidth: CGFloat = 650
 
   /// Le panneau, créé UNE fois et GARDÉ pour la vie du process. Le jeter à chaque fermeture coûtait
   /// un plantage : le champ de texte de la capsule fait créer la liste de complétion d'AppKit, qui

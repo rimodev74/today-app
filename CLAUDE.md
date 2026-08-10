@@ -278,7 +278,12 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
 1. **Le champ « Nouvelle tâche » et ⌘N ne créent pas la même chose**, et c'est voulu : le champ note
    vite (titre + valider), ⌘N crée une tâche VIDE ouverte en édition. Une tâche restée entièrement
    vide est supprimée à la fermeture de son édition (`TaskItem.isBlank`), sinon ⌘N puis Échap laisse
-   un « Sans titre » en base.
+   un « Sans titre » en base. **Le champ ne s'affiche plus que sur un pan VIDE** — liste neuve,
+   section sans tâche, journée vide — ou tant qu'il garde le focus, pour la saisie enchaînée : sous
+   une pile de tâches il n'était qu'une ligne de plus à enjamber au glissement
+   (`ListPageView.showsNewTaskField` porte la règle, et `physicalRows` DOIT la relire — une ligne
+   physique de plus d'un côté que de l'autre décale tous les trous d'insertion). Sans champ affiché,
+   le ⊕ de la barre du bas retombe sur ⌘N.
 2. **Toutes les `@Query` lisent la table entière** puis filtrent et trient en mémoire. Sans objet à 87
    tâches (0,46 ms pour « Aujourd'hui » ; 11,7 ms à 2 000). Plafond à connaître, pas à corriger —
    passer en `#Predicate` le jour où la base se comptera en milliers.

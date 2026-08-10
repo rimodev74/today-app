@@ -51,6 +51,8 @@ struct TodayPageView: View {
   @State private var focus = TaskFocus()
   /// Le glissement en cours, et les positions de repos qui lui servent de repère.
   @State private var reorder = TaskPageReorder()
+  /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskRow.collapsedForDrag`).
+  @State private var dragCollapsedID: PersistentIdentifier?
 
   /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, que le ticker
   /// rafraîchit : une fenêtre laissée ouverte toute la nuit date bien du bon jour au matin.
@@ -88,6 +90,13 @@ struct TodayPageView: View {
     // Calculés UNE fois et distribués aux rangées : les interroger par ligne referait le même
     // balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
     let offsets = reorder.offsets()
+    // Le champ de création ne s'affiche que sur une journée VIDE — ou tant qu'il a le focus, pour que
+    // la saisie enchaînée (Entrée puis Entrée) ne se dérobe pas après la PREMIÈRE tâche. Même règle
+    // que `ListPageView.showsNewTaskField`, qui l'explique. Sous une pile de tâches, ce champ n'était
+    // plus qu'une ligne à enjamber pendant un glissement, là où le ⊕ de la barre du bas et ⌘N créent
+    // déjà. Une seule expression, lue par le `body` ET par ce ⊕ : le bouton ne peut pas viser un
+    // champ que la page n'affiche pas.
+    let showsDraft = rows.isEmpty || draftFocused
     // `GeometryReader` + largeur EXPLICITE, pas `maxWidth: .infinity` : un `ScrollView` ne borne
     // pas la largeur de son contenu, et un `VStack` ne propose pas la sienne à ses enfants — un
     // `TextField` focalisé (le titre en édition) délègue alors son rendu au field editor d'AppKit,
@@ -108,7 +117,7 @@ struct TodayPageView: View {
                 for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, draggable: true,
                 rows: rows)
             }
-            newTaskRow
+            if showsDraft { newTaskRow }
             remindersSection
           }
         }
@@ -132,7 +141,10 @@ struct TodayPageView: View {
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
-        onNewTask: { draftFocused = true }, onInsertHeader: nil,
+        // Sans champ affiché, le ⊕ retombe sur ⌘N plutôt que de ne rien faire — un bouton de barre
+        // d'outils muet est un faux-semblant.
+        onNewTask: { if showsDraft { draftFocused = true } else { createTaskInEditMode() } },
+        onInsertHeader: nil,
         onSearch: { searchPresented = true })
     }
     .onReceive(ticker) { now = $0 }
@@ -183,6 +195,13 @@ struct TodayPageView: View {
     let onDrag: ((CGSize, CGPoint) -> Void)? =
       draggable
       ? { translation, start in
+        // Replier AVANT d'armer, et renoncer à CETTE image du geste : `TaskPageReorder` gèle les
+        // cadres dès le premier `track`, il faut donc que la ligne ait republié sa hauteur réduite
+        // entre-temps. Cf. `TaskRow.collapsedForDrag` pour le trou de neuf lignes que ça évite.
+        if !reorder.isDragging, dragCollapsedID == nil, !task.subtasks.isEmpty {
+          dragCollapsedID = task.persistentModelID
+          return
+        }
         reorder.track(task, by: translation, in: rows)
         // Le cadre de repos est gelé dès l'empoignade (`TaskPageReorder.measured`) : le lire ici,
         // à chaque image du glissement, rend toujours la même valeur — cf. `SidebarDrop.arm`.
@@ -204,7 +223,8 @@ struct TodayPageView: View {
       onMove: { move(task, to: $0) },
       onDuplicate: { duplicate(task) },
       onDelete: { delete(task) },
-      onCompletionChanged: {}
+      onCompletionChanged: {},
+      collapsedForDrag: dragCollapsedID == task.persistentModelID
     )
     // Un geste unique, comme dans `ListPageView` — pas deux `.onTapGesture` : le tap simple aurait
     // attendu la fin de la fenêtre de double-clic avant d'être délivré (cf. `RowPressGesture`,
@@ -233,6 +253,11 @@ struct TodayPageView: View {
     dropTaskDrag(&reorder, onto: filing, lists: allLists, in: modelContext) { ordered in
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
+    }
+    // Le dépliant se rouvre en partant — y compris si le geste s'est arrêté sur le repli, avant
+    // d'avoir armé quoi que ce soit.
+    if dragCollapsedID != nil {
+      withAnimation(disclosureFlow) { dragCollapsedID = nil }
     }
   }
 

@@ -7,10 +7,9 @@ import SwiftUI
 /// carte d'édition, le menu ▸ *Quand…*) et qu'il devait être le même partout — un second sélecteur
 /// posé « juste pour le survol » aurait divergé au premier réglage ajouté.
 ///
-/// **La grille du mois reste le `DatePicker` natif** (`.graphical`), pas une grille maison : c'est
-/// la règle du projet (natif d'abord), et c'est elle qui apporte gratuitement la navigation de mois,
-/// les semaines du calendrier de l'utilisateur, la localisation et le clavier. Ce qui est écrit ici,
-/// c'est ce que le natif ne donne pas : les raccourcis du haut, l'heure, et l'effacement.
+/// **La grille du mois était le `DatePicker` natif** (`.graphical`) — elle ne l'est plus, et
+/// `CalendarGrid` dit en tête pourquoi le natif ne convenait pas ici. Ce qui reste écrit dans CE
+/// fichier, c'est ce qui n'a jamais été à la grille : les raccourcis du haut, l'heure, l'effacement.
 ///
 /// **Le jour et l'heure ne se mélangent jamais** : `when` reçoit toujours un début de journée,
 /// l'heure vit dans `whenMinutes` (cf. `TaskItem.when`). Toute l'app compare des jours ; une date
@@ -44,9 +43,7 @@ struct WhenPicker: View {
 
       Divider().padding(.vertical, 8)
 
-      DatePicker("", selection: dayBinding, displayedComponents: .date)
-        .datePickerStyle(.graphical)
-        .labelsHidden()
+      CalendarGrid(selection: task.when, onPick: pick)
 
       Divider().padding(.vertical, 8)
 
@@ -68,7 +65,7 @@ struct WhenPicker: View {
   }
 
   /// Le jour, TOUJOURS ramené à son début : c'est l'invariant de `when`, et c'est ici qu'il se
-  /// tient — le `DatePicker` rend, lui, l'instant qu'il avait reçu, heure comprise.
+  /// tient — la grille rend un jour, la tâche exige un début de journée.
   ///
   /// **Et le panneau se REFERME derrière le choix**, comme les raccourcis « Aujourd'hui » et
   /// « Demain » au-dessus. Ce n'est pas qu'une préférence : écrire `when` retrie la liste
@@ -81,13 +78,9 @@ struct WhenPicker: View {
   /// ponytail: l'heure demande donc de rouvrir le panneau. Poser jour ET heure d'une traite
   /// supposerait d'ancrer le panneau ailleurs que sur la rangée — un chantier sur le socle des cinq
   /// pages, à faire si l'aller-retour se sent à l'usage.
-  private var dayBinding: Binding<Date> {
-    Binding(
-      get: { task.when ?? today },
-      set: {
-        task.when = calendar.startOfDay(for: $0)
-        onClose()
-      })
+  private func pick(_ day: Date) {
+    task.when = calendar.startOfDay(for: day)
+    onClose()
   }
 
   private func quickRow(_ title: String, symbol: String, tint: Color, day: Date) -> some View {
@@ -120,10 +113,21 @@ struct WhenPicker: View {
         .font(.app(.callout))
         .foregroundStyle(.tertiary)
     } else if let minutes = task.whenMinutes {
-      HStack(spacing: 8) {
+      HStack(spacing: 6) {
         Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 18)
-        DatePicker("", selection: timeBinding(minutes), displayedComponents: .hourAndMinute)
-          .labelsHidden()
+        Picker("", selection: hourBinding(minutes)) {
+          ForEach(0..<24, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+        Text(":").foregroundStyle(.secondary)
+        Picker("", selection: minuteBinding(minutes)) {
+          ForEach(Self.minuteChoices(including: minutes % 60), id: \.self) {
+            Text(String(format: "%02d", $0)).tag($0)
+          }
+        }
+        .labelsHidden()
+        .fixedSize()
         Spacer(minLength: 0)
         Button {
           task.whenMinutes = nil
@@ -152,19 +156,32 @@ struct WhenPicker: View {
     }
   }
 
-  /// Le `DatePicker` d'heure travaille sur des `Date` ; la tâche, elle, ne retient que des minutes
-  /// depuis minuit. La conversion se fait ICI, aux deux bouts : le jour porté par la date rendue au
-  /// picker n'a aucune importance, seule son heure est relue.
-  private func timeBinding(_ minutes: Int) -> Binding<Date> {
-    Binding(
-      get: {
-        calendar.date(
-          bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: task.when ?? today)
-          ?? today
-      },
-      set: { newValue in
-        let time = calendar.dateComponents([.hour, .minute], from: newValue)
-        task.whenMinutes = (time.hour ?? 0) * 60 + (time.minute ?? 0)
-      })
+  /// Deux menus déroulants, et SURTOUT PAS un `DatePicker(.hourAndMinute)`.
+  ///
+  /// Sur macOS ce `DatePicker` est un `NSDatePicker` en style champ+incrémenteur : un CHAMP DE
+  /// TEXTE. Le focaliser fait créer la liste de complétion d'AppKit, qui vit hors process
+  /// (`SPCompletionListServiceViewController`, via ViewBridge) et s'abonne à « une fenêtre va
+  /// s'afficher ». Ce panneau étant un popover, donc une fenêtre JETÉE à chaque fermeture, chaque
+  /// heure réglée laissait un abonné sans fenêtre conteneur — et la prochaine fenêtre ordonnée à
+  /// l'écran (ici le réveil de l'icône de barre de menus) faisait lever l'assertion dans
+  /// `-[NSRemoteView containingWindowWillOrderOnScreen:]` : « Abort trap: 6 ». D'où le décalage qui
+  /// égare — l'app meurt à la 5e heure réglée, pas à la 1re. Pile :
+  /// `Today-2026-08-10-115358.ips`, même famille que les 27 plantages d'août 2026
+  /// (→ `PIEGES.md` § Fenêtres). Un menu déroulant, lui, ne prend jamais le premier répondeur texte.
+  ///
+  /// ponytail: minutes au pas de 5, plus la valeur courante si elle tombe ailleurs (une heure venue
+  /// des Rappels). Passer au pas de 1 si le besoin se fait sentir — c'est une liste plus longue,
+  /// rien de plus.
+  private static func minuteChoices(including current: Int) -> [Int] {
+    let steps = Array(stride(from: 0, to: 60, by: 5))
+    return steps.contains(current) ? steps : (steps + [current]).sorted()
+  }
+
+  private func hourBinding(_ minutes: Int) -> Binding<Int> {
+    Binding(get: { minutes / 60 }, set: { task.whenMinutes = $0 * 60 + minutes % 60 })
+  }
+
+  private func minuteBinding(_ minutes: Int) -> Binding<Int> {
+    Binding(get: { minutes % 60 }, set: { task.whenMinutes = minutes / 60 * 60 + $0 })
   }
 }

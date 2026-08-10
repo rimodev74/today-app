@@ -14,9 +14,7 @@ struct DeadlinePicker: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      DatePicker("", selection: dayBinding, displayedComponents: .date)
-        .datePickerStyle(.graphical)
-        .labelsHidden()
+      CalendarGrid(selection: task.deadline, onPick: pick)
 
       if task.deadline != nil {
         Divider()
@@ -34,12 +32,8 @@ struct DeadlinePicker: View {
   /// Le panneau se referme derrière le choix, comme `WhenPicker` — et pour la même raison, qui n'a
   /// rien d'esthétique : écrire une date peut retrier la liste, donc déplacer la rangée sous le
   /// panneau. Cf. `WhenPicker.dayBinding` pour la pile de plantage qui l'a établi.
-  private var dayBinding: Binding<Date> {
-    Binding(
-      get: { task.deadline ?? Date() },
-      set: {
-        task.deadline = $0
-        onClose()
-      })
+  private func pick(_ day: Date) {
+    task.deadline = day
+    onClose()
   }
 }

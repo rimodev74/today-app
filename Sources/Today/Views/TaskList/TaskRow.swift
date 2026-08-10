@@ -36,6 +36,18 @@ struct TaskRow: View {
   var onDelete: () -> Void
   /// Cocher/décocher : la page décide ce qu'elle en fait (ici, programmer l'archivage).
   var onCompletionChanged: () -> Void
+  /// La ligne VOYAGE : ses sous-tâches se replient le temps du geste, quel que soit l'état du
+  /// chevron, et il ne part sous le curseur que le titre.
+  ///
+  /// Une tâche à huit sous-tâches ouvrait sinon un trou de neuf lignes derrière elle : les cadres
+  /// sont GELÉS à l'empoignade, donc la hauteur retenue pour le trou, le calque et l'écartement des
+  /// voisines était celle de la ligne DÉPLIÉE. D'où le séquencement côté page — replier d'abord,
+  /// empoigner ensuite (cf. `ListPageView.dragGesture`) : le repli doit avoir eu sa passe de mise en
+  /// page AVANT que le gel n'arrive, sinon on replie l'image sans corriger le calcul.
+  ///
+  /// Valeur par défaut assumée, contrairement à `TaskPageBase.reorder` : une page sans glissement
+  /// n'a rien à replier, `false` n'y est pas un oubli.
+  var collapsedForDrag: Bool = false
 
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.modelContext) private var modelContext
@@ -609,9 +621,10 @@ struct TaskRow: View {
   }
 
   /// En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
-  /// est piloté par `subtasksExpanded`.
+  /// est piloté par `subtasksExpanded` — et le temps d'un glissement, par `collapsedForDrag`, qui
+  /// l'emporte sur les deux.
   private var showsSubtasks: Bool {
-    !task.orderedSubtasks.isEmpty && (isEditing || subtasksExpanded)
+    !collapsedForDrag && !task.orderedSubtasks.isEmpty && (isEditing || subtasksExpanded)
   }
 
   private var subtasksSection: some View {
@@ -671,7 +684,10 @@ struct TaskRow: View {
         Image(systemName: "chevron.right")
           .font(.app(11, weight: .semibold))
           .foregroundStyle(.tertiary)
-          .rotationEffect(.degrees(subtasksExpanded ? 90 : 0))
+          // Sur `showsSubtasks` et non sur `subtasksExpanded` : pendant un glissement le dépliant
+          // est fermé sans que le chevron n'ait été touché, et un chevron qui pointe vers le bas
+          // au-dessus de rien est un mensonge à l'écran.
+          .rotationEffect(.degrees(showsSubtasks ? 90 : 0))
       }
       .contentShape(Rectangle())
     }
@@ -821,10 +837,18 @@ struct TaskRow: View {
   /// Menu partagé par le ••• et le clic droit.
   @ViewBuilder
   private var taskMenu: some View {
+    // Les deux mêmes raccourcis qu'en tête de `WhenPicker`, mêmes symboles : c'est le même geste,
+    // il ne peut pas se présenter autrement d'un endroit à l'autre. Le panneau reste pour le reste.
     Button {
       task.when = Calendar.current.startOfDay(for: Date())
     } label: {
       Label("Aujourd'hui", systemImage: "star.fill")
+    }
+    Button {
+      let today = Calendar.current.startOfDay(for: Date())
+      task.when = Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+    } label: {
+      Label("Demain", systemImage: "sunrise.fill")
     }
     Button {
       openDatePicker(task, .when)

@@ -322,12 +322,24 @@ extension View {
   /// l'écartement des voisines. Sans lui, aucun repère de dépôt — et l'écartement silencieux se
   /// lit comme une saccade.
   func taskReorderPlaceholder(_ reorder: TaskPageReorder) -> some View {
+    taskReorderPlaceholder(reorder.placeholder())
+  }
+
+  /// La même chose à partir d'un rectangle déjà calculé — `ListPageView` a son propre moteur de
+  /// glissement et son propre calcul du trou, mais il n'y a aucune raison qu'il le DESSINE
+  /// autrement. Le trou avait déjà divergé une fois par ce chemin-là.
+  ///
+  /// **Le trou se dessine à la PILULE, pas au CADRE de la rangée.** Une rangée — tâche comme
+  /// en-tête — se termine par `.padding(.leading, rowInset)` posé HORS de son fond : le cadre
+  /// mesuré déborde donc de 10 pt à gauche de ce qu'on voit d'elle, et le trou dessiné dessus
+  /// sortait seul de la colonne. À droite il n'y a rien à retirer : la pilule y va jusqu'au bord.
+  func taskReorderPlaceholder(_ hole: CGRect?) -> some View {
     background(alignment: .topLeading) {
-      if let hole = reorder.placeholder() {
+      if let hole {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
           .fill(Color.primary.opacity(0.06))
-          .frame(width: hole.width, height: hole.height)
-          .offset(x: hole.minX, y: hole.minY)
+          .frame(width: max(hole.width - rowInset, 0), height: hole.height)
+          .offset(x: hole.minX + rowInset, y: hole.minY)
           .allowsHitTesting(false)
       }
     }

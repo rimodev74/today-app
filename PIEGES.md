@@ -101,6 +101,23 @@ qu'on n'affichera pas — et ne pas jeter une fenêtre qui a hébergé un champ 
 de la même règle : la vue distante de complétion veut une fenêtre conteneur, et elle la veut du début
 à la fin.
 
+#### Le 10 août 2026 : la règle rattrape l'heure d'une tâche
+
+`Today-2026-08-10-115358.ips`, même pile au mot près (`_CFBundleGetValueForInfoKey` →
+`-[NSRemoteView containingWindowWillOrderOnScreen:]`, réveil de l'icône de barre de menus en
+ordonnateur). Geste : régler l'heure de plusieurs tâches d'affilée ; mort à la 5e. Un popover EST une
+fenêtre jetée à chaque fermeture, et `WhenPicker` y posait un `DatePicker(.hourAndMinute)` — sur
+macOS un `NSDatePicker` champ+incrémenteur, donc un CHAMP DE TEXTE. Chaque heure réglée laissait donc
+un abonné hors process sans fenêtre conteneur. C'est la moitié « ne pas jeter une fenêtre qui a
+hébergé un champ focalisé », vue depuis un panneau qu'on croyait inoffensif parce qu'il ne contenait
+« qu'un sélecteur ».
+
+Remplacé par deux menus déroulants (heure, minutes au pas de 5) : un `NSPopUpButton` ne prend jamais
+le premier répondeur texte. **Ça ne rend pas les popovers sûrs** — `WhenPicker`, `DeadlinePicker`, la
+date d'une liste et la feuille `SchedulePlannerView` (qui, elle, a encore un champ Titre ET deux
+champs d'heure) restent des fenêtres présentées depuis le layout. Le correctif de fond reste le même
+qu'ailleurs : se révéler DANS la fenêtre.
+
 ### Reconstruire le bundle sous les pieds d'une instance vivante
 
 `Scripts/make-app.sh` REFUSE de tourner si une instance de Today est en cours : reconstruire sous

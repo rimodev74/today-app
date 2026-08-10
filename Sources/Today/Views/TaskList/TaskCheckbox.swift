@@ -47,7 +47,14 @@ struct TaskCheckbox: View {
     // Bounce au press/release via un ButtonStyle dédié ; le tracé + le fond restent animés par le
     // withAnimation de la page.
     .buttonStyle(PressBounceButtonStyle())
-    .animation(.bouncy(duration: 0.3, extraBounce: 0.15), value: isCompleted)
+    // PAS de `.animation(value: isCompleted)`, et c'est le correctif du 10 août 2026. Il y en avait
+    // une, en `.bouncy(extraBounce: 0.15)` — soit un ressort à 45 % de rebond posé sur la case, à
+    // l'instant même où la page déplace la rangée en `taskInsert` (critiquement amorti). La case
+    // gardait donc sa propre courbe pendant que la ligne descendait à sa nouvelle place : la rangée
+    // arrivait, et quelque chose rebondissait dessus. C'est exactement le piège décrit dans
+    // `CLAUDE.md` § Animations — une transition d'état appartient à la PAGE, en `withAnimation`.
+    // Les cinq sites qui cochent (`TaskRow`, `UpcomingPageView`, `ArchivePageView`, les deux
+    // restaurations) enveloppent tous `toggleCompletion()` : il n'y a rien à rattraper ici.
     // PAS `.onHover` + `NSCursor.set()` : cette case vit DANS une ligne qui a déjà son propre
     // `.onHover` ; les cursor rects AppKit sont résolus par la fenêtre à partir de la géométrie.
     .overlay { PointingHandCursorArea().allowsHitTesting(false) }
