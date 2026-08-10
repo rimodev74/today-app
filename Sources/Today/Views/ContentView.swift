@@ -635,7 +635,7 @@ struct ContentView: View {
   private func applyPendingSelection() {
     guard let pending = AppCommand.pendingSelection else { return }
     AppCommand.pendingSelection = nil
-    selection = .smartList(pending)
+    selection = pending
   }
 
   private func recordRecent(_ selection: SidebarSelection?) {

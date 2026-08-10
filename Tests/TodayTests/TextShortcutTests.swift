@@ -189,7 +189,8 @@ final class TextShortcutTests: XCTestCase {
 
   func testKeyShortcutsReconcileRenamedLists() {
     let stored = [
-      KeyShortcut(expansion: "#Courses", key: KeyCombo(keyCode: 17, modifiers: 1_048_576, label: "⌘T"))
+      KeyShortcut(
+        expansion: "#Courses", key: KeyCombo(keyCode: 17, modifiers: 1_048_576, label: "⌘T"))
     ]
 
     let reconciled = stored.reconciled(against: ["Courses de la semaine"])

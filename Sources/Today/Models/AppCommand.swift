@@ -38,6 +38,31 @@ enum AppCommand: String, CaseIterable, Identifiable {
     }
   }
 
+  /// Les mots par lesquels la palette peut trouver la commande, EN PLUS de son libellé.
+  ///
+  /// Nécessaire parce que trois des cinq actions du minuteur ne portent pas le mot « pomodoro » —
+  /// « Passer à la phase suivante », « Démarrer une pause courte », « Démarrer une pause longue ».
+  /// Sans ces mots-clés, taper « pomodoro » n'en sortait que deux sur cinq, alors que c'est
+  /// précisément le mot par lequel on les cherche toutes.
+  var keywords: [String] {
+    isPomodoro ? ["pomodoro", "minuteur"] : []
+  }
+
+  /// L'icône de la commande dans la palette de la capsule (cf. `QuickPalette`). Les commandes de
+  /// navigation empruntent celle de la page où elles emmènent — deux icônes différentes pour le
+  /// même endroit se liraient comme deux destinations.
+  var systemImage: String {
+    if let smartList { return smartList.systemImage }
+    switch self {
+    case .show: return "macwindow"
+    case .pomodoroStart: return "play.fill"
+    case .pomodoroPause: return "pause.fill"
+    case .pomodoroSkip: return "forward.fill"
+    case .pomodoroShortBreak, .pomodoroLongBreak: return "cup.and.saucer.fill"
+    case .all, .today, .upcoming, .archive: return "macwindow"  // couvertes par `smartList`
+    }
+  }
+
   /// Les cinq commandes du minuteur, dans l'ordre où les réglages les présentent.
   static let pomodoroCommands: [AppCommand] = [
     .pomodoroStart, .pomodoroPause, .pomodoroSkip, .pomodoroShortBreak, .pomodoroLongBreak,
@@ -74,14 +99,27 @@ enum AppCommand: String, CaseIterable, Identifiable {
   /// Le relais pour la fenêtre qui n'existe pas encore. `activate` peut RECRÉER la fenêtre
   /// principale (elle avait été fermée au bouton rouge) : la notification part alors avant que la
   /// `ContentView` neuve ne se soit abonnée, et se perdrait. Elle la lit à son apparition.
-  @MainActor static var pendingSelection: SmartList?
+  ///
+  /// Une `SidebarSelection` et plus seulement une `SmartList` : la palette de la capsule sait
+  /// désormais ouvrir l'app sur un DOSSIER ou une LISTE (⌘↩), pas seulement sur une vue.
+  @MainActor static var pendingSelection: SidebarSelection?
 
   @MainActor func run() {
     if isPomodoro { return runPomodoro() }
     activate()
     guard let smartList else { return }
-    Self.pendingSelection = smartList
-    NotificationCenter.default.post(name: Self.selectionNotification, object: smartList)
+    Self.reveal(.smartList(smartList), activating: false)
+  }
+
+  /// Ramène l'app et l'ouvre SUR un élément précis — ce que `!today` faisait pour une vue, étendu à
+  /// n'importe quelle destination de la barre latérale.
+  ///
+  /// `activating` distingue les deux appelants : `run` a déjà activé l'app avant de savoir où aller
+  /// (elle active même quand il n'y a nulle part où aller, cf. `!show`), la capsule non.
+  @MainActor static func reveal(_ selection: SidebarSelection, activating: Bool = true) {
+    pendingSelection = selection
+    if activating { AppCommand.show.run() }
+    NotificationCenter.default.post(name: selectionNotification, object: nil)
   }
 
   /// Le minuteur, piloté au clavier. `PomodoroTimer.shared` et pas l'instance de l'environnement :

@@ -17,13 +17,13 @@ extension TodoList {
     if let trigger = TextShortcut.decode(
       UserDefaults.standard.data(forKey: TextShortcut.storageKey) ?? Data()
     ).first(where: { QuickEntry.reconciledListToken($0.expansion, against: [title]) == token })?
-      .trigger {
+    .trigger {
       return "« \(trigger) »"
     }
     if let combo = KeyShortcut.decode(
       UserDefaults.standard.data(forKey: KeyShortcut.storageKey) ?? Data()
     ).first(where: { QuickEntry.reconciledListToken($0.expansion, against: [title]) == token })?
-      .key {
+    .key {
       return combo.label
     }
     return nil

@@ -11,7 +11,6 @@ struct TodayApp: App {
 
   init() {
     CrashLog.install()  // en premier : tout ce qui suit peut lever
-    Self.prewarmRichTextEditing()
     NSApplication.shared.setActivationPolicy(.regular)
     NSApplication.shared.activate(ignoringOtherApps: true)
     _ = SparkleUpdater.shared
@@ -40,40 +39,17 @@ struct TodayApp: App {
     }
   }
 
-  /// La toute première fois qu'un champ de texte devient premier répondeur dans le process,
-  /// AppKit fait flasher un panneau système une fraction de seconde — observé sur le TITRE d'une
-  /// tâche (un `TextField` SwiftUI ordinaire, passant par le « field editor » partagé d'AppKit,
-  /// instancié paresseusement au tout premier focus) ET sur les notes en texte riche
-  /// (`NSTextView` avec `isRichText`, RTF non vide). Ce sont deux coûts distincts qui se
-  /// chevauchaient jusque-là dans un même flash apparent (confirmé par bissection : en régler un
-  /// laisse l'autre réapparaître seul, sur la prochaine tâche ouverte en premier — notes ou pas).
-  /// On rejoue les deux scènes ici, dans une fenêtre jamais affichée (hors de l'écran, `orderFront`
-  /// jamais appelé) : les coûts sont payés avant l'affichage de la fenêtre principale plutôt qu'au
-  /// premier double-clic de l'utilisateur.
-  private static func prewarmRichTextEditing() {
-    func offscreenWindow(_ view: NSView) -> NSWindow {
-      let window = NSWindow(
-        contentRect: NSRect(x: -10_000, y: -10_000, width: 10, height: 10),
-        styleMask: [.borderless], backing: .buffered, defer: true)
-      window.isReleasedWhenClosed = false
-      window.contentView = view
-      window.makeFirstResponder(view)
-      return window
-    }
-
-    // Titre : champ de texte simple, comme `TextField` — force l'instanciation du field editor
-    // partagé d'AppKit. Fenêtre distincte de celle des notes : réattribuer `contentView` sur une
-    // même fenêtre laisserait planer un doute sur l'ordre exact de démontage du premier champ.
-    _ = offscreenWindow(NSTextField(string: " "))
-
-    // Notes : texte riche avec du RTF non vide à décoder, comme `RichTextEditor`.
-    let textView = NSTextView()
-    textView.isRichText = true
-    textView.isAutomaticLinkDetectionEnabled = true
-    let sample = NotesCodec.encode(NSAttributedString(string: " "))
-    textView.textStorage?.setAttributedString(NotesCodec.decode(sample))
-    _ = offscreenWindow(textView)
-  }
+  // `prewarmRichTextEditing()` vivait ici : deux fenêtres hors écran où un `NSTextField` et un
+  // `NSTextView` prenaient le premier répondeur, pour payer AVANT l'affichage le flash de panneau
+  // système du tout premier focus. RETIRÉ le 10 août 2026 : c'était la cause des 27 plantages
+  // « NSRemoteView … but expected (null) ». Donner le premier répondeur à un champ de texte fait
+  // créer la liste de complétion d'AppKit, qui vit HORS PROCESS ; l'abonnement de cette vue
+  // distante survit sans fenêtre conteneur, et la fenêtre suivante ordonnée à l'écran — l'icône de
+  // barre de menus au lancement, la capsule — fait lever une assertion d'Apple qui tue le process.
+  // Mesuré, 5 manches de 80 ouvertures de capsule : 4 manches mortes dès la 1re ouverture avec le
+  // préchauffage, 1 morte sur 333 ouvertures sans. Retenir les fenêtres, les ordonner à l'écran,
+  // couper la complétion, n'en garder qu'une moitié : tout mesuré, rien n'y change.
+  // → `PIEGES.md` § Fenêtres. Le flash du premier focus est revenu : c'est le prix.
 
   /// Ouvre un store avec le schéma et le plan de migration de l'app — SANS plan B : c'est
   /// l'appelant qui décide quoi faire d'un échec. Le `container` ci-dessous met le store de côté et

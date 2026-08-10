@@ -17,13 +17,33 @@ final class QuickEntryWindow {
   /// Le nom de la notification distribuée qui ouvre ou ferme la capsule (cf. `TodayApp.init`).
   static let toggleNotification = "app.today.quickEntry.toggle"
 
-  private var panel: NSPanel?
+  /// La fenêtre est volontairement plus large que la capsule : le verre a besoin de marge où
+  /// déborder, et `paneShadow` (rayon 40) plus encore. Élargie de 760 à 900 le 10 août 2026 — la
+  /// barre de recherche annonce ce qu'elle cherche (« une vue, un dossier, une liste, une tâche »)
+  /// et ce libellé doit tenir sur UNE ligne.
+  static let panelSize = NSSize(width: 900, height: 620)
+  /// La capsule elle-même, centrée dans la fenêtre. L'écart avec `panelSize` est la marge du verre.
+  static let capsuleWidth: CGFloat = 780
+
+  /// Le panneau, créé UNE fois et GARDÉ pour la vie du process. Le jeter à chaque fermeture coûtait
+  /// un plantage : le champ de texte de la capsule fait créer la liste de complétion d'AppKit, qui
+  /// vit HORS PROCESS ; sa fenêtre conteneur disparue, l'abonnement de cette vue distante survit et
+  /// la fenêtre suivante ordonnée à l'écran fait lever une assertion d'Apple qui tue le process.
+  /// Mesuré : 3 morts sur 594 ouvertures en le reconstruisant. → `PIEGES.md` § Fenêtres.
+  ///
+  /// Ce qui reste NEUF à chaque ouverture, c'est le CONTENU — `contentView`, donc tout l'état
+  /// SwiftUI et le canal. Rien du titre à moitié tapé ne survit ; le brouillon volontairement gardé
+  /// passe, lui, par `QuickEntryDraftStore`.
+  private var panel: FloatingPanel?
   private var channel: QuickEntryChannel?
+
+  /// Ouverte = le panneau est À L'ÉCRAN. `panel != nil` ne le dit plus : il survit aux fermetures.
+  private var isOpen: Bool { panel?.isVisible == true }
 
   private init() {}
 
   func toggle(container: ModelContainer) {
-    if panel != nil { requestClose() } else { show(container: container) }
+    if isOpen { requestClose() } else { show(container: container) }
   }
 
   /// Le raccourci clavier d'une action de saisie (`@today`, `#Courses`). Capsule OUVERTE, le jeton
@@ -31,7 +51,7 @@ final class QuickEntryWindow {
   /// fermée, il ouvre la capsule avec le jeton déjà appliqué. Rouvrir dans tous les cas jetterait
   /// le titre à moitié tapé, alors que le geste ne demandait qu'à le dater.
   func apply(token: String, container: ModelContainer) {
-    if let channel, panel != nil {
+    if let channel, isOpen {
       channel.token = token
     } else {
       show(container: container, prefill: token)
@@ -39,13 +59,21 @@ final class QuickEntryWindow {
   }
 
   func show(container: ModelContainer, prefill: String = "") {
-    close()  // panneau NEUF à chaque ouverture : pas de titre à moitié tapé qui survivrait
-    let panel = makePanel(container: container, prefill: prefill)
+    let panel = self.panel ?? makePanel()
     self.panel = panel
-    // Le panneau est jetable, sa POSITION ne l'est pas : `setFrameUsingName` relit celle où on l'a
-    // laissé (AppKit l'écrit dans les défauts à chaque déplacement, grâce à l'autosave posé dans
-    // `makePanel`). Faux au tout premier lancement, et seulement là, on retombe sur le tiers haut.
-    if !panel.setFrameUsingName(panel.frameAutosaveName) { position(panel) }
+
+    let channel = QuickEntryChannel()
+    self.channel = channel
+    let theme = AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "")
+    let hosting = NSHostingView(
+      rootView: QuickEntryView(
+        channel: channel, prefill: prefill, onClose: { [weak self] in self?.close() }
+      )
+      .modelContainer(container)
+      .preferredColorScheme((theme ?? .system).colorScheme)
+    )
+    hosting.layer?.backgroundColor = .clear
+    panel.contentView = hosting
     panel.makeKeyAndOrderFront(nil)
   }
 
@@ -67,34 +95,40 @@ final class QuickEntryWindow {
 
   func close() {
     panel?.orderOut(nil)
-    panel = nil
+    // La fenêtre reste, son CONTENU part. Le garder laisserait les trois `@Query` de la capsule
+    // (listes, projets, TOUTES les tâches) se rejouer à chaque écriture SwiftData, capsule fermée.
+    panel?.contentView = NSView()
     channel = nil
   }
 
-  private func makePanel(container: ModelContainer, prefill: String) -> NSPanel {
+  private func makePanel() -> FloatingPanel {
     // Fenêtre volontairement plus grande que la capsule, et TRANSPARENTE : le verre a besoin de
     // composer sur ce qu'il y a derrière (une fenêtre opaque le réduirait à un aplat), et le
-    // ressort d'ouverture comme le dépli des notes doivent avoir de la marge où déborder. On ne
+    // ressort d'ouverture comme le dépli des sous-tâches doivent avoir de la marge où déborder. On ne
     // redimensionne donc jamais le panneau — c'est le contenu qui bouge à l'intérieur.
-    // ponytail: hauteur fixe dimensionnée pour la capsule + ses notes + une dizaine de tâches en
+    // ponytail: hauteur fixe dimensionnée pour la capsule + ses sous-tâches + une dizaine de tâches en
     // attente ; au-delà la fournée déborderait — à passer en `setFrame` animé si ça arrive.
     let panel = FloatingPanel(
-      contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
+      contentRect: NSRect(origin: .zero, size: Self.panelSize),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered, defer: false)
     // `.borderless` ne devient jamais clé tout seul (d'où `canBecomeKey` dans la sous-classe), mais
     // c'est le seul style sans chrome ni coins arrondis système imposés sous la capsule.
-    let channel = QuickEntryChannel()
-    self.channel = channel
     panel.onCancel = { [weak self] in self?.requestClose() }
     panel.onEscape = { [weak self] in self?.requestClose(discardDraft: true) }
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false  // l'ombre vient du verre, à la forme de la capsule
     panel.isMovableByWindowBackground = true
-    // ponytail: l'autosave sauve le CADRE entier, taille comprise — si `contentRect` change un jour,
-    // les défauts existants imposeront l'ancienne ; ajouter un `setContentSize` après restauration.
     panel.setFrameAutosaveName("QuickEntryPanel")
+    // La POSITION survit aux lancements : `setFrameUsingName` relit celle où on a laissé la capsule
+    // (AppKit l'écrit dans les défauts à chaque déplacement, grâce à l'autosave ci-dessus). Faux au
+    // tout premier lancement, et seulement là, on retombe sur le tiers haut.
+    if !panel.setFrameUsingName(panel.frameAutosaveName) { position(panel) }
+    // L'autosave garde le CADRE entier, taille comprise : un cadre enregistré par une version plus
+    // étroite imposerait son ancienne largeur, et la barre resterait serrée pour qui a déjà déplacé
+    // la capsule une fois. On ne reprend donc de lui que l'ENDROIT.
+    panel.setContentSize(Self.panelSize)
     panel.isFloatingPanel = true
     panel.becomesKeyOnlyIfNeeded = false
     panel.hidesOnDeactivate = false
@@ -104,17 +138,6 @@ final class QuickEntryWindow {
     panel.canHide = false
     panel.level = .floating
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-
-    let theme = AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "")
-    let hosting = NSHostingView(
-      rootView: QuickEntryView(
-        channel: channel, prefill: prefill, onClose: { [weak self] in self?.close() }
-      )
-      .modelContainer(container)
-      .preferredColorScheme((theme ?? .system).colorScheme)
-    )
-    hosting.layer?.backgroundColor = .clear
-    panel.contentView = hosting
     return panel
   }
 
@@ -199,7 +222,7 @@ private struct DestinationHeightKey: PreferenceKey {
 }
 
 /// Le contenu du panneau : une capsule d'une ligne — d'où part la tâche, ce qu'elle dit, quand — qui
-/// se déplie sur un second bloc pour les notes et les sous-tâches. Pas de barre de validation :
+/// se déplie sur un second bloc pour les sous-tâches. Pas de barre de validation :
 /// Entrée enregistre, Échap ferme, et les deux boutons ne faisaient qu'afficher des raccourcis que
 /// tout le monde connaît.
 
@@ -209,15 +232,14 @@ private struct DestinationHeightKey: PreferenceKey {
 private struct PendingTask: Identifiable {
   let id = UUID()
   var title: String
-  var notes: String
   var subtasks: [String]
   var when: Date?
   var targetID: PersistentIdentifier?
 }
 
 /// Le brouillon perdu à une fermeture accidentelle (Échap, clic ailleurs, raccourci global rejoué)
-/// — gardé en mémoire pour la durée de l'app, la capsule étant un panneau NEUF à chaque ouverture
-/// (cf. `QuickEntryWindow.show`). Une vraie validation (`save`) ne le touche jamais : `restoreDraft`
+/// — gardé en mémoire pour la durée de l'app, le CONTENU de la capsule étant neuf à chaque
+/// ouverture (cf. `QuickEntryWindow.show`). Une vraie validation (`save`) ne le touche jamais : `restoreDraft`
 /// le vide dès qu'il est repris, avant qu'aucune sauvegarde n'ait pu le voir.
 @MainActor
 private final class QuickEntryDraftStore {
@@ -226,7 +248,6 @@ private final class QuickEntryDraftStore {
 
   struct Draft {
     var title = ""
-    var notes = ""
     var subtasks: [String] = []
     var when: Date?
     var targetID: PersistentIdentifier?
@@ -234,7 +255,6 @@ private final class QuickEntryDraftStore {
 
     var isEmpty: Bool {
       title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        && notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && subtasks.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         && queued.isEmpty
     }
@@ -260,9 +280,11 @@ private struct QuickEntryView: View {
   @Environment(\.modelContext) private var modelContext
   @Query(sort: [SortDescriptor(\TodoList.sortIndex)]) private var lists: [TodoList]
   @Query(sort: [SortDescriptor(\Project.sortIndex)]) private var projects: [Project]
+  /// Sans tri : `QuickPalette` pose le sien (l'ordre d'« Aujourd'hui » pour le coup d'œil, la
+  /// pertinence pour une recherche), et un `SortDescriptor` de plus ne ferait que trier deux fois.
+  @Query private var allTasks: [TaskItem]
 
   @State private var title = ""
-  @State private var notes = ""
   /// Sous-tâches en brouillon : de simples chaînes, pas des `Subtask`. Le modèle n'existera qu'à
   /// l'enregistrement — en créer avant obligerait à les rattacher à une `TaskItem` fantôme, puis à
   /// la nettoyer si le panneau se ferme sur Échap.
@@ -275,6 +297,19 @@ private struct QuickEntryView: View {
   /// La fournée en attente : ⌘↩ y dépose la tâche en cours et rend le champ vide, ↩ enregistre tout
   /// et ferme. Vider trois idées d'affilée ne demande plus de rouvrir le panneau à chaque fois.
   @State private var queued: [PendingTask] = []
+  /// La ligne de la palette visée au clavier.
+  ///
+  /// En RECHERCHE elle est toujours posée sur une ligne (0 au départ) : c'est ce qui rend ↩
+  /// prévisible — il fait ce que la ligne surlignée annonce, jamais autre chose. En seconde étape
+  /// elle vaut `nil`, la barre redevient le lieu de l'action ; `↓` descend dans le contexte pour y
+  /// cocher.
+  ///
+  /// Un index et pas un `TaskFocus` : la palette mêle des vues, des dossiers, des listes, des
+  /// tâches et des commandes, là où `TaskFocus` ne connaît que des tâches et porte en plus une
+  /// notion d'édition qui n'a pas de sens ici.
+  @State private var selection: Int? = 0
+  /// Le temps où l'on en est. Voir `Step`.
+  @State private var step: Step = .search
   @State private var expanded = false
   @State private var picking = false
   /// Hauteur naturelle de la liste des destinations, mesurée en continu. Nécessaire parce que le
@@ -289,18 +324,43 @@ private struct QuickEntryView: View {
   private var shortcuts: [TextShortcut] { TextShortcut.decode(shortcutData) }
 
   private enum Field: Hashable {
-    case title, notes
+    case title
     case subtask(Int)
   }
 
+  /// Les DEUX temps de la capsule.
+  ///
+  /// En recherche, la barre filtre et ↩ actionne la ligne visée. Ensuite, la barre écrit et ↩
+  /// enregistre. La transition est explicite (↩ sur une ligne), l'état se VOIT (le chip, le libellé
+  /// du champ, les icônes de droite changent) et Échap la défait.
+  ///
+  /// C'est ce découpage qui répare le défaut de fond : la capsule supposait qu'on composait
+  /// TOUJOURS une tâche. Tant qu'elle n'affichait rien c'était vrai ; dès qu'elle a listé des
+  /// choses, chaque touche a eu deux lectures possibles — Tab ouvrait « les notes de la tâche en
+  /// cours » alors qu'on regardait une autre tâche.
+  private enum Step {
+    case search
+    case addTask(QuickPalette.TaskTarget)
+    case createList(Project)
+
+    var isSearch: Bool { if case .search = self { return true } else { return false } }
+    /// Sous-tâches, date, fournée : tout ça n'a de sens que sur une TÂCHE en train de
+    /// s'écrire. Ni la recherche ni le nom d'une liste n'en veulent.
+    var composesTask: Bool { if case .addTask = self { return true } else { return false } }
+  }
+
   /// Identités de morphing du verre. Distinctes de `Field` : un bloc n'est pas une cible de focus.
-  private enum Block: Hashable { case bar, destination, details, queue }
+  private enum Block: Hashable { case bar, destination, details, queue, results }
 
   var body: some View {
-    glassStack
-      .frame(width: 650)
+    // Construite UNE fois par rendu, puis distribuée — jamais en propriété calculée relue par
+    // chaque sous-vue : une propriété calculée d'une `View` repart de zéro à chaque lecture, et
+    // celle-ci filtre et trie toute la base.
+    let palette = currentPalette
+    return glassStack(palette)
+      .frame(width: QuickEntryWindow.capsuleWidth)
       // L'ancrage haut fait grandir la capsule depuis sa propre ligne : ancrée au centre, elle
-      // remonterait pendant le ressort parce que le bloc s'allonge vers le bas quand les notes
+      // remonterait pendant le ressort parce que le bloc s'allonge vers le bas quand les sous-tâches
       // s'ouvrent.
       .scaleEffect(appeared ? 1 : 0.88, anchor: .top)
       .opacity(appeared ? 1 : 0)
@@ -320,6 +380,13 @@ private struct QuickEntryView: View {
           channel.isRequested = false
           withAnimation(.bouncy(duration: 0.4)) { picking = false }
           focus = .title
+          return
+        }
+        // Même règle un cran plus bas : Échap DÉFAIT la dernière étape avant de fermer. On est
+        // entré dans une liste par erreur, on en ressort — sans perdre la capsule.
+        if !step.isSearch {
+          channel.isRequested = false
+          backToSearch()
           return
         }
         // Échap est la SEULE annulation volontaire : elle jette le brouillon. Tout le reste (clic
@@ -365,9 +432,9 @@ private struct QuickEntryView: View {
   /// (Package.swift cible .v14, donc le `#available` est obligatoire) : le repli est un material,
   /// sans morphing.
   @ViewBuilder
-  private var glassStack: some View {
+  private func glassStack(_ palette: QuickPalette) -> some View {
     if #available(macOS 26, *) {
-      GlassEffectContainer(spacing: 26) { stack }
+      GlassEffectContainer(spacing: 26) { stack(palette) }
         // Posée ICI, HORS du conteneur — pas dans `pane` : une ombre posée par bloc, À
         // L'INTÉRIEUR du conteneur, ne sortait pas du tout (mesuré : aucune amélioration malgré
         // des densités doublées). `GlassEffectContainer` compose son rendu Liquid Glass dans un
@@ -377,16 +444,16 @@ private struct QuickEntryView: View {
         // épouse donc exactement son contour.
         .paneShadow()
     } else {
-      stack
+      stack(palette)
     }
   }
 
   /// `spacing: 0` et un écart porté par chaque bloc : celui des destinations est TOUJOURS monté
   /// (cf. `destinationPane`), il doit donc pouvoir replier son écart en même temps que sa hauteur,
   /// sinon un trou de 10pt resterait sous la barre quand il est fermé.
-  private var stack: some View {
+  private func stack(_ palette: QuickPalette) -> some View {
     VStack(spacing: 0) {
-      pane(.bar, shape: Capsule()) { bar }
+      pane(.bar, shape: Capsule()) { bar(palette) }
       destinationPane
       if expanded {
         pane(.details, shape: RoundedRectangle(cornerRadius: 22, style: .continuous)) {
@@ -402,7 +469,162 @@ private struct QuickEntryView: View {
         .padding(.top, 10)
         .padding(.horizontal, 14)
       }
+      if !palette.isEmpty {
+        pane(.results, shape: RoundedRectangle(cornerRadius: 22, style: .continuous)) {
+          QuickEntryResultsBox(rows: palette.rows, selection: selection, onActivate: activate)
+        }
+        .padding(.top, 10)
+        .padding(.horizontal, 14)
+      }
     }
+  }
+
+  // MARK: Palette
+
+  /// Ce que la capsule montre sous sa barre, ou rien.
+  ///
+  /// Un SEUL bloc de liste à la fois : le panneau a une hauteur FIXE (cf.
+  /// `QuickEntryWindow.makePanel`) et deux listes empilées en sortiraient. D'où les trois retraits :
+  /// - **un dépliant ouvert** (sous-tâches, destinations) — on compose une tâche, on n'en cherche
+  ///   pas ;
+  /// - **une fournée en cours** — même raison, et c'est elle qui doit rester visible : elle est la
+  ///   seule preuve de ce qui est déjà déposé ;
+  /// - sinon la palette, avec le coup d'œil sur la journée pour état vide.
+  private var currentPalette: QuickPalette {
+    guard !expanded, !picking, queued.isEmpty else { return QuickPalette(rows: []) }
+    switch step {
+    case .search:
+      return QuickPalette.search(title, lists: reachable, projects: projects, tasks: allTasks)
+    case .addTask(let target):
+      return QuickPalette.inside(target, lists: reachable, tasks: allTasks)
+    case .createList(let project):
+      return QuickPalette.inside(project: project)
+    }
+  }
+
+  /// ↓ descend dans la liste, ↑ y remonte.
+  ///
+  /// La borne haute n'est pas la même selon le temps où l'on est, et c'est délibéré : en RECHERCHE
+  /// la sélection ne quitte jamais la liste (une barre sans ligne visée n'aurait aucune action à
+  /// offrir) ; en seconde étape, ↑ depuis la première ligne rend la main à la barre, puisque c'est
+  /// là qu'on écrit.
+  private func moveSelection(_ press: KeyPress, count: Int) -> KeyPress.Result {
+    guard count > 0 else { return .ignored }
+    switch press.key {
+    case .downArrow:
+      selection = selection.map { min($0 + 1, count - 1) } ?? 0
+      return .handled
+    case .upArrow:
+      guard let current = selection else { return .ignored }
+      if current == 0 {
+        selection = step.isSearch ? 0 : nil
+      } else {
+        selection = current - 1
+      }
+      return .handled
+    default:
+      return .ignored
+    }
+  }
+
+  /// ⌘↩ en RECHERCHE : ouvrir l'app SUR la ligne visée, au lieu d'y faire quelque chose. Le
+  /// pendant « aller voir » de ↩, qui, lui, « fait ici ».
+  ///
+  /// Sur une tâche ou une commande il ne se passe rien : ⌘↩ y garde son sens d'origine (empiler
+  /// une tâche de plus), qui n'a de valeur qu'en seconde étape — d'où le `.ignored`, qui laisse la
+  /// main à `enqueueShortcut` juste derrière.
+  ///
+  /// `dismiss()` AVANT d'ouvrir, comme pour une commande : la capsule ne doit pas rester devant la
+  /// fenêtre qu'elle vient de ramener.
+  private func openSelected(_ press: KeyPress) -> KeyPress.Result {
+    guard step.isSearch, press.key == .return, press.modifiers.contains(.command),
+      let index = selection
+    else { return .ignored }
+    let rows = currentPalette.rows
+    guard rows.indices.contains(index), let destination = rows[index].action.destination else {
+      return .ignored
+    }
+    dismiss()
+    AppCommand.reveal(destination)
+    return .handled
+  }
+
+  /// Ce que ↩ (ou un clic) fait d'une ligne : exactement ce qu'elle annonçait.
+  private func activate(_ row: QuickPalette.Row) {
+    switch row.action {
+    case .addTask(let target): begin(.addTask(target), landingOn: target)
+    case .createList(let project): begin(.createList(project), landingOn: nil)
+    case .complete(let task): toggle(task)
+    case .run(let command): run(command)
+    }
+  }
+
+  /// Le passage à la seconde étape. La destination choisie est posée dans l'état QUE LA CAPSULE
+  /// AVAIT DÉJÀ (`targetID`, `when`) : tout le chemin d'écriture existant — jetons, fournée,
+  /// `insert` — continue de marcher sans rien savoir des étapes.
+  ///
+  /// `title` est vidé : la frappe qui a servi à TROUVER l'endroit n'est pas le titre de ce qu'on
+  /// va y écrire. C'est la confusion que le découpage en deux temps existe pour éviter.
+  private func begin(_ next: Step, landingOn target: QuickPalette.TaskTarget?) {
+    if let target {
+      let resolved = target.resolve(in: reachable)
+      targetID = resolved.list?.persistentModelID
+      when = resolved.when
+    }
+    withAnimation(.bouncy(duration: 0.35)) {
+      step = next
+      title = ""
+      selection = nil
+    }
+    focus = .title
+  }
+
+  /// Le retour en arrière d'Échap : on jette ce qu'on écrivait pour CETTE étape, pas la capsule.
+  private func backToSearch() {
+    withAnimation(.bouncy(duration: 0.35)) {
+      step = .search
+      title = ""
+      subtasks = []
+      when = nil
+      expanded = false
+      selection = 0
+    }
+    focus = .title
+  }
+
+  /// L'action d'un DOSSIER. Le rang se prend à la suite de ses listes, comme partout ailleurs.
+  private func createList(in project: Project) {
+    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { return }
+    let list = TodoList(title: name, project: project)
+    list.sortIndex = (project.orderedLists.last?.sortIndex ?? -1) + 1
+    modelContext.insertAndSave(list)
+    // La capsule s'utilise depuis une AUTRE app : la sidebar où la liste vient d'apparaître n'est
+    // pas à l'écran. Même raison que pour une tâche déposée.
+    HUDWindow.show("Liste « \(name) » créée", systemImage: "checkmark", tint: .green)
+    dismiss()
+  }
+
+  /// Cocher depuis la capsule. Elle RESTE ouverte : on en coche souvent deux ou trois d'affilée, et
+  /// Échap la referme.
+  private func toggle(_ task: TaskItem) {
+    withAnimation(.bouncy(duration: 0.3)) { task.toggleCompletion() }
+    // Enregistré tout de suite plutôt que laissé à l'autosave : c'est `ModelContext.didSave` qui
+    // réveille la passe Rappels (cf. `ContentView.syncWithReminders`), et le panneau peut très bien
+    // se fermer avant qu'un autosave ne tombe.
+    // ponytail: pas de `pushCompletion` direct comme dans `TaskRow` — `RemindersService` n'est pas
+    // dans l'environnement de ce panneau, qui vit hors de l'arbre de `ContentView`. Fenêtre
+    // principale fermée, la coche part donc au prochain réveil de la synchro, comme le fait déjà
+    // une tâche créée ici.
+    try? modelContext.save()
+  }
+
+  /// Une commande n'écrit rien : elle emmène ailleurs, et la capsule s'efface derrière elle — même
+  /// ordre que dans `save`, pour que le panneau ne reste pas devant la fenêtre qu'il vient de
+  /// ramener.
+  private func run(_ command: AppCommand) {
+    dismiss()
+    command.run()
   }
 
   /// Le bloc des destinations n'est JAMAIS inséré ni retiré : il est toujours là, à hauteur nulle
@@ -496,20 +718,53 @@ private struct QuickEntryView: View {
     }
   }
 
-  private var bar: some View {
-    HStack(spacing: 12) {
+  /// Ce que la barre annonce — et c'est le seul endroit qui dit à quel temps on en est, avec les
+  /// icônes de droite. Un état qui ne se voit pas est un état qu'on oublie.
+  private var placeholder: String {
+    switch step {
+    case .search: return "Rechercher une vue, un dossier, une liste, une tâche…"
+    case .addTask(let target): return "Nouvelle tâche dans " + target.label
+    case .createList(let project):
+      return "Nom de la liste dans " + (project.title.isEmpty ? "ce dossier" : project.title)
+    }
+  }
+
+  /// À gauche du champ : la loupe quand on cherche, la destination quand on écrit une tâche, le
+  /// dossier quand on nomme une liste.
+  @ViewBuilder private var barLeading: some View {
+    switch step {
+    case .search:
+      Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+    case .addTask:
       destinationChip
+    case .createList(let project):
+      HStack(spacing: 6) {
+        Image(systemName: "folder").foregroundStyle(.secondary)
+        Text(project.title.isEmpty ? "Sans titre" : project.title)
+      }
+      .font(.app(14))
+      .fixedSize()
+    }
+  }
+
+  private func bar(_ palette: QuickPalette) -> some View {
+    HStack(spacing: 12) {
+      barLeading
       // La date à GAUCHE, en pastille, exactement comme la rangée « Nouvelle tâche » d'une liste
       // (cf. `TokenPill`) : c'est là que se lit ce qui est déjà décidé. Le menu calendrier de
       // droite n'en garde que l'icône, sans quoi la date s'afficherait deux fois.
-      if let when {
+      if step.composesTask, let when {
         TokenPill(text: when.formatted(.dateTime.day().month(.abbreviated)))
           .onTapGesture { self.when = nil }
           .help("Retirer la date")
       }
-      TextField("Nouvelle tâche", text: $title, axis: .vertical)
+      TextField(placeholder, text: $title, axis: .vertical)
         .textFieldStyle(.plain)
         .font(.app(20))
+        // Une recherche tient sur UNE ligne, quoi qu'il arrive : l'axe vertical sert aux titres de
+        // tâche longs, mais il ferait aussi passer le libellé de recherche à la ligne et la barre
+        // grandirait sous le curseur avant même qu'on ait tapé.
+        .lineLimit(step.isSearch ? 1 : nil)
         .focused($focus, equals: .title)
         // Seul chemin d'enregistrement au clavier depuis que la barre de validation a disparu :
         // plus de bouton par défaut avec qui se dédoubler.
@@ -518,33 +773,53 @@ private struct QuickEntryView: View {
         // panneau ne les analysait qu'à l'enregistrement : rien ne confirmait « @demain » sous les
         // doigts — et un raccourci texte n'aurait rien eu à montrer non plus.
         .onChange(of: title) { _, new in
-          let cleaned = consumeTokens(new)
-          if cleaned != new { title = cleaned }
-        }
-        .onKeyPress(phases: .down, action: enqueueShortcut)
-        // Tab sert deux gestes qui ne peuvent pas se croiser : le dernier mot est un raccourci
-        // texte (« ajd ») et il se change en jeton, sinon Tab ouvre les notes comme avant.
-        .onKeyPress(.tab) {
-          guard let resolved = QuickEntry.resolving(title, shortcuts: shortcuts) else {
-            expand(focusing: .notes)
-            return .handled
+          // Les jetons n'ont de sens que sur une tâche en train de s'écrire : dans une recherche,
+          // « @demain » est un texte cherché, pas une date à ranger.
+          if step.composesTask {
+            let cleaned = consumeTokens(new)
+            if cleaned != new { title = cleaned }
           }
+          // La frappe rebat la liste : en recherche la sélection revient sur la première ligne (↩
+          // doit toujours avoir une action), en seconde étape elle rend la main à la barre.
+          selection = step.isSearch ? 0 : nil
+        }
+        // Un SEUL gestionnaire pour les deux gestes, plutôt que deux `.onKeyPress(phases:)`
+        // empilés dont l'ordre de consultation ne se lit nulle part.
+        .onKeyPress(phases: .down) { press in
+          if openSelected(press) == .handled { return .handled }
+          if enqueueShortcut(press) == .handled { return .handled }
+          return moveSelection(press, count: palette.rows.count)
+        }
+        // Tab ne sert PLUS qu'à un geste : changer le dernier mot en jeton (« ajd » → une date).
+        //
+        // Il ouvrait aussi les notes quand aucun raccourci ne correspondait, et c'est ce double
+        // sens qui le rendait imprévisible dès que la capsule affichait autre chose qu'une tâche en
+        // cours d'écriture. Les notes parties, la question ne se pose plus : hors de ce cas précis,
+        // Tab ne répond rien du tout.
+        .onKeyPress(.tab) {
+          guard step.composesTask,
+            let resolved = QuickEntry.resolving(title, shortcuts: shortcuts)
+          else { return .ignored }
           // Une commande n'écrit rien : elle emmène ailleurs, et la capsule s'efface derrière elle.
           // `save` la reconnaît par le même chemin qu'Entrée, emporte la fournée et referme.
           if resolved.command == nil { title = resolved.text } else { save() }
           return .handled
         }
-      if canSave {
+      if step.composesTask, canSave {
         // Sans cette mention, l'empilement n'existe que pour qui le connaît déjà.
         Text("⌘↩")
           .font(.app(11, weight: .medium))
           .foregroundStyle(.tertiary)
           .transition(.opacity)
       }
-      dateMenu
-      notesToggle
-      subtaskButton
-      sendButton
+      // Date et sous-tâches : les attributs d'une TÂCHE. Ils n'ont rien à faire dans une recherche
+      // ni dans le nom d'une liste, et les laisser là était la porte par laquelle une touche
+      // prenait deux sens.
+      if step.composesTask {
+        dateMenu
+        subtaskButton
+      }
+      if !step.isSearch { sendButton }
     }
     // Les icônes de droite n'ont pas de police à elles : la donner ICI les met à l'échelle du champ
     // sans toucher aux vues qui fixent déjà la leur (le champ, la mention ⌘↩, le chip).
@@ -556,40 +831,15 @@ private struct QuickEntryView: View {
     .animation(.bouncy(duration: 0.35), value: when)
   }
 
+  /// Les sous-tâches, et rien d'autre.
+  ///
+  /// Les notes ont été retirées : dans une capsule dont le geste est « noter vite et repartir »,
+  /// personne n'écrivait de texte long — et elles coûtaient cher pour ça. C'est leur `TextField`
+  /// que Tab ouvrait, le double sens de touche par lequel la capsule plantait dès qu'elle affichait
+  /// autre chose. Une note s'écrit dans la tâche, une fois ouverte.
   private var detailsBox: some View {
     VStack(alignment: .leading, spacing: 9) {
-      TextField("Notes", text: $notes, axis: .vertical)
-        .textFieldStyle(.plain)
-        .font(.app(14))
-        .lineLimit(2...6)
-        .focused($focus, equals: .notes)
-        // Un `TextField` vertical rend Entrée au field editor, qui en fait un saut de ligne ; le
-        // panneau, lui, doit enregistrer. `onSubmit` n'est jamais appelé dans ce mode, d'où
-        // l'interception directe — ⇧/⌥ + Entrée rend la nouvelle ligne à qui la veut.
-        // La variante `phases:` est la seule à livrer le `KeyPress`, donc les modificateurs.
-        .onKeyPress(phases: .down) { press in
-          guard press.key == .return else { return .ignored }
-          if press.modifiers.contains(.command) {
-            enqueue()
-            return .handled
-          }
-          guard press.modifiers.isDisjoint(with: [.shift, .option]) else { return .ignored }
-          save()
-          return .handled
-        }
-        // Tab a ouvert le bloc, le même Tab le referme : sans ça l'icône était la SEULE sortie, il
-        // fallait lâcher le clavier pour annuler un dépli fait au clavier. Des notes ou des
-        // sous-tâches déjà écrites le retiennent — replier effacerait du travail de la vue.
-        .onKeyPress(.tab) {
-          guard notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, subtasks.isEmpty
-          else { return .ignored }
-          collapseDetails()
-          return .handled
-        }
-      if !subtasks.isEmpty {
-        Divider()
-        ForEach(subtasks.indices, id: \.self, content: subtaskRow)
-      }
+      ForEach(subtasks.indices, id: \.self, content: subtaskRow)
     }
     .padding(.horizontal, 18)
     .padding(.vertical, 14)
@@ -699,7 +949,7 @@ private struct QuickEntryView: View {
   /// permanence, parce qu'elle est la seule qu'on ne peut pas deviner en lisant ce qu'on tape.
   private var destinationChip: some View {
     Button {
-      // Un seul bloc ouvert à la fois sous la barre : les destinations et les notes empilées
+      // Un seul bloc ouvert à la fois sous la barre : les destinations et les sous-tâches empilées
       // faisaient une colonne plus haute que la capsule elle-même, dans une fenêtre qui doit se
       // lire d'un coup d'œil.
       withAnimation(.bouncy(duration: 0.4)) {
@@ -721,7 +971,7 @@ private struct QuickEntryView: View {
   private var chipLabel: some View {
     let content = HStack(spacing: 6) {
       destinationIcon
-      Text(destination?.title ?? SmartList.all.label)
+      Text(chipTitle)
     }
     .font(.app(14))
     .padding(.vertical, 5)
@@ -736,8 +986,20 @@ private struct QuickEntryView: View {
     }
   }
 
+  /// Le chip dit l'endroit QU'ON A CHOISI, pas la liste dans laquelle il se résout.
+  ///
+  /// « Aujourd'hui » se range dans la boîte de réception avec une date — le chip affichait donc
+  /// « Tâches » alors qu'on venait de choisir « Aujourd'hui ». Le contenant et son point de chute
+  /// sont deux choses différentes, et c'est le premier qui doit se lire.
+  private var chipTitle: String {
+    if case .addTask(let target) = step { return target.label }
+    return destination?.title ?? SmartList.all.label
+  }
+
   @ViewBuilder private var destinationIcon: some View {
-    if let destination, !destination.isInbox {
+    if case .addTask(.today) = step {
+      Image(systemName: SmartList.today.systemImage).foregroundStyle(.secondary)
+    } else if let destination, !destination.isInbox {
       ProgressRing(progress: destination.progress(), size: 11, lineWidth: 1.8)
         .tint(destination.project?.color?.color)
     } else {
@@ -784,6 +1046,10 @@ private struct QuickEntryView: View {
     return Button {
       withAnimation(.bouncy(duration: 0.4)) {
         targetID = id
+        // L'étape suit le choix, sinon le chip continuerait d'annoncer l'endroit d'où l'on vient
+        // (« Aujourd'hui ») alors que la tâche partirait ailleurs. Une seule vérité pour la
+        // destination. La date, elle, reste : elle est visible dans sa pastille et s'y retire.
+        step = .addTask(.list(list))
         picking = false
       }
       focus = .title
@@ -844,22 +1110,6 @@ private struct QuickEntryView: View {
     .help("Planifier la tâche")
   }
 
-  /// Double du Tab : Tab est le geste, mais rien ne l'annonce — l'icône rend le dépli visible.
-  private var notesToggle: some View {
-    Button {
-      if expanded {
-        collapseDetails()
-      } else {
-        expand(focusing: .notes)
-      }
-    } label: {
-      Image(systemName: "text.alignleft")
-        .foregroundStyle(expanded ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-    }
-    .buttonStyle(.plain)
-    .help("Ajouter des notes (Tab)")
-  }
-
   private var subtaskButton: some View {
     Button(action: addSubtask) {
       Image(systemName: "checklist")
@@ -882,7 +1132,7 @@ private struct QuickEntryView: View {
     .help(queued.isEmpty ? "Enregistrer (↩)" : "Enregistrer les \(queued.count + 1) tâches (↩)")
   }
 
-  /// Ouvre le bloc notes/sous-tâches — et referme les destinations : réciproque du chip, un seul
+  /// Ouvre le bloc des sous-tâches — et referme les destinations : réciproque du chip, un seul
   /// bloc à la fois.
   private func expand(focusing field: Field) {
     withAnimation(.bouncy(duration: 0.45)) {
@@ -890,11 +1140,6 @@ private struct QuickEntryView: View {
       picking = false
     }
     focus = field
-  }
-
-  private func collapseDetails() {
-    withAnimation(.bouncy(duration: 0.4)) { expanded = false }
-    focus = .title
   }
 
   private func addSubtask() {
@@ -911,20 +1156,18 @@ private struct QuickEntryView: View {
     guard let saved = QuickEntryDraftStore.shared.draft else { return }
     QuickEntryDraftStore.shared.draft = nil
     title = saved.title
-    notes = saved.notes
     subtasks = saved.subtasks
     when = saved.when
     if let savedTarget = saved.targetID { targetID = savedTarget }
     queued = saved.queued
-    if !saved.notes.isEmpty || !saved.subtasks.isEmpty { expanded = true }
+    if !saved.subtasks.isEmpty { expanded = true }
   }
 
   /// Range l'état courant avant une fermeture qui n'est PAS une validation. Vide, il efface un
   /// brouillon devenu obsolète plutôt que d'en garder un fantôme.
   private func persistDraft() {
     let saved = QuickEntryDraftStore.Draft(
-      title: title, notes: notes, subtasks: subtasks, when: when, targetID: targetID,
-      queued: queued)
+      title: title, subtasks: subtasks, when: when, targetID: targetID, queued: queued)
     QuickEntryDraftStore.shared.draft = saved.isEmpty ? nil : saved
   }
 
@@ -952,8 +1195,7 @@ private struct QuickEntryView: View {
     // disparaît alors d'elle-même — c'est `save` qui exécute la commande.
     let text = QuickEntry.resolving(title, shortcuts: shortcuts)?.text ?? title
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-    return PendingTask(
-      title: text, notes: notes, subtasks: subtasks, when: when, targetID: targetID)
+    return PendingTask(title: text, subtasks: subtasks, when: when, targetID: targetID)
   }
 
   /// ⌘↩ depuis n'importe quel champ : dépose et rend le champ vide. Partagé plutôt que réécrit sur
@@ -969,10 +1211,9 @@ private struct QuickEntryView: View {
     withAnimation(.bouncy(duration: 0.4)) {
       queued.append(draft)
       title = ""
-      notes = ""
       subtasks = []
       when = nil
-      expanded = false  // les notes et sous-tâches sont parties avec la tâche déposée
+      expanded = false  // les sous-tâches sont parties avec la tâche déposée
     }
     // `targetID` survit exprès : trois tâches lancées d'affilée vont le plus souvent au même
     // endroit, et le chip reste modifiable entre deux dépôts.
@@ -983,6 +1224,30 @@ private struct QuickEntryView: View {
     // Entrée maintenue pendant la sortie : une tâche, pas deux. `dismiss()` a déjà remis `appeared`
     // à false quand il repasse ici.
     guard appeared else { return }
+    // ↩ ne veut pas dire la même chose aux deux temps, et c'est TOUT le principe. Le branchement
+    // est posé ICI, au point de passage unique de toutes les validations (Entrée, le bouton
+    // d'envoi, la dernière sous-tâche) plutôt que sur chacune — trois copies auraient divergé.
+    //
+    // Bornes vérifiées à chaque fois : la palette est rebâtie à chaque rendu, et une ligne peut
+    // avoir disparu sous la sélection (tâche supprimée ailleurs, date qui la sort du contexte)
+    // entre le ↓ et le ↩.
+    let rows = currentPalette.rows
+    if step.isSearch {
+      // En recherche, ↩ n'écrit JAMAIS rien de lui-même : il fait ce que la ligne annonce.
+      if let index = selection, rows.indices.contains(index) { activate(rows[index]) }
+      return
+    }
+    // Seconde étape, une ligne de contexte visée : c'est ELLE qui agit — cocher une tâche, entrer
+    // dans une liste du dossier. Testé AVANT l'action de la barre, sinon nommer une liste
+    // l'emporterait sur la ligne qu'on vient de viser au clavier.
+    if let index = selection, rows.indices.contains(index) {
+      activate(rows[index])
+      return
+    }
+    if case .createList(let project) = step {
+      createList(in: project)
+      return
+    }
     // Une commande d'app laissée en fin de frappe (« op ↩ ») : elle part APRÈS la fermeture, pour
     // que la capsule ne reste pas devant la fenêtre qu'elle vient de ramener.
     let command = QuickEntry.resolving(title, shortcuts: shortcuts)?.command
@@ -1021,7 +1286,7 @@ private struct QuickEntryView: View {
     let anchor = TodoList.appendAnchor(among: list.orderedTasks)?.sortIndex ?? -1
     for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
     let task = TaskItem(
-      title: text, notes: encodedNotes(pending.notes), when: entry.when ?? pending.when, list: list)
+      title: text, when: entry.when ?? pending.when, list: list)
     task.sortIndex = anchor + 1
     // Avant l'insertion : SwiftData propage la relation, les sous-tâches entrent avec la tâche.
     for line in pending.subtasks {
@@ -1076,18 +1341,4 @@ private struct QuickEntryView: View {
     reachable.first { $0.title == name } ?? projects.first { $0.title == name }?.orderedLists.first
   }
 
-  /// Mêmes police et couleur que le cadre de notes des pages (cf. `NotesBox`) : sans elles, le RTF
-  /// repartirait sur les défauts d'AppKit (Helvetica 12, noir) et la note changerait d'allure en
-  /// s'ouvrant dans la tâche.
-  private func encodedNotes(_ source: String) -> Data {
-    let text = source.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return Data() }
-    return NotesCodec.encode(
-      NSAttributedString(
-        string: text,
-        attributes: [
-          .font: NSFont.app(),
-          .foregroundColor: NSColor.labelColor,
-        ]))
-  }
 }

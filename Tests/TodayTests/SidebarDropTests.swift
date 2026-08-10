@@ -310,11 +310,13 @@ final class SidebarDropTests: XCTestCase {
     filing.track(CGRect(x: 40, y: 0, width: 400, height: 30))
 
     filing.arm(grabOffsetX: 380)
-    XCTAssertNil(filing.hovered, "le curseur est hors de la ligne, même si le bord avant y est encore")
+    XCTAssertNil(
+      filing.hovered, "le curseur est hors de la ligne, même si le bord avant y est encore")
 
     filing.arm(grabOffsetX: 0)
     XCTAssertEqual(
-      filing.hovered, SidebarFiling.dropRow(for: list), "sans décalage, le bord avant seul vise juste")
+      filing.hovered, SidebarFiling.dropRow(for: list),
+      "sans décalage, le bord avant seul vise juste")
   }
 
   /// Sidebar repliée : son bord est à 0, donc plus rien ne peut voler — et c'est juste, il n'y a
