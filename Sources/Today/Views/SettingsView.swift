@@ -583,10 +583,11 @@ private struct TasksSettingsTab: View {
   @AppStorage(CompletedTaskRetention.storageKey) private var retentionRaw = CompletedTaskRetention
     .untilNextDay.rawValue
   @AppStorage(TodoList.autoSortCompletedStorageKey) private var autoSortCompleted = true
+  @AppStorage(TaskItem.progressResetsDailyStorageKey) private var progressResetsDaily = true
 
   var body: some View {
-    SettingsPane(height: 470) {
-      Section("Tâches cochées") {
+    SettingsPane(height: 500) {
+      Section {
         Picker("Conserver", selection: $retentionRaw) {
           ForEach(CompletedTaskRetention.allCases) { option in
             Text(option.label).tag(option.rawValue)
@@ -594,6 +595,15 @@ private struct TasksSettingsTab: View {
         }
 
         Toggle("Descendre en bas de la liste", isOn: $autoSortCompleted)
+        Toggle("Réinitialiser l'anneau de progression chaque jour", isOn: $progressResetsDaily)
+      } header: {
+        Text("Tâches cochées")
+      } footer: {
+        Text(
+          "Désactivé, l'anneau d'une liste ou d'un projet cumule tout ce qui a jamais été coché, "
+            + "au lieu de repartir de zéro chaque jour."
+        )
+        .foregroundStyle(.secondary)
       }
 
       RemindersSyncSection()

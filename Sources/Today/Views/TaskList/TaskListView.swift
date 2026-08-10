@@ -1882,9 +1882,13 @@ private struct ListCardView: View {
       startPoint: .top, endPoint: .bottom)
   }
 
+  /// Barrée si c'est de l'archivé venu combler la carte (cf. `ProjectBoard.build`) — même habillage
+  /// que la ligne d'une tâche cochée dans une liste (`TaskRow.titleColor`).
   private func previewRow(_ task: TaskItem) -> some View {
     Text(task.title.isEmpty ? "Sans titre" : task.title)
       .font(.app(.callout))
+      .foregroundStyle(task.isCompleted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+      .strikethrough(task.isCompleted)
       .lineLimit(1)
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 10)

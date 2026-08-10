@@ -34,6 +34,7 @@ final class ListProgressTests: XCTestCase {
 
   override func tearDown() {
     UserDefaults.standard.removeObject(forKey: CompletedTaskRetention.storageKey)
+    UserDefaults.standard.removeObject(forKey: TaskItem.progressResetsDailyStorageKey)
   }
 
   /// `long: true` = cochée hier, donc déjà archivée pour l'anneau — quel que soit le réglage de
@@ -91,6 +92,17 @@ final class ListProgressTests: XCTestCase {
 
       XCTAssertEqual(list.progress(), 0, "mode \(retention.rawValue)")
     }
+  }
+
+  /// Réglage désactivé : l'ancien comportement revient tel quel — l'archivé d'hier compte encore,
+  /// pour toujours.
+  func testProgressResetsDailyDésactivé_LArchivéCompteToujours() {
+    UserDefaults.standard.set(false, forKey: TaskItem.progressResetsDailyStorageKey)
+    let list = makeList()
+    addTask(to: list, completed: true)  // finie hier
+    addTask(to: list, completed: false)  // ajoutée aujourd'hui
+
+    XCTAssertEqual(list.progress(), 0.5, accuracy: 0.001)
   }
 
   // MARK: les bornes

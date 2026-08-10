@@ -151,9 +151,22 @@ final class TaskItem {
   /// mesuré et écarté une première fois (cf. `TodoList.progress`). `completedAt` manquant (donnée
   /// d'avant l'ajout du champ) compte comme « pas encore archivée » : on ne sait pas trancher, donc
   /// on ne masque pas une progression qu'on ne peut pas dater.
+  ///
+  /// `progressResetsDaily` (Réglages) redonne l'ancien comportement — tout l'archivé compte, pour
+  /// toujours — à qui le préfère : demandé après coup, gardé en option plutôt qu'imposé.
   func countsTowardProgress(_ bounds: DayBounds) -> Bool {
     guard isCompleted, let completedAt else { return true }
+    guard TaskItem.progressResetsDaily else { return true }
     return completedAt >= bounds.startOfToday
+  }
+
+  /// Réglage (Réglages) : l'anneau d'une liste/projet se limite-t-il à ce qui est coché
+  /// AUJOURD'HUI, ou cumule-t-il tout ce qui a jamais été archivé ? Activé par défaut — c'est la
+  /// règle en place (cf. `countsTowardProgress`).
+  static let progressResetsDailyStorageKey = "progressRingResetsDaily"
+
+  static var progressResetsDaily: Bool {
+    UserDefaults.standard.object(forKey: progressResetsDailyStorageKey) as? Bool ?? true
   }
 
   /// Ordre manuel des sous-tâches ; `createdAt` départage les ex æquo (même pattern que

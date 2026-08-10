@@ -6,6 +6,10 @@ import XCTest
 /// son `body` : ils ne se vérifiaient qu'en cliquant, et un aperçu qui montrait une en-tête ou une
 /// tâche cochée passait inaperçu.
 final class ProjectBoardTests: XCTestCase {
+  override func tearDown() {
+    UserDefaults.standard.removeObject(forKey: TaskItem.progressResetsDailyStorageKey)
+  }
+
   private func project(_ lists: [TodoList]) -> Project {
     let project = Project(title: "Projet")
     for list in lists {
@@ -78,6 +82,55 @@ final class ProjectBoardTests: XCTestCase {
 
     XCTAssertEqual(board.cards.first?.preview.count, 6)
     XCTAssertEqual(board.cards.first?.remainingCount, 9)
+  }
+
+  /// Réglage cumulatif désactivé (par défaut) : une carte à court de tâches à faire reste courte,
+  /// pas comblée par de l'archivé.
+  func testPreviewNeStComblePasParDéfaut() {
+    let board = ProjectBoard.build(
+      from: project([
+        list("Liste", tasks: [task("faite", sortIndex: 0, done: true)])
+      ]), previewLimit: 4)
+
+    XCTAssertEqual(board.cards.first?.preview, [])
+  }
+
+  /// Réglage cumulatif activé : une liste sans rien à faire ne reste pas blanche, l'archivé comble
+  /// l'aperçu — dans l'ordre de la liste, jusqu'à la limite.
+  func testPreviewSeComblentAvecLArchivéQuandLeRéglageCumulatifEstActivé() {
+    UserDefaults.standard.set(false, forKey: TaskItem.progressResetsDailyStorageKey)
+    let board = ProjectBoard.build(
+      from: project([
+        list(
+          "Liste",
+          tasks: [
+            task("faite 1", sortIndex: 0, done: true),
+            task("faite 2", sortIndex: 1, done: true),
+          ])
+      ]), previewLimit: 4)
+
+    XCTAssertEqual(board.cards.first?.preview.map(\.title), ["faite 1", "faite 2"])
+    // Ce qui reste à faire ne bouge pas : l'archivé ne compte toujours pas dedans.
+    XCTAssertEqual(board.cards.first?.remainingCount, 0)
+  }
+
+  /// L'archivé ne comble que ce que les tâches à faire laissent VIDE — jamais au-delà de la limite,
+  /// et jamais en poussant une tâche à faire hors de l'aperçu.
+  func testLArchivéNeComblesQueLaPlaceRestante() {
+    UserDefaults.standard.set(false, forKey: TaskItem.progressResetsDailyStorageKey)
+    let board = ProjectBoard.build(
+      from: project([
+        list(
+          "Liste",
+          tasks: [
+            task("à faire", sortIndex: 0),
+            task("faite 1", sortIndex: 1, done: true),
+            task("faite 2", sortIndex: 2, done: true),
+            task("faite 3", sortIndex: 3, done: true),
+          ])
+      ]), previewLimit: 2)
+
+    XCTAssertEqual(board.cards.first?.preview.map(\.title), ["à faire", "faite 1"])
   }
 
   // MARK: Le pied de carte

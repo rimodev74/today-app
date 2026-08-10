@@ -36,10 +36,16 @@ struct ProjectBoard {
         // `sortedByKey`) : refiltrer `tasks` une fois pour l'aperçu et une fois pour le compte,
         // c'était deux fois le même prix.
         let todo = list.orderedTasks.filter { !$0.isHeader && !$0.isCompleted }
-        return Card(
-          list: list,
-          preview: Array(todo.prefix(previewLimit)),
-          remainingCount: todo.count)
+        var preview = Array(todo.prefix(previewLimit))
+        // `progressResetsDaily` désactivé (Réglages) : l'anneau cumule tout l'archivé, alors la
+        // carte fait de même plutôt que de laisser une liste terminée blanche — l'archivé
+        // complète l'aperçu, dans l'ordre de la liste, une fois les tâches à faire épuisées.
+        // `previewRow` les rend barrées : rien ne les confond avec ce qui reste à faire.
+        if preview.count < previewLimit, !TaskItem.progressResetsDaily {
+          let done = list.orderedTasks.filter { !$0.isHeader && $0.isCompleted }
+          preview += done.prefix(previewLimit - preview.count)
+        }
+        return Card(list: list, preview: preview, remainingCount: todo.count)
       })
   }
 }
