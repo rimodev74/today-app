@@ -108,8 +108,7 @@ struct AllTasksPageView: View {
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
-        // Sans champ affiché (le pan à nu porte déjà des tâches), le ⊕ retombe sur ⌘N plutôt que de
-        // ne rien faire — un bouton de barre d'outils muet est un faux-semblant.
+        // Sans champ affiché, le ⊕ retombe sur ⌘N plutôt que de rester muet.
         onNewTask: {
           if page.sections.first(where: { !$0.hasHeader }).map(showsNewTaskField) == true {
             draftFocused = true
@@ -261,9 +260,8 @@ struct AllTasksPageView: View {
     } else {
       VStack(alignment: .leading, spacing: 0) {
         rowsView(of: section, offsets: offsets)
-        // Le champ « Nouvelle tâche » appartient au pan à nu : c'est le non-classé, et la seule
-        // section où l'on crée (une tâche notée ici n'a ni projet ni date — la définition de
-        // l'Inbox). Il ne s'affiche que si ce pan est VIDE, cf. `showsNewTaskField`.
+        // Le champ appartient au pan à nu : c'est le non-classé, et la seule section où l'on crée
+        // (une tâche notée ici n'a ni projet ni date — la définition de l'Inbox).
         if showsNewTaskField(section) { newTaskRow }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -458,14 +456,9 @@ struct AllTasksPageView: View {
     }
   }
 
-  /// Le champ de création ne s'affiche que sur un pan à nu VIDE — ou tant qu'il a le focus, pour que
-  /// la saisie enchaînée (Entrée puis Entrée) ne se dérobe pas après la PREMIÈRE tâche. Même règle
-  /// que `ListPageView.showsNewTaskField`, qui l'explique. Sous une pile de tâches, ce champ n'était
-  /// plus qu'une ligne à enjamber pendant un glissement, là où le ⊕ de la barre du bas et ⌘N créent
-  /// déjà.
-  ///
-  /// Point d'entrée UNIQUE, lu par `sectionView` ET par le ⊕ de la barre du bas : le bouton ne peut
-  /// pas viser un champ que la page n'affiche pas.
+  /// Pan à nu vide seulement — ou focalisé, pour ne pas se dérober en pleine saisie enchaînée. Cf.
+  /// `ListPageView.showsNewTaskField`. Lu aussi par le ⊕ de la barre du bas, qui ne peut donc pas
+  /// viser un champ absent.
   private func showsNewTaskField(_ section: AllTasksPage.Section) -> Bool {
     section.tasks.isEmpty || draftFocused
   }

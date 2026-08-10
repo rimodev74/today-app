@@ -90,12 +90,9 @@ struct TodayPageView: View {
     // Calculés UNE fois et distribués aux rangées : les interroger par ligne referait le même
     // balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
     let offsets = reorder.offsets()
-    // Le champ de création ne s'affiche que sur une journée VIDE — ou tant qu'il a le focus, pour que
-    // la saisie enchaînée (Entrée puis Entrée) ne se dérobe pas après la PREMIÈRE tâche. Même règle
-    // que `ListPageView.showsNewTaskField`, qui l'explique. Sous une pile de tâches, ce champ n'était
-    // plus qu'une ligne à enjamber pendant un glissement, là où le ⊕ de la barre du bas et ⌘N créent
-    // déjà. Une seule expression, lue par le `body` ET par ce ⊕ : le bouton ne peut pas viser un
-    // champ que la page n'affiche pas.
+    // Champ de création : journée vide seulement — ou focalisé, pour ne pas se dérober en pleine
+    // saisie enchaînée. Cf. `ListPageView.showsNewTaskField`. Lu aussi par le ⊕ de la barre du bas,
+    // qui ne peut donc pas viser un champ absent.
     let showsDraft = rows.isEmpty || draftFocused
     // `GeometryReader` + largeur EXPLICITE, pas `maxWidth: .infinity` : un `ScrollView` ne borne
     // pas la largeur de son contenu, et un `VStack` ne propose pas la sienne à ses enfants — un
@@ -141,8 +138,7 @@ struct TodayPageView: View {
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
-        // Sans champ affiché, le ⊕ retombe sur ⌘N plutôt que de ne rien faire — un bouton de barre
-        // d'outils muet est un faux-semblant.
+        // Sans champ affiché, le ⊕ retombe sur ⌘N plutôt que de rester muet.
         onNewTask: { if showsDraft { draftFocused = true } else { createTaskInEditMode() } },
         onInsertHeader: nil,
         onSearch: { searchPresented = true })

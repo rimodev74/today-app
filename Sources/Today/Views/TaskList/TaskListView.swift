@@ -183,19 +183,10 @@ private struct ListPageView: View {
               draggableRow(for: task, offsets: offsets)
             }
             if showsNewTaskField(block) {
-              // Pendant N'IMPORTE QUEL drag (en-tête OU tâche), le champ disparaît : il
-              // encombrerait le déplacement. Reste MONTÉ (juste rendu invisible par opacité, pas
-              // retiré de l'arbre) : `rowFrames`/`dragState` sont GELÉS à l'empoignade en supposant
-              // que chaque ligne (champs compris) garde sa place dans la mise en page — le retirer
-              // aurait fait s'effondrer cet espace pendant TOUT le drag et cassé le calcul du trou
-              // d'insertion (le placeholder).
-              //
-              // Le décalage vient de `fieldOffset` — EXACTEMENT `rowOffset`, pour un champ : au
-              // drop, la position CIBLE (anticipée dès le live-drag, cf. `dragState`) devient la
-              // position RÉELLE (le tri l'a rendue vraie) et le décalage retombe à 0 sans aucun
-              // saut, puisque affichée et réelle coïncidaient déjà. Un champ n'est pas un cas à
-              // part : c'est cette continuité, pas une astuce d'animation, qui rend sa révélation
-              // instantanée et fiable.
+              // Le champ s'efface pendant un drag, mais reste MONTÉ : `rowFrames` est gelé à
+              // l'empoignade, le retirer effondrerait sa hauteur et fausserait le trou d'insertion.
+              // Il se décale comme une ligne ordinaire (`fieldOffset` = `rowOffset`), donc rien ne
+              // saute au drop.
               let blockLifted = block.header != nil && block.header?.persistentModelID == draggingID
               newTaskRow(for: block)
                 .background {
@@ -390,20 +381,12 @@ private struct ListPageView: View {
     if attachedTasks(of: task).isEmpty { delete(task) } else { headerDeletionCandidate = task }
   }
 
-  /// Le champ « Nouvelle tâche » ne s'affiche QUE sur un bloc VIDE — liste neuve, ou en-tête de
-  /// section sans tâche. Sur un bloc rempli, il était une ligne de plus dans la séquence de
-  /// glissement (cf. `physicalRows`) : un trou d'insertion à enjamber par section, pour un raccourci
-  /// que le ⊕ de la barre du bas et ⌘N offrent déjà.
+  /// Le champ n'apparaît que sur un bloc vide — sur un bloc rempli, ce n'était qu'une ligne fixe à
+  /// enjamber au glissement. « Ou focalisé » garde la saisie enchaînée : Entrée remplit le bloc, le
+  /// champ doit survivre.
   ///
-  /// « Ou tant qu'il a le focus » n'est pas une exception : la saisie enchaînée (Entrée puis Entrée)
-  /// remplit justement le bloc qu'on est en train de nourrir — sans ça le champ se déroberait après
-  /// la PREMIÈRE tâche. Il s'efface quand le focus part, et le focus part au mouseDOWN de toute
-  /// sélection (cf. `select`), donc bien avant qu'une empoignade ne gèle les cadres : la mise en page
-  /// ne bouge jamais pendant un geste.
-  ///
-  /// Point d'entrée UNIQUE : le `body` et `physicalRows` s'appuient dessus. Deux conditions séparées
-  /// auraient pu diverger — une ligne physique de plus d'un côté que de l'autre décale TOUS les trous
-  /// d'insertion du bloc.
+  /// Lu par le `body` ET par `physicalRows` : une ligne physique de plus d'un côté que de l'autre
+  /// décale tous les trous d'insertion.
   private func showsNewTaskField(_ block: TaskBlock) -> Bool {
     block.tasks.isEmpty || focusedDraft == block.id
   }
@@ -747,9 +730,8 @@ private struct ListPageView: View {
 
   /// Entrée sur le titre d'une en-tête : ferme son édition ET enchaîne sur le champ « Nouvelle
   /// tâche » de SON bloc — même logique que le titre de la liste (cf. `header`, plus bas), pour
-  /// écrire directement la 1re tâche de la section qu'on vient de nommer. Une section qui porte déjà
-  /// des tâches n'a plus de champ (cf. `showsNewTaskField`) : Entrée y referme simplement l'édition,
-  /// plutôt que de viser un champ inexistant.
+  /// écrire directement la 1re tâche de la section qu'on vient de nommer. Une section déjà remplie n'a
+  /// plus de champ : Entrée y referme, sans rien viser.
   private func endEditingHeader(_ header: TaskItem) {
     endEditing(header)
     let block = blocks.first { $0.header?.persistentModelID == header.persistentModelID }
@@ -836,8 +818,6 @@ private struct ListPageView: View {
     for block in blocks {
       if let header = block.header { rows.append(.task(header.persistentModelID)) }
       for task in block.tasks { rows.append(.task(task.persistentModelID)) }
-      // Même condition que le `body`, via la MÊME propriété : une ligne physique de plus ici que ce
-      // qui est rendu décalerait tous les trous d'insertion du bloc.
       if showsNewTaskField(block) { rows.append(.field(block.id)) }
     }
     return rows
@@ -1426,9 +1406,8 @@ private struct ListPageView: View {
   /// dans « Nouvelle tâche » — sinon les deux se lisent comme un focus ambigu. Utilisé par le
   /// bouton « + » de la barre d'outils (saisie rapide, sans ouvrir la carte d'édition complète).
   ///
-  /// Le champ n'existe plus que sur un bloc VIDE (cf. `showsNewTaskField`) : sans champ à focaliser,
-  /// le ⊕ retombe sur ⌘N (tâche vide ouverte en édition) plutôt que de ne rien faire — un bouton de
-  /// barre d'outils muet est exactement le faux-semblant que ce projet refuse.
+  /// Sans champ à focaliser (bloc non vide, cf. `showsNewTaskField`), le ⊕ retombe sur ⌘N plutôt que
+  /// de rester muet.
   private func focusNewTaskField() {
     let target = blocks.first { $0.id == selectedBlockID } ?? blocks.last
     guard let target, showsNewTaskField(target) else {
