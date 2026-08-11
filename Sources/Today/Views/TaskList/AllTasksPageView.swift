@@ -498,9 +498,23 @@ struct AllTasksPageView: View {
     // Dans la boîte de réception : une tâche notée ici n'a ni projet ni date, comme celle du champ
     // du bas. C'est la seule section de cette page qui crée.
     guard let inbox = inboxLists.first else { return }
+    // ⌘N martelé enchaîne les lignes au lieu de rouvrir la même carte (cf. `nameIfBlank`).
+    keepEditedTaskIfBlank(focus, in: modelContext)
     let task = TaskItem(title: "", list: inbox)
     task.sortIndex = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
-    withAnimation(taskInsert) { modelContext.insertAndSave(task) }
+    // Juste SOUS la ligne visée. Cette page range « Non classé » par ordre manuel (cf.
+    // `AllTasksPage.build`), pas par `sortIndex` : c'est lui qu'on renumérote, et seulement quand
+    // une ligne est visée — même règle que sur « Aujourd'hui ».
+    var ordered =
+      AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
+      .sections.first { $0.kind == .inbox }?.tasks ?? []
+    withAnimation(taskInsert) {
+      if let index = ordered.firstIndex(where: { focus.isSelected($0) }) {
+        ordered.insert(task, at: index + 1)
+        TaskItem.stampSmartOrder(ordered)
+      }
+      modelContext.insertAndSave(task)
+    }
     let id = task.persistentModelID
     // Au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues avant que le focus
     // puisse s'y poser. Même raison, et même remède, que sur une page de liste.

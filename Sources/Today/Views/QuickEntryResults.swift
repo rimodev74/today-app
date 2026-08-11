@@ -59,9 +59,9 @@ private struct QuickEntryResultRow: View {
           .font(.app(11, weight: .medium))
           .foregroundStyle(Color.accentColor)
         Text("↩").font(.app(11)).foregroundStyle(.tertiary)
-        // Le second geste, annoncé au même endroit : ↩ fait ici, ⌘↩ va voir. Une tâche et une
-        // commande n'ont pas d'endroit à ouvrir, la mention ne s'affiche donc pas pour elles.
-        if row.action.destination != nil {
+        // Le second geste, annoncé au même endroit : ↩ fait ici, ⌘↩ va voir. Une commande n'a nulle
+        // part où aller, la mention ne s'affiche donc pas pour elle.
+        if row.destination != nil {
           Text("⌘↩ ouvrir").font(.app(11)).foregroundStyle(.tertiary)
         }
       }

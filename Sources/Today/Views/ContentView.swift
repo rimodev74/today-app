@@ -966,7 +966,9 @@ private struct QuickFindPanel: View {
                 subtitle: task.list?.title,
                 action: { if let list = task.list { onSelect(.list(list)) } }
               ) {
-                Image(systemName: "circle").foregroundStyle(.secondary)
+                // Cochée = la case l'est aussi (même règle que `QuickPalette.taskRow`).
+                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                  .foregroundStyle(.secondary)
               }
             }
           }

@@ -22,6 +22,24 @@ final class TaskItemBlankTests: XCTestCase {
     XCTAssertTrue(TaskItem(title: "   \n  ").isBlank)
   }
 
+  // MARK: Le ⌘N enchaîné
+
+  /// ⌘N martelé : la ligne qu'on quitte prend son nom par défaut et GARDE sa place, au lieu de
+  /// s'effacer et de faire clignoter la carte sur place.
+  func testUnCommandNDePlusRetientLaTacheVideSousSonNomParDefaut() {
+    let task = fresh()
+    task.nameIfBlank()
+    XCTAssertEqual(task.title, "Nouvelle tâche")
+    XCTAssertFalse(task.isBlank)
+  }
+
+  /// Ce que l'utilisateur a écrit ne se fait jamais renommer.
+  func testUnTitreDejaEcritNeSeFaitPasRenommer() {
+    let task = TaskItem(title: "acheter du pain")
+    task.nameIfBlank()
+    XCTAssertEqual(task.title, "acheter du pain")
+  }
+
   // MARK: Tout ce qui doit la retenir
 
   func testDesNotesLaRetiennent() {

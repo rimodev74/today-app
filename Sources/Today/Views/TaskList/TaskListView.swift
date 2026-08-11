@@ -1403,9 +1403,15 @@ private struct ListPageView: View {
     guard let block = blocks.first(where: { $0.id == selectedBlockID }) ?? blocks.last else {
       return
     }
+    // ⌘N martelé enchaîne les lignes au lieu de rouvrir la même carte (cf. `nameIfBlank`).
+    keepEditedTaskIfBlank(focus, in: modelContext)
     let task = TaskItem(title: "", list: list)
+    // Juste SOUS la ligne visée — en-tête comprise : la neuve se pose là où l'œil est déjà. Sans
+    // sélection, la fin du bloc, avant les cochées.
+    let aimed = ([block.header].compactMap { $0 } + block.tasks).first { focus.isSelected($0) }
     let anchor =
-      TodoList.appendAnchor(among: block.tasks)?.sortIndex ?? block.header?.sortIndex ?? -1
+      aimed?.sortIndex ?? TodoList.appendAnchor(among: block.tasks)?.sortIndex
+      ?? block.header?.sortIndex ?? -1
     withAnimation(taskInsert) {
       for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
       task.sortIndex = anchor + 1

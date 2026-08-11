@@ -138,6 +138,14 @@ final class TaskItem {
       && !isCompleted
   }
 
+  /// Le nom que prend une tâche vide qu'on QUITTE par un ⌘N de plus : elle garde sa place, la neuve
+  /// s'ouvre dessous. Sans lui, `isBlank` l'effaçait et la carte clignotait sur place.
+  ///
+  /// Échap et le clic dans le vide ne l'appellent pas : eux ANNULENT, et ne laissent rien derrière.
+  func nameIfBlank() {
+    if isBlank { title = "Nouvelle tâche" }
+  }
+
   func toggleCompletion() {
     isCompleted.toggle()
     completedAt = isCompleted ? Date() : nil

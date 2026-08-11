@@ -331,8 +331,20 @@ struct TodayPageView: View {
   private func createTaskInEditMode() {
     // Datée d'aujourd'hui d'office, exactement comme une tâche notée dans le champ du bas : c'est
     // ce qui fait la page.
+    // ⌘N martelé enchaîne les lignes au lieu de rouvrir la même carte (cf. `nameIfBlank`).
+    keepEditedTaskIfBlank(focus, in: modelContext)
     let task = TaskItem(title: "", when: startOfToday, list: inboxLists.first)
-    withAnimation(taskInsert) { modelContext.insertAndSave(task) }
+    // Juste SOUS la ligne visée — ici le rang est l'ordre manuel, renuméroté comme au lâcher d'un
+    // glisser. SANS ligne visée on ne stampe RIEN : `smartOrder == 0` laisse `SmartList.sort` placer
+    // la neuve, et stamper d'office figerait toute une page en ordre manuel à chaque ⌘N.
+    var ordered = TodayPage.build(from: allTasks).tasks
+    withAnimation(taskInsert) {
+      if let index = ordered.firstIndex(where: { focus.isSelected($0) }) {
+        ordered.insert(task, at: index + 1)
+        TaskItem.stampSmartOrder(ordered)
+      }
+      modelContext.insertAndSave(task)
+    }
     let id = task.persistentModelID
     // Au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues avant que le focus
     // puisse s'y poser. Même raison, et même remède, que sur une page de liste.

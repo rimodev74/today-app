@@ -311,13 +311,36 @@ final class QuickPaletteTests: XCTestCase {
   func testDestinationsAreTheOnesWorthOpening() {
     let project = Project(title: "Maison")
     let list = TodoList(title: "Courses", project: project)
+    let done = TaskItem(title: "Acheter du pain", list: list)
 
-    XCTAssertEqual(QuickPalette.Action.addTask(.inbox).destination, .smartList(.all))
-    XCTAssertEqual(QuickPalette.Action.addTask(.today).destination, .smartList(.today))
-    XCTAssertEqual(QuickPalette.Action.addTask(.list(list)).destination, .list(list))
-    XCTAssertEqual(QuickPalette.Action.createList(project).destination, .project(project))
-    XCTAssertNil(QuickPalette.Action.complete(task("x")).destination)
-    XCTAssertNil(QuickPalette.Action.run(.pomodoroStart).destination)
+    func destination(of query: String) -> SidebarSelection? {
+      QuickPalette.search(query, lists: [list], projects: [project], tasks: [done]).rows
+        .first?.destination
+    }
+
+    XCTAssertEqual(destination(of: "Tâches"), .smartList(.all))
+    XCTAssertEqual(destination(of: "Aujourd"), .smartList(.today))
+    XCTAssertEqual(destination(of: "Courses"), .list(list))
+    XCTAssertEqual(destination(of: "Maison"), .project(project))
+    // Une tâche ouvre la liste qui la porte : c'est l'endroit le plus proche qu'un onglet montre.
+    XCTAssertEqual(destination(of: "Acheter"), .list(list))
+    XCTAssertNil(destination(of: "pomodoro"))
+  }
+
+  /// Une tâche cochée le dit dans la palette : sans ça, la case vide démentait le titre barré.
+  func testCompletedTaskShowsACheckedBox() {
+    let list = TodoList(title: "Courses")
+    let done = TaskItem(title: "Acheter du pain", list: list)
+    done.toggleCompletion()
+    let todo = TaskItem(title: "Payer le loyer", list: list)
+
+    func image(of query: String) -> String? {
+      QuickPalette.search(query, lists: [list], projects: [], tasks: [done, todo]).rows
+        .first { $0.kind == "Tâche" }?.systemImage
+    }
+
+    XCTAssertEqual(image(of: "Acheter"), "checkmark.circle.fill")
+    XCTAssertEqual(image(of: "Payer"), "circle")
   }
 
 }

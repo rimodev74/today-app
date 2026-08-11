@@ -76,21 +76,6 @@ struct QuickPalette {
       case .run: return "Lancer"
       }
     }
-
-    /// L'endroit que ⌘↩ ouvre DANS l'app, ou `nil` quand la ligne n'en désigne aucun.
-    ///
-    /// C'est le pendant « aller voir » de l'action principale, qui, elle, « fait ici ». Une tâche
-    /// et une commande n'en ont pas : sur elles ⌘↩ garde le sens qu'il a toujours eu dans la
-    /// capsule — empiler une tâche de plus.
-    var destination: SidebarSelection? {
-      switch self {
-      case .addTask(.inbox): return .smartList(.all)
-      case .addTask(.today): return .smartList(.today)
-      case .addTask(.list(let list)): return .list(list)
-      case .createList(let project): return .project(project)
-      case .complete, .run: return nil
-      }
-    }
   }
 
   // MARK: Une ligne
@@ -110,6 +95,12 @@ struct QuickPalette {
     let detail: String?
     let isCompleted: Bool
     let action: Action
+    /// L'endroit que ⌘↩ ouvre DANS l'app — le pendant « aller voir » de l'action, qui, elle, « fait
+    /// ici ». Porté par la LIGNE et pas déduit de l'action : celle d'une tâche demande de traverser
+    /// `task.list`, une lecture SwiftData qui n'a rien à faire dans un rendu de rangée.
+    ///
+    /// `nil` sur une commande seule : elle n'emmène nulle part qu'un onglet puisse montrer.
+    let destination: SidebarSelection?
   }
 
   let rows: [Row]
@@ -235,7 +226,7 @@ struct QuickPalette {
     Row(
       id: AnyHashable("smart-" + smart.label), title: smart.label, kind: "Vue",
       systemImage: smart.systemImage, detail: nil, isCompleted: false,
-      action: .addTask(target))
+      action: .addTask(target), destination: .smartList(smart))
   }
 
   private static func projectRow(_ project: Project) -> Row {
@@ -245,29 +236,37 @@ struct QuickPalette {
       title: project.title.isEmpty ? "Sans titre" : project.title, kind: "Dossier",
       systemImage: "folder",
       detail: lists.isEmpty ? nil : "\(lists.count) liste\(lists.count > 1 ? "s" : "")",
-      isCompleted: false, action: .createList(project))
+      isCompleted: false, action: .createList(project), destination: .project(project))
   }
 
   private static func listRow(_ list: TodoList) -> Row {
     Row(
       id: AnyHashable(list.uuid), title: list.title.isEmpty ? "Sans titre" : list.title,
       kind: "Liste", systemImage: "list.bullet", detail: list.project?.title, isCompleted: false,
-      action: .addTask(.list(list)))
+      action: .addTask(.list(list)), destination: .list(list))
   }
 
+  /// La case COCHÉE, pas un cercle : la ligne dit déjà l'état de la tâche par son titre barré, et
+  /// une case vide à côté se lisait comme un démenti.
+  ///
+  /// ⌘↩ y ouvre la LISTE qui la porte — c'est l'endroit le plus proche qu'un onglet sache montrer,
+  /// et déjà ce que fait la recherche de l'app (cf. `QuickFindPanel`).
   private static func taskRow(_ task: TaskItem) -> Row {
     Row(
       id: AnyHashable(task.uuid), title: task.title.isEmpty ? "Sans titre" : task.title,
-      kind: "Tâche", systemImage: "circle",
+      kind: "Tâche", systemImage: task.isCompleted ? "checkmark.circle.fill" : "circle",
       detail: task.when?.formatted(.dateTime.day().month(.abbreviated)),
-      isCompleted: task.isCompleted, action: .complete(task))
+      isCompleted: task.isCompleted, action: .complete(task),
+      destination: task.list.map { .list($0) })
   }
 
   private static func commandRow(_ command: AppCommand) -> Row {
     Row(
       id: AnyHashable("cmd-" + command.rawValue), title: command.label,
       kind: command.isPomodoro ? "Pomodoro" : "Commande", systemImage: command.systemImage,
-      detail: nil, isCompleted: false, action: .run(command))
+      // Sans destination : ↩ l'exécute déjà, et « Afficher Aujourd'hui » n'a rien de plus à ouvrir
+      // que ce que son propre libellé annonce.
+      detail: nil, isCompleted: false, action: .run(command), destination: nil)
   }
 
   // MARK: La correspondance

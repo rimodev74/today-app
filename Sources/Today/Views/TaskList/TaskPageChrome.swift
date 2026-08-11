@@ -25,6 +25,19 @@ let gutter: CGFloat = 65
 /// 10 pt à gauche de toutes les tâches qu'il coiffe.
 let rowInset: CGFloat = 10
 
+/// Le pendant de « une tâche vide s'en va » (cf. `TaskPageBase`), pour le seul geste qui ne l'annule
+/// pas : un ⌘N de plus. Écrit UNE fois pour les trois pages qui créent.
+///
+/// `registeredModel` et pas `model(for:)` : le second FABRIQUE un objet pour un identifiant qu'il ne
+/// connaît pas, et le lire planterait si la tâche a disparu entre-temps (⌘Z, synchro Rappels).
+@MainActor
+func keepEditedTaskIfBlank(_ focus: TaskFocus, in context: ModelContext) {
+  guard let editing = focus.editing,
+    let task: TaskItem = context.registeredModel(for: editing), !task.isDeleted
+  else { return }
+  task.nameIfBlank()
+}
+
 /// DEUX colonnes, et c'est voulu — le décrochement entre elles est ce qui donne la hiérarchie.
 ///
 /// `taskContentColumn` est celle des repères de SECTION : bandeau de page (icône, anneau), bord

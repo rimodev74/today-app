@@ -525,26 +525,41 @@ private struct QuickEntryView: View {
     }
   }
 
-  /// ⌘↩ en RECHERCHE : ouvrir l'app SUR la ligne visée, au lieu d'y faire quelque chose. Le
-  /// pendant « aller voir » de ↩, qui, lui, « fait ici ».
+  /// ⌘↩ : ouvrir l'app SUR la ligne visée, au lieu d'y faire quelque chose. Le pendant « aller
+  /// voir » de ↩, qui, lui, « fait ici ».
   ///
-  /// Sur une tâche ou une commande il ne se passe rien : ⌘↩ y garde son sens d'origine (empiler
-  /// une tâche de plus), qui n'a de valeur qu'en seconde étape — d'où le `.ignored`, qui laisse la
-  /// main à `enqueueShortcut` juste derrière.
+  /// Il vaut aux DEUX temps : les listes d'un dossier s'ouvrent comme les lignes d'une recherche.
+  /// Borné à la première étape, ⌘↩ sur l'une d'elles finissait en bip système.
   ///
+  /// Une tâche ouvre la LISTE qui la porte (cf. `QuickPalette.taskRow`) ; sans ligne visée, c'est
+  /// l'endroit de l'ÉTAPE — sauf quand une tâche s'écrit, où ⌘↩ appartient à l'empilement.
+  private func openSelected(_ press: KeyPress) -> KeyPress.Result {
+    guard press.key == .return, press.modifiers.contains(.command) else { return .ignored }
+    let rows = currentPalette.rows
+    // Une ligne VISÉE nous appartient, même sans endroit où aller (une commande) : la touche est
+    // consommée quand même, sans quoi AppKit la refuse en bip. Sans ligne visée, on laisse passer —
+    // c'est `enqueueShortcut`, juste derrière, qui a le dernier mot.
+    if let index = selection, rows.indices.contains(index) {
+      guard let destination = rows[index].destination else { return .handled }
+      return reveal(destination)
+    }
+    guard let destination = stepDestination else { return .ignored }
+    return reveal(destination)
+  }
+
   /// `dismiss()` AVANT d'ouvrir, comme pour une commande : la capsule ne doit pas rester devant la
   /// fenêtre qu'elle vient de ramener.
-  private func openSelected(_ press: KeyPress) -> KeyPress.Result {
-    guard step.isSearch, press.key == .return, press.modifiers.contains(.command),
-      let index = selection
-    else { return .ignored }
-    let rows = currentPalette.rows
-    guard rows.indices.contains(index), let destination = rows[index].action.destination else {
-      return .ignored
-    }
+  private func reveal(_ destination: SidebarSelection) -> KeyPress.Result {
     dismiss()
     AppCommand.reveal(destination)
     return .handled
+  }
+
+  /// L'endroit de l'étape en cours, quand aucune ligne n'est visée. En recherche il n'y en a aucun,
+  /// et sur une tâche en écriture ⌘↩ appartient à l'empilement.
+  private var stepDestination: SidebarSelection? {
+    if case .createList(let project) = step { return .project(project) }
+    return nil
   }
 
   /// Ce que ↩ (ou un clic) fait d'une ligne : exactement ce qu'elle annonçait.
@@ -1200,6 +1215,10 @@ private struct QuickEntryView: View {
   /// chacun — trois copies auraient divergé à la première retouche.
   private func enqueueShortcut(_ press: KeyPress) -> KeyPress.Result {
     guard press.key == .return, press.modifiers.contains(.command) else { return .ignored }
+    // `composesTask` et pas seulement « il y a un titre » : en RECHERCHE, la frappe désigne une
+    // ligne, elle n'écrit pas une tâche. Sans cette garde, ⌘↩ sur une ligne sans destination
+    // déposait le texte de la recherche dans la fournée.
+    guard step.composesTask else { return .ignored }
     enqueue()
     return .handled
   }
