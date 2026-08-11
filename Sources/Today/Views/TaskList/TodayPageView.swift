@@ -51,8 +51,8 @@ struct TodayPageView: View {
   @State private var focus = TaskFocus()
   /// Le glissement en cours, et les positions de repos qui lui servent de repère.
   @State private var reorder = TaskPageReorder()
-  /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskRow.collapsedForDrag`).
-  @State private var dragCollapsedID: PersistentIdentifier?
+  /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskDragCollapse`).
+  @State private var dragCollapse = TaskDragCollapse()
 
   /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, que le ticker
   /// rafraîchit : une fenêtre laissée ouverte toute la nuit date bien du bon jour au matin.
@@ -93,14 +93,9 @@ struct TodayPageView: View {
     // Champ de création : journée vide seulement — ou focalisé, pour ne pas se dérober en pleine
     // saisie enchaînée. Cf. `ListPageView.showsNewTaskField`. Lu aussi par le ⊕ de la barre du bas,
     // qui ne peut donc pas viser un champ absent.
-    let showsDraft = rows.isEmpty || draftFocused
-    // `GeometryReader` + largeur EXPLICITE, pas `maxWidth: .infinity` : un `ScrollView` ne borne
-    // pas la largeur de son contenu, et un `VStack` ne propose pas la sienne à ses enfants — un
-    // `TextField` focalisé (le titre en édition) délègue alors son rendu au field editor d'AppKit,
-    // de largeur idéale nulle, et le titre disparaît purement et simplement. Même correctif que
-    // `ListPageView` (cf. son en-tête de fichier), qui manquait ici — mesuré le 7 août 2026 : le
-    // titre d'une tâche en édition s'effondrait sur « Aujourd'hui » et « Tâches », jamais sur une
-    // liste.
+    let showsNewTaskField = rows.isEmpty || draftFocused
+    // Largeur EXPLICITE et pas `maxWidth: .infinity`, sans quoi le titre d'une tâche en édition
+    // disparaît. Le pourquoi est dans `PIEGES.md` § Layout, avec la mesure.
     return GeometryReader { geo in
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
@@ -114,7 +109,7 @@ struct TodayPageView: View {
                 for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, draggable: true,
                 rows: rows)
             }
-            if showsDraft { newTaskRow }
+            if showsNewTaskField { newTaskRow }
             remindersSection
           }
         }
@@ -139,7 +134,9 @@ struct TodayPageView: View {
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         // Sans champ affiché, le ⊕ retombe sur ⌘N plutôt que de rester muet.
-        onNewTask: { if showsDraft { draftFocused = true } else { createTaskInEditMode() } },
+        onNewTask: {
+          if showsNewTaskField { draftFocused = true } else { createTaskInEditMode() }
+        },
         onInsertHeader: nil,
         onSearch: { searchPresented = true })
     }
@@ -188,19 +185,11 @@ struct TodayPageView: View {
     let onDrag: ((CGSize, CGPoint) -> Void)? =
       draggable
       ? { translation, start in
-        // Replier AVANT d'armer, et renoncer à CETTE image du geste : `TaskPageReorder` gèle les
-        // cadres dès le premier `track`, il faut donc que la ligne ait republié sa hauteur réduite
-        // entre-temps. Cf. `TaskRow.collapsedForDrag` pour le trou de neuf lignes que ça évite.
-        if !reorder.isDragging, dragCollapsedID == nil, !task.subtasks.isEmpty {
-          dragCollapsedID = task.persistentModelID
-          return
-        }
+        // Replier AVANT d'armer, et renoncer à cette image : cf. `TaskDragCollapse`.
+        guard !dragCollapse.collapseIfNeeded(task, translation: translation) else { return }
         reorder.track(task, by: translation, in: rows)
-        // Le cadre de repos est gelé dès l'empoignade (`TaskPageReorder.measured`) : le lire ici,
-        // à chaque image du glissement, rend toujours la même valeur — cf. `SidebarDrop.arm`.
-        if let restingMinX = reorder.frames[.task(task.persistentModelID)]?.minX {
-          filing.arm(grabOffsetX: start.x - restingMinX)
-        }
+        filing.arm(
+          grabbedAt: start, restingFrame: reorder.frames[.task(task.persistentModelID)])
       }
       : nil
     let onDrop: (() -> Void)? = draggable ? { dropDraggedTask() } : nil
@@ -217,7 +206,7 @@ struct TodayPageView: View {
       onDuplicate: { duplicate(task) },
       onDelete: { delete(task) },
       onCompletionChanged: {},
-      collapsedForDrag: dragCollapsedID == task.persistentModelID
+      collapsedForDrag: dragCollapse.isCollapsed(task)
     )
     // Un geste unique, comme dans `ListPageView` — pas deux `.onTapGesture` : le tap simple aurait
     // attendu la fin de la fenêtre de double-clic avant d'être délivré (cf. `RowPressGesture`,
@@ -247,10 +236,8 @@ struct TodayPageView: View {
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
     }
-    // Le dépliant se rouvre en partant — y compris si le geste s'est arrêté sur le repli, avant
-    // d'avoir armé quoi que ce soit.
-    if dragCollapsedID != nil {
-      withAnimation(disclosureFlow) { dragCollapsedID = nil }
+    if dragCollapse.isCollapsing {
+      withAnimation(disclosureFlow) { dragCollapse.reset() }
     }
   }
 
@@ -404,7 +391,12 @@ private struct AppleItemsSection<Content: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Divider().padding(.vertical, 10)
+      // Le TRAIT se range dans la colonne comme le bandeau qu'il annonce. Laissé pleine largeur, il
+      // partait 20 pt à gauche de tout le reste de la page — et c'est lui qu'on voit en premier,
+      // donc c'est lui qui faisait passer le bloc entier pour désaligné, bandeau juste au pixel près.
+      Divider()
+        .padding(.vertical, 10)
+        .padding(.leading, taskContentColumn)
       HStack(spacing: 6) {
         Image(systemName: systemImage)
           .font(.app(11))
@@ -412,7 +404,11 @@ private struct AppleItemsSection<Content: View>: View {
       }
       .font(.app(.subheadline).weight(.semibold))
       .foregroundStyle(.secondary)
+      .padding(.leading, taskContentColumn)
       .padding(.bottom, 6)
+      // Posé sur le trait et le bandeau, jamais sur le BLOC : `content` est un `ReminderRow`, qui
+      // porte déjà le sien (« À venir » l'affiche hors de ce conteneur). Sur le bloc, il s'ajouterait
+      // au sien et la case partirait 20 pt trop loin.
       content
     }
     .padding(.top, 8)
@@ -434,6 +430,10 @@ struct ReminderRow: View {
     }
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
+    // Même colonne qu'une `TaskRow` : sa case tombe sur `taskRowColumn` (le `rowInset` ci-dessus
+    // l'y amène depuis ce bord). Un rappel se lit comme une tâche du jour, il ne peut pas être la
+    // seule case de la page à ne pas s'aligner sur les autres.
+    .padding(.leading, taskContentColumn)
     .contentShape(Rectangle())
   }
 }
@@ -467,11 +467,13 @@ struct EventRow: View {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .strokeBorder(tint.opacity(0.4))
     )
-    // Le CADRE (pas seulement le texte) se cale sur `taskContentColumn` : un encadré TOUJOURS
-    // affiché s'aligne par son bord, comme `NotesBox` — sinon c'est lui qui déborde à gauche de
-    // tout le reste (mesuré : la pastille restait flush avec les bords du conteneur, 10 pt à
-    // gauche de la colonne des cases, sur « Tâches » ET « Aujourd'hui »).
-    .padding(.leading, taskContentColumn)
+    // Le CADRE se cale sur `taskRowColumn`, la colonne des CASES — pas sur celle des repères de
+    // section. Un événement est le contenu d'une journée, au même titre qu'une tâche : il décroche
+    // donc comme elle. Posé un `rowInset` plus à gauche (sur `taskContentColumn`), il se lisait au
+    // même niveau que le titre de la section qui le coiffe, et la hiérarchie disparaissait.
+    // Porté ICI et pas par les pages : les trois qui l'affichent (« Aujourd'hui », « Tâches »,
+    // « À venir ») le posent sans retrait à elles, une seule valeur les tient toutes.
+    .padding(.leading, taskRowColumn)
   }
 
   private var timeLabel: String {

@@ -137,10 +137,19 @@ struct DayBounds {
   let now: Date
   let startOfToday: Date
   let startOfTomorrow: Date
+  /// Le réglage de l'anneau (cf. `TaskItem.countsTowardProgress`), lu UNE fois par passe. Il est ici
+  /// et pas dans `countsTowardProgress` parce que celle-ci s'appelle PAR TÂCHE : mesuré à 0,665 ms
+  /// pour 2 000 lectures de `UserDefaults`, soit le coût d'un `SidebarCounts` entier à cette taille.
+  /// Injectable au passage — un test n'a plus à écrire dans les défauts pour choisir la règle.
+  let progressResetsDaily: Bool
 
-  init(now: Date = Date(), calendar: Calendar = .current) {
+  init(
+    now: Date = Date(), calendar: Calendar = .current,
+    progressResetsDaily: Bool = TaskItem.progressResetsDaily
+  ) {
     self.calendar = calendar
     self.now = now
+    self.progressResetsDaily = progressResetsDaily
     startOfToday = calendar.startOfDay(for: now)
     // Repli plutôt que force-unwrap : `date(byAdding:)` ne rend `nil` pour aucune date qu'on peut
     // représenter, mais la garantie n'a pas besoin d'un `!` pour tenir.

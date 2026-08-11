@@ -30,7 +30,7 @@ struct SavedPlaylist: Codable, Identifiable, Hashable {
   /// Ce qu'on lit dans le menu. Renseigné TOUT SEUL depuis Spotify quand le lien se résout, parce
   /// que le nom qu'on donnerait à la main est déjà celui que Spotify connaît.
   var name: String = ""
-  /// Un lien Spotify, ou un nom de playlist Musique — cf. `MusicApp.playlistLabel`.
+  /// Un lien Spotify, ou un nom de playlist Musique — cf. `MusicApp.linkColumn`.
   var link: String = ""
   /// Le lecteur pour lequel elle a un sens. Un lien Spotify ne veut rien dire pour Musique : sans ce
   /// champ, le menu mélangerait des entrées dont la moitié ne pourrait pas jouer.

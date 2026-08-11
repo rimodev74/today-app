@@ -60,9 +60,14 @@ struct TaskRow: View {
   /// uuid de la sous-tâche à focaliser (clé de focus stable, cf. `SubtaskRowView`).
   @FocusState private var focusedSubtask: UUID?
   /// Dépliant de sous-tâches ouvert/fermé : permet de replier une longue checklist pour ne pas
-  /// surcharger la tâche. ponytail: état éphémère (par vue de tâche), non persisté — se réinitialise
-  /// à `true` au redémarrage. À porter sur `TaskItem` si l'on veut le mémoriser.
-  @State private var subtasksExpanded = true
+  /// surcharger la tâche.
+  ///
+  /// `nil` = « pas encore touché sur cette vue » et non « fermé » : `isSubtasksExpanded` retombe
+  /// alors sur ce que `SubtaskExpansion` a retenu du dernier lancement. Sans cet état à trois
+  /// valeurs, il faudrait un `init` explicite pour poser la valeur de départ (les pages construisent
+  /// `TaskRow` par son init mémberwise), ou la lire dans un `onAppear` — auquel cas une tâche
+  /// repliée s'afficherait ouverte une image avant de se refermer sous les yeux.
+  @State private var subtasksExpanded: Bool?
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
@@ -304,6 +309,8 @@ struct TaskRow: View {
     .onChange(of: focusedSubtask) { old, _ in deleteIfEmpty(old) }
     // Tâche cochée : le dépliant se referme tout seul — le détail de ce qui reste à faire n'a plus
     // d'intérêt une fois la tâche finie. Le rouvrir reste possible d'un clic sur le chevron.
+    // NON retenu, contrairement au clic sur le chevron : c'est une conséquence de la coche, pas une
+    // préférence de repli. Décochée puis relancée, la tâche retrouve l'état que l'on avait CHOISI.
     .onChange(of: task.isCompleted) { _, done in
       if done { withAnimation(disclosureFlow) { subtasksExpanded = false } }
     }
@@ -316,20 +323,9 @@ struct TaskRow: View {
         // Toujours le titre : c'est le seul champ qu'on ouvre. Il y avait une exception quand
         // l'édition partait de l'icône « note » du survol, retirée depuis.
         //
-        // DÉCALÉ D'UN TICK, et c'est délibéré. La même transaction qui pose `isEditing` retire
-        // aussi les badges (date, durée, provenance) de la `HStack` du titre — `titleView` reçoit
-        // donc une largeur PLUS GRANDE dans cette même transaction. Mesuré le 7 août 2026 (cadre
-        // loggé sur une tâche dont le titre portait un badge de durée) : `TextField(axis: .vertical)`
-        // fige sa hauteur à 0 dès cette première image, AVANT même que le focus n'arrive — et n'en
-        // ressort JAMAIS une fois que le field editor d'AppKit prend le relais sur ce cadre cassé.
-        // Un premier passage NON focalisé, à la largeur déjà stable, mesure la bonne hauteur (le
-        // rendu SwiftUI natif d'un `TextField` non focalisé sait le faire) ; le focus arrivant un
-        // tick plus tard, le field editor hérite d'un cadre déjà correct au lieu d'en recalculer un.
-        //
-        // Dans la MÊME courbe que le reste de la carte (`taskFlow`), et pas hors transaction :
-        // posé nu, le tout petit réajustement que fait le field editor en prenant le relais
-        // (quelques points, entre le rendu SwiftUI et le sien) sautait sans s'animer — imperceptible
-        // sur un titre seul, visible en à-coup sur une carte haute (beaucoup de sous-tâches).
+        // DÉCALÉ D'UN TICK, et dans `taskFlow` : les deux sont délibérés, et un `titleFocused = true`
+        // posé nu ici fige la hauteur du champ à 0 pour toute la session d'édition. Le mécanisme et
+        // la mesure sont dans `PIEGES.md` § Layout.
         let session = editSession
         DispatchQueue.main.async {
           guard session == editSession else { return }
@@ -623,11 +619,18 @@ struct TaskRow: View {
     }
   }
 
+  /// L'état du dépliant : celui de cette vue s'il a été touché, sinon celui retenu du dernier
+  /// lancement. Un simple appel de `Set.contains` — pas de lecture de `UserDefaults` par rangée
+  /// (cf. `SubtaskExpansion`).
+  private var isSubtasksExpanded: Bool {
+    subtasksExpanded ?? SubtaskExpansion.isExpanded(task)
+  }
+
   /// En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
-  /// est piloté par `subtasksExpanded` — et le temps d'un glissement, par `collapsedForDrag`, qui
+  /// est piloté par `isSubtasksExpanded` — et le temps d'un glissement, par `collapsedForDrag`, qui
   /// l'emporte sur les deux.
   private var showsSubtasks: Bool {
-    !collapsedForDrag && !task.orderedSubtasks.isEmpty && (isEditing || subtasksExpanded)
+    !collapsedForDrag && !task.orderedSubtasks.isEmpty && (isEditing || isSubtasksExpanded)
   }
 
   private var subtasksSection: some View {
@@ -674,7 +677,12 @@ struct TaskRow: View {
     let total = task.subtasks.count
     let done = task.subtasks.filter(\.isDone).count
     return Button {
-      withAnimation(disclosureFlow) { subtasksExpanded.toggle() }
+      // Le SEUL geste qui exprime une préférence, donc le seul qu'on retienne. `withAnimation`
+      // enveloppe l'écriture du `@State`, qui est ce qui rend ; l'enregistrement à côté n'a pas à
+      // entrer dans la transaction (cf. `SubtaskExpansion`).
+      let next = !isSubtasksExpanded
+      withAnimation(disclosureFlow) { subtasksExpanded = next }
+      SubtaskExpansion.set(next, for: task)
     } label: {
       HStack(spacing: 6) {
         SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))

@@ -455,6 +455,13 @@ simplement, carte ouverte et vide. D'où la largeur EXPLICITE
 quand la proposition entrante est déjà indéterminée. Re-mesuré après correction : le gain du
 glissement tient (7 %).
 
+**Le même oubli a été repayé sur les deux pages intelligentes** (7 août 2026) : « Aujourd'hui » et
+« Tâches » rendaient leur pile dans un `ScrollView` sans la borner, et le titre d'une tâche en
+édition s'y effondrait exactement pareil — jamais sur une page de liste, qui avait déjà le
+correctif. Les deux portent désormais le même `GeometryReader` + largeur explicite. Les
+`.frame(maxWidth: .infinity)` plus bas dans l'arbre (sections, lignes) restent tels quels : une fois
+la RACINE bornée à une largeur concrète, ils la relaient sans avoir à la recalculer.
+
 Corollaire pour la suite : le jour où une liste se comptera en centaines de lignes, la réponse ne
 sera toujours pas `LazyVStack` — ce sera de borner ce qu'on rend, ou de ne plus déplacer les rangées
 elles-mêmes.
@@ -494,6 +501,54 @@ pendant un glissement la déplie pour révéler ses listes. Ce n'est PAS le rét
 été rejeté, et la nuance est toute la différence : ici rien n'est calculé au survol — pas de trou à
 ouvrir, pas d'ordre à deviner, la sidebar ne fait que montrer des cibles qu'elle avait cachées. Sur
 « Tâches », déplier changeait la géométrie DU CALCUL en cours.
+
+---
+
+### Un `TextField` focalisé DANS la transaction qui change sa largeur fige sa hauteur à 0
+
+(7 août 2026, cadre loggé sur une tâche dont le titre portait un badge de durée.) Ouvrir l'édition
+d'une `TaskRow` fait deux choses dans la MÊME transaction : poser `isEditing`, et retirer les badges
+(date, durée, provenance) de la `HStack` du titre. Le champ reçoit donc une largeur plus grande dans
+cette transaction-là. Focalisé au même instant, `TextField(axis: .vertical)` fige sa hauteur à 0 dès
+la première image — avant même que le focus n'arrive — et n'en ressort JAMAIS, parce que le field
+editor d'AppKit prend ensuite le relais sur ce cadre déjà cassé.
+
+Le correctif est un décalage d'UN tick (`DispatchQueue.main.async`, gardé par un jeton de session) :
+un premier passage NON focalisé, à la largeur déjà stable, mesure la bonne hauteur — le rendu
+SwiftUI natif d'un `TextField` non focalisé sait le faire — et le focus, arrivant un tick plus tard,
+hérite d'un cadre correct au lieu d'en recalculer un.
+
+Ce focus décalé va dans `taskFlow`, pas hors transaction : posé nu, le petit réajustement que fait
+le field editor en prenant le relais (quelques points) sautait sans s'animer. Imperceptible sur un
+titre seul, visible en à-coup sur une carte haute.
+
+### Une page de tâches a DEUX colonnes, et cinq endroits l'ont oublié
+
+`taskContentColumn` (les repères de section : bandeau de page, encadré toujours affiché, pilule
+d'en-tête, libellé d'un dépliant, en-tête de jour) et `taskRowColumn` (le contenu d'une ligne : case
+à cocher, ＋ de création, encadré d'un événement), séparées d'un `rowInset`. Le décrochement entre
+les deux est ce qui donne la hiérarchie — une case se cale sur le TEXTE d'une en-tête, pas sur le
+bord de sa pilule.
+
+Se caler sur `rowInset` nu, ou sur une valeur recalculée à la main, a désaligné cinq endroits, l'un
+après l'autre : `EventRow`, le dépliant « archivées », son `NotesBox`, la grille de cartes d'un
+projet, et la pilule d'en-tête. Cinq fois le même oubli, cinq corrections séparées — d'où les deux
+constantes nommées et la règle posée à leur définition (`TaskPageChrome`).
+
+**Le critère n'est pas « est-ce un encadré ? », c'est « est-ce que ça COIFFE des lignes, ou est-ce
+que c'en est une ? »** `EventRow` a d'abord été rangé sur `taskContentColumn` parce qu'il est
+encadré, comme `NotesBox` — mais un événement est le contenu d'une journée, pas son titre : posé
+là, il se lisait au même niveau que la section qui le coiffe et la hiérarchie disparaissait. Il est
+passé sur `taskRowColumn` (11 août 2026), avec la case d'un rappel, qui traînait encore à `rowInset`
+nu.
+
+« À venir » n'avait, elle, jamais eu ce passage : dans une même journée, la case d'une tâche était à
+0, celle d'un rappel à 10 et l'encadré d'un événement à 20. Trois retraits pour trois sortes de
+lignes qui se suivent. Corrigé en même temps — sans quoi « aligner les événements sur les cases » n'y
+voulait rien dire.
+
+Seule exception assumée : la carte d'édition d'une `TaskRow`, qui déborde délibérément à gauche pour
+s'ouvrir autour d'un contenu qui, lui, ne bouge pas au clic.
 
 ---
 
@@ -540,8 +595,51 @@ Même s'il doit survivre au relancement. Mesuré : un dépliant piloté par `@Ap
 totalement instantané sous `withAnimation` — son écriture passe par `UserDefaults`, hors du
 mécanisme d'observation que SwiftUI sait capturer dans une transaction animée. C'était le bug de
 « Tâches sans date » (Aujourd'hui), invisible tant que personne ne comparait à un dépliant voisin.
-Un `@State` ordinaire, avec la persistance écrite à la main dans son `set` (cf.
-`TodayPageView.undatedExpansion`), donne le même résultat SANS ce piège.
+Un `@State` ordinaire, avec la persistance écrite à la main À CÔTÉ de la mutation animée, donne le
+même résultat SANS ce piège. Deux formes en service : un `Binding` maison dont le `set` fait le
+`withAnimation` (`AllTasksPageView.calendarExpansion`, `expansion(of:)`), et — quand l'état doit
+survivre au relancement — un `@State` qui pilote le rendu doublé d'un enregistrement écrit juste
+après lui (`TaskRow` + `SubtaskExpansion`, pour le repli des sous-tâches).
+
+---
+
+## L'anneau de progression
+
+### Trois versions de la même règle, dont deux fausses
+
+`TodoList.progress` (et son jumeau `Project.progress`) a été réécrit trois fois. Les deux premières
+sont instructives, parce qu'elles échouent de façons opposées.
+
+**La première mesurait le flux VISIBLE** : une tâche sortie de la page ne comptait ni au numérateur
+ni au dénominateur, pour qu'une liste au long cours n'affiche pas un disque quasi plein devant une
+page où rien n'est fait. Retirée — vu d'un anneau il n'y a AUCUNE page, et la règle retombait alors
+sur `CompletedTaskRetention`, dont le mode « 1,5 s » faisait sortir toute tâche cochée une seconde
+et demie après le clic. Mesuré : 2 faites sur 4 → 0,0. L'anneau montait puis retombait à zéro tout
+seul, partout. Une jauge qui ne retient rien ne mesure rien.
+
+**La deuxième ignorait donc l'âge d'une coche** : une tâche complétée compte pour toujours. Juste
+pour une liste qu'on termine une fois ; faux pour une liste au long cours jamais terminée (« Bugs &
+fix ») — chaque tâche archivée reste au dénominateur, l'anneau plafonne près du plein, et une tâche
+neuve ne le fait quasiment plus bouger.
+
+**La troisième ancre l'exclusion sur le JOUR CALENDAIRE** (`TaskItem.countsTowardProgress`) et non
+sur `CompletedTaskRetention` : la borne ne bouge qu'une fois par jour, à minuit — jamais en cours de
+journée comme le mode « 1,5 s », donc jamais le clignotement qui avait tué la première version. Une
+tâche cochée aujourd'hui compte encore ; une tâche archivée avant aujourd'hui ne compte plus dans
+AUCUN des deux termes, comme si elle n'avait jamais existé — exactement ce que fait déjà une liste
+neuve. Le réglage `progressRingResetsDaily` (Réglages ▸ Tâches) redonne la deuxième à qui la
+préfère.
+
+`completedAt` manquant (donnée d'avant l'ajout du champ) compte comme « pas encore archivée » : on
+ne sait pas trancher, donc on ne masque pas une progression qu'on ne peut pas dater.
+
+### Le réglage se lit UNE fois par passe, pas une fois par tâche
+
+`countsTowardProgress` est appelé par tâche (`SidebarCounts`, `TodoList.progress`,
+`Project.progress`). Il lisait `UserDefaults` à chaque appel. Mesuré : 0,665 ms pour 2 000 lectures,
+soit le coût d'un `SidebarCounts` entier à cette taille. Le drapeau vit donc dans `DayBounds`, avec
+les autres valeurs calculées une fois par filtrage — et il devient injectable, ce qui sort les tests
+des défauts utilisateur.
 
 ---
 

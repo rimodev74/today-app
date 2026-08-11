@@ -146,17 +146,12 @@ final class TaskItem {
   /// Compte-t-elle encore dans une progression (anneau d'une liste ou d'un projet) ? Une tâche à
   /// faire compte toujours ; une COCHÉE cesse de compter une fois archivée — passé minuit.
   ///
-  /// La borne est le JOUR CALENDAIRE de `bounds`, jamais `CompletedTaskRetention` : le mode
-  /// « 1,5 s » y ferait remonter puis retomber l'anneau à chaque coche, exactement le bug déjà
-  /// mesuré et écarté une première fois (cf. `TodoList.progress`). `completedAt` manquant (donnée
-  /// d'avant l'ajout du champ) compte comme « pas encore archivée » : on ne sait pas trancher, donc
-  /// on ne masque pas une progression qu'on ne peut pas dater.
-  ///
-  /// `progressResetsDaily` (Réglages) redonne l'ancien comportement — tout l'archivé compte, pour
-  /// toujours — à qui le préfère : demandé après coup, gardé en option plutôt qu'imposé.
+  /// `completedAt` manquant (donnée d'avant l'ajout du champ) compte comme « pas encore archivée » :
+  /// on ne sait pas trancher, donc on ne masque pas une progression qu'on ne peut pas dater. Le
+  /// réglage vient de `bounds` et non des défauts — cette méthode s'appelle PAR TÂCHE (cf.
+  /// `DayBounds.progressResetsDaily`). Le reste : `PIEGES.md` § L'anneau de progression.
   func countsTowardProgress(_ bounds: DayBounds) -> Bool {
-    guard isCompleted, let completedAt else { return true }
-    guard TaskItem.progressResetsDaily else { return true }
+    guard isCompleted, let completedAt, bounds.progressResetsDaily else { return true }
     return completedAt >= bounds.startOfToday
   }
 

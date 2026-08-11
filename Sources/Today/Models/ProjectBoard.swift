@@ -29,20 +29,26 @@ struct ProjectBoard {
 
   /// `previewLimit` = ce que la carte peut RENDRE, fondu compris ; c'est une décision de mise en
   /// page, elle vient donc de la vue.
-  static func build(from project: Project, previewLimit: Int) -> ProjectBoard {
+  static func build(
+    from project: Project, previewLimit: Int,
+    progressResetsDaily: Bool = TaskItem.progressResetsDaily
+  ) -> ProjectBoard {
     ProjectBoard(
       cards: project.orderedLists.map { list in
-        // UN seul parcours par liste. Lire une propriété d'un `@Model` traverse SwiftData (cf.
-        // `sortedByKey`) : refiltrer `tasks` une fois pour l'aperçu et une fois pour le compte,
-        // c'était deux fois le même prix.
-        let todo = list.orderedTasks.filter { !$0.isHeader && !$0.isCompleted }
+        // UN seul parcours par liste, et c'est tout l'enjeu. Lire une propriété d'un `@Model`
+        // traverse SwiftData (cf. `sortedByKey`) : parcourir `orderedTasks` une fois pour l'aperçu
+        // et une fois pour le compte, c'était deux fois le même prix.
+        var todo: [TaskItem] = []
+        var done: [TaskItem] = []
+        for task in list.orderedTasks where !task.isHeader {
+          if task.isCompleted { done.append(task) } else { todo.append(task) }
+        }
         var preview = Array(todo.prefix(previewLimit))
         // `progressResetsDaily` désactivé (Réglages) : l'anneau cumule tout l'archivé, alors la
         // carte fait de même plutôt que de laisser une liste terminée blanche — l'archivé
         // complète l'aperçu, dans l'ordre de la liste, une fois les tâches à faire épuisées.
         // `previewRow` les rend barrées : rien ne les confond avec ce qui reste à faire.
-        if preview.count < previewLimit, !TaskItem.progressResetsDaily {
-          let done = list.orderedTasks.filter { !$0.isHeader && $0.isCompleted }
+        if preview.count < previewLimit, !progressResetsDaily {
           preview += done.prefix(previewLimit - preview.count)
         }
         return Card(list: list, preview: preview, remainingCount: todo.count)

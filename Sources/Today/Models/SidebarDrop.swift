@@ -203,6 +203,15 @@ final class SidebarDrop {
     self.grabOffsetX = grabOffsetX
   }
 
+  /// La même chose depuis ce que les pages ont sous la main : le point d'empoignade et le cadre de
+  /// REPOS de la ligne tirée (gelé dès l'empoignade par les deux moteurs, donc constant sur tout le
+  /// geste). Les trois pages soustrayaient ces deux valeurs elles-mêmes ; sans cadre, il n'y a rien
+  /// à armer et l'ancien décalage reste — appelé à chaque image, il sera posé à la suivante.
+  func arm(grabbedAt start: CGPoint, restingFrame: CGRect?) {
+    guard let restingFrame else { return }
+    arm(grabOffsetX: start.x - restingFrame.minX)
+  }
+
   /// **Le relâchement du geste** : la liste où ranger, s'il y en a une, et fin du vol.
   ///
   /// Rend la LISTE et pas la ligne visée, parce que c'est la seule chose qu'un appelant en fasse —

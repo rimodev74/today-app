@@ -118,10 +118,10 @@ private struct ListPageView: View {
   // en-tête — TOUT son bloc (en-tête + ses tâches). Figé à l'empoignade (cf. `dragGroup`) : `blocks`
   // ne bouge pas d'un drag, et le recalculer par ligne/frame serait O(n²).
   @State private var draggedGroup: [TaskItem] = []
-  // Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskRow.collapsedForDrag`).
-  // Posée AVANT `draggingID` — c'est lui qui gèle `rowFrames`, et le trou doit se calculer sur la
+  // Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskDragCollapse`). Posée
+  // AVANT `draggingID` — c'est lui qui gèle `rowFrames`, et le trou doit se calculer sur la
   // hauteur réduite.
-  @State private var dragCollapsedID: PersistentIdentifier?
+  @State private var dragCollapse = TaskDragCollapse()
   // Sélection au mouseDOWN, fusionnée dans le geste de réordonnancement (cf. `dragGesture`) : deux
   // gestes séparés se volaient le drag. `pressID` = ligne dont l'appui est en cours (le premier
   // onChanged est le mouseDown) ; `pressWasSelected` retient son état d'avant l'appui pour n'ouvrir
@@ -653,7 +653,7 @@ private struct ListPageView: View {
         onDuplicate: { duplicate(task) },
         onDelete: { delete(task) },
         onCompletionChanged: scheduleArchiveRefresh,
-        collapsedForDrag: dragCollapsedID == task.persistentModelID
+        collapsedForDrag: dragCollapse.isCollapsed(task)
       )
     }
   }
@@ -1020,18 +1020,9 @@ private struct ListPageView: View {
         // Empoignade au-delà du seuil : pas de drag d'une carte/en-tête ouverte en édition.
         if draggingID == nil {
           guard !focus.isEditing(task) else { return }
-          // Repli des sous-tâches à MI-CHEMIN du seuil d'empoignade, et le `return` est le fond de
-          // l'affaire : `rowFrames` se fige avec `draggingID`, donc replier après aurait donné une
-          // ligne d'une hauteur et un trou d'une autre. Entre 3 et 6 pt il passe plusieurs
-          // événements souris — donc au moins une mise en page, où la ligne republie sa hauteur
-          // réduite pendant que les cadres sont encore vivants. Et un simple clic ne parcourt pas
-          // 3 pt : il ne replie rien.
-          if dragCollapsedID == nil, !task.subtasks.isEmpty,
-            abs(value.translation.height) > 3 || abs(value.translation.width) > 3
-          {
-            dragCollapsedID = task.persistentModelID
-            return
-          }
+          // Repli des sous-tâches à MI-CHEMIN du seuil d'empoignade — `rowFrames` se fige avec
+          // `draggingID`, cf. `TaskDragCollapse` pour ce que ce demi-pas garantit.
+          guard !dragCollapse.collapseIfNeeded(task, translation: value.translation) else { return }
           guard abs(value.translation.height) > 6 || abs(value.translation.width) > 6 else {
             return
           }
@@ -1045,20 +1036,16 @@ private struct ListPageView: View {
           dragStart = value.startLocation
           // Cadre de repos gelé dès l'empoignade (même garde que `rowFrames` ci-dessus) : posé une
           // fois, il vaut pour tout le geste — cf. `SidebarDrop.grabOffsetX`.
-          if let restingMinX = rowFrames[.task(task.persistentModelID)]?.minX {
-            filing.arm(grabOffsetX: dragStart.x - restingMinX)
-          }
+          filing.arm(grabbedAt: dragStart, restingFrame: rowFrames[.task(task.persistentModelID)])
         }
         guard draggingID == task.persistentModelID else { return }
         dragOffset = value.translation
       }
       .onEnded { value in
-        // Le dépliant se rouvre en partant, y compris si le geste s'est arrêté entre le repli
-        // (3 pt) et l'empoignade (6 pt) — sinon un quasi-clic laisserait la ligne fermée.
         defer {
           pressID = nil
-          if dragCollapsedID != nil {
-            withAnimation(disclosureFlow) { dragCollapsedID = nil }
+          if dragCollapse.isCollapsing {
+            withAnimation(disclosureFlow) { dragCollapse.reset() }
           }
         }
         if draggingID == task.persistentModelID {

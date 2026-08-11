@@ -805,7 +805,10 @@ private struct MusicPlaylistsSection: View {
       musicPlaylists = player == .music ? await MusicPlayer.shared.musicPlaylistNames() : []
       await checkSelectedLink()
     }
-    .task(id: selected) { await checkSelectedLink() }
+    // L'identité EXCLUT `name` : c'est `checkSelectedLink` qui l'écrit quand Spotify le lui donne,
+    // et se rejouer là-dessus repartait pour un aller-retour réseau qui ne pouvait rien apprendre
+    // de neuf. Seuls l'entrée choisie et son lien décident qu'il y a quelque chose à revérifier.
+    .task(id: selected.map { [$0.id.uuidString, $0.link] }) { await checkSelectedLink() }
   }
 
   private var columnHeaders: some View {

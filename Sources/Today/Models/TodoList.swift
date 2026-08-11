@@ -46,27 +46,11 @@ final class TodoList {
   var remainingCount: Int { countableTasks.filter { !$0.isCompleted }.count }
 
   /// Progression de la LISTE : ce qui est coché sur ce qu'elle contient AUJOURD'HUI, en-têtes
-  /// exclues.
+  /// exclues. La borne est le JOUR CALENDAIRE (`TaskItem.countsTowardProgress`), jamais
+  /// `CompletedTaskRetention`.
   ///
-  /// Troisième version de cette règle. La PREMIÈRE mesurait le flux VISIBLE — une tâche sortie de
-  /// la page ne comptait ni au numérateur ni au dénominateur, pour qu'une liste au long cours
-  /// n'affiche pas un disque quasi plein devant une page où rien n'est fait. Retirée : vu d'un
-  /// anneau il n'y a AUCUNE page, et la règle retombait sur `CompletedTaskRetention` — son mode
-  /// « 1,5 s » faisait sortir toute tâche cochée une seconde et demie après le clic. Mesuré : 2
-  /// faites sur 4 → 0,0. L'anneau montait puis retombait à zéro tout seul, partout.
-  ///
-  /// La DEUXIÈME (celle d'au-dessus) ignorait donc l'âge d'une coche : une tâche complétée compte
-  /// pour toujours, quel que soit le nombre de jours écoulés. Juste pour une liste qu'on termine
-  /// une fois. Faux pour une liste au long cours jamais terminée (ex. « Bugs & fix ») : chaque
-  /// tâche archivée reste au dénominateur pour toujours, l'anneau plafonne près du plein et une
-  /// tâche neuve ne le fait quasiment plus bouger.
-  ///
-  /// Celle-ci ancre l'exclusion sur le JOUR CALENDAIRE (`TaskItem.countsTowardProgress`) plutôt que
-  /// sur `CompletedTaskRetention` : la borne ne bouge qu'une fois par jour, à minuit — jamais en
-  /// cours de journée comme le mode « 1,5 s », donc jamais le clignotement qui avait fait retirer
-  /// la première version. Une tâche cochée AUJOURD'HUI compte encore ; une tâche archivée avant
-  /// aujourd'hui ne compte plus dans AUCUN des deux termes, comme si elle n'avait jamais existé —
-  /// exactement ce que fait déjà une liste neuve.
+  /// Troisième version de cette règle ; les deux précédentes et ce qui les a tuées sont dans
+  /// `PIEGES.md` § L'anneau de progression. À lire avant d'y toucher une quatrième fois.
   func progress(bounds: DayBounds = DayBounds()) -> Double {
     let countable = countableTasks.filter { $0.countsTowardProgress(bounds) }
     guard !countable.isEmpty else { return 0 }

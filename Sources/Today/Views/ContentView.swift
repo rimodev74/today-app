@@ -610,6 +610,11 @@ struct ContentView: View {
   /// racine il ferait dépendre tout l'arbre de la moindre mutation d'une liste.
   private func reconcileShortcuts() {
     let titles = ((try? modelContext.fetch(FetchDescriptor<TodoList>())) ?? []).map(\.title)
+    // Aucun titre = on ne sait RIEN, pas « plus aucune liste n'existe ». Le `try?` ci-dessus rend
+    // `[]` aussi bien pour un fetch en échec que pour un store pas encore prêt — et sans cette
+    // garde, `reconciled` juge alors mort CHAQUE raccourci de liste et les efface tous, pour de
+    // bon. Élaguer demande de savoir ce qui reste ; ici on ne le sait pas.
+    guard !titles.isEmpty else { return }
 
     let text = TextShortcut.decode(textShortcutData)
     let reconciledText = text.reconciled(against: titles)

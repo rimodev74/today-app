@@ -97,6 +97,8 @@ struct UpcomingPageView: View {
         .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
+    // Colonne des repères de section, comme les bandeaux des autres pages.
+    .padding(.leading, taskContentColumn)
     .padding(.bottom, 14)
   }
 
@@ -190,6 +192,9 @@ private struct DayHeader: View {
       }
       Divider()
     }
+    // Repère de SECTION : la colonne des en-têtes, pas celle des cases. Sur le BLOC, donc le trait
+    // suit — laissé pleine largeur il partait à gauche de toute la page (cf. `AppleItemsSection`).
+    .padding(.leading, taskContentColumn)
     .padding(.top, 18)
     .padding(.bottom, 8)
   }
@@ -218,6 +223,9 @@ private struct MonthBandHeader: View {
       }
       Divider()
     }
+    // Même colonne que `DayHeader` juste en dessous, trait compris : deux repères de section de
+    // rangs différents, mais un seul bord gauche.
+    .padding(.leading, taskContentColumn)
     .padding(.top, 22)
     .padding(.bottom, 8)
   }
@@ -257,6 +265,14 @@ private struct UpcomingTaskRow: View {
     .font(.app(.callout))
     .padding(.vertical, 4)
     .taskRowSelection(isSelected)
+    // `taskRowColumn` et pas `taskContentColumn`, contrairement à `TaskRow` et `ReminderRow` :
+    // celles-là portent un `rowInset` INTÉRIEUR qui pousse leur case, alors que `taskRowSelection`
+    // écarte puis reprend le sien (il n'élargit que le fond). Sans retrait intérieur à ajouter,
+    // c'est donc la colonne des cases qui se pose ici — le fond de sélection retombe alors tout
+    // seul sur `taskContentColumn`, exactement comme sur les autres pages.
+    // Cette page était restée à plat : sa case, celle d'un rappel et l'encadré d'un événement se
+    // trouvaient à trois retraits différents dans la MÊME journée.
+    .padding(.leading, taskRowColumn)
     .contentShape(Rectangle())
   }
 }

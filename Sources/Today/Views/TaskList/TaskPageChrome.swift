@@ -28,15 +28,19 @@ let rowInset: CGFloat = 10
 /// DEUX colonnes, et c'est voulu — le décrochement entre elles est ce qui donne la hiérarchie.
 ///
 /// `taskContentColumn` est celle des repères de SECTION : bandeau de page (icône, anneau), bord
-/// gauche d'un encadré TOUJOURS affiché (notes, carte de liste, pastille Calendrier), pilule d'une
-/// en-tête, libellé d'un dépliant. `taskRowColumn` est celle du CONTENU d'une ligne de tâche : case
-/// à cocher et ＋ de création. Une case se cale donc sur le TEXTE d'une en-tête, pas sur le bord de
-/// sa pilule (`rowInset` les sépare : c'est le retrait intérieur de cette pilule).
+/// gauche d'un encadré TOUJOURS affiché (notes, carte de liste), pilule d'une en-tête, libellé d'un
+/// dépliant, en-tête de jour d'« À venir ». `taskRowColumn` est celle du CONTENU d'une ligne : case
+/// à cocher (tâche comme rappel), ＋ de création, et encadré d'un événement du Calendrier. Une case
+/// se cale donc sur le TEXTE d'une en-tête, pas sur le bord de sa pilule (`rowInset` les sépare :
+/// c'est le retrait intérieur de cette pilule).
+///
+/// La question à se poser n'est PAS « est-ce un encadré ? » mais « est-ce que ça coiffe des lignes,
+/// ou est-ce que c'en est une ? ». Un événement est encadré comme `NotesBox`, et pourtant il va sur
+/// l'autre colonne : c'est le contenu d'une journée, au même titre qu'une tâche.
 ///
 /// RÈGLE — tout élément qui montre un bord gauche se cale sur l'une des DEUX, jamais sur `rowInset`
-/// nu ni sur une valeur recalculée à la main : c'est l'erreur qui a désaligné `EventRow`, le
-/// dépliant « archivées », son `NotesBox`, la grille de cartes d'un projet et la pilule d'en-tête —
-/// cinq endroits, cinq fois le même oubli (cf. `PIEGES.md` § Layout).
+/// nu ni sur une valeur recalculée à la main. Cinq endroits l'ont oublié avant d'être corrigés ; ils
+/// sont listés dans `PIEGES.md` § Layout.
 ///
 /// SEULE exception : la carte d'édition d'une `TaskRow`, qui déborde délibérément à gauche pour
 /// s'ouvrir autour d'un contenu qui, lui, ne bouge pas au clic.
@@ -111,6 +115,48 @@ let disclosureFlow = Animation.snappy(duration: 0.2)
 /// décalages à zéro au relâchement. Une seule valeur pour les deux, et pour toutes les pages —
 /// deux courbes différentes se verraient au passage d'un onglet à l'autre.
 let taskDrop = Animation.snappy(duration: 0.22)
+
+/// Le repli des sous-tâches le temps d'un glissement (cf. `TaskRow.collapsedForDrag`).
+///
+/// Les TROIS moteurs de glissement de l'app en ont besoin — `ListPageView` a le sien, les deux
+/// pages intelligentes partagent `TaskPageReorder` — et chacun en portait sa copie : le même
+/// `@State`, la même séquence de garde, le même reset au relâchement, écrits trois fois. Ils
+/// avaient déjà divergé sur le seuil, que ce type nomme désormais une seule fois.
+struct TaskDragCollapse {
+  /// Plus bas que le seuil d'EMPOIGNADE de chaque page, et c'est tout l'intérêt. Les cadres se
+  /// gèlent à l'empoignade : replier après aurait donné une ligne d'une hauteur et un trou d'une
+  /// autre. Entre ce seuil et celui de la page il passe au moins un événement souris, donc au moins
+  /// une mise en page — la ligne y republie sa hauteur réduite pendant que les cadres sont encore
+  /// vivants. Et un simple clic ne parcourt pas 3 pt : il ne replie rien.
+  static let threshold: CGFloat = 3
+
+  private(set) var taskID: PersistentIdentifier?
+
+  func isCollapsed(_ task: TaskItem) -> Bool { taskID == task.persistentModelID }
+
+  /// À appeler à CHAQUE image du glissement, avant d'armer le moteur de la page.
+  ///
+  /// Rend `true` quand elle vient de replier : l'appelant doit alors RENONCER à cette image sans
+  /// armer quoi que ce soit — c'est ce `return` qui laisse la mise en page se refaire avant le gel.
+  /// Une ligne sans sous-tâche, ou déjà repliée, rend `false` : il n'y a rien à attendre.
+  mutating func collapseIfNeeded(_ task: TaskItem, translation: CGSize) -> Bool {
+    guard taskID == nil, !task.subtasks.isEmpty,
+      abs(translation.width) > Self.threshold || abs(translation.height) > Self.threshold
+    else { return false }
+    taskID = task.persistentModelID
+    return true
+  }
+
+  /// Au relâchement, et sans condition : le dépliant se rouvre en partant, y compris quand le geste
+  /// s'est arrêté entre le repli et l'empoignade — sinon un quasi-clic laisserait la ligne fermée.
+  /// À envelopper dans `withAnimation(disclosureFlow)` PAR L'APPELANT : la réécriture d'un `@State`
+  /// de type valeur n'a lieu qu'au retour de cette méthode, donc hors d'un `withAnimation` posé ici.
+  mutating func reset() {
+    taskID = nil
+  }
+
+  var isCollapsing: Bool { taskID != nil }
+}
 
 /// Sélection au mouseDOWN + édition au clic sur une ligne DÉJÀ sélectionnée, en UN SEUL geste —
 /// pour les pages sans réordonnancement (« Tâches », « Aujourd'hui »).

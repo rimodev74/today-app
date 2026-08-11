@@ -215,4 +215,16 @@ final class TextShortcutTests: XCTestCase {
     ]
     XCTAssertEqual(keys.reconciled(against: []), [keys[1]])
   }
+
+  /// Le REVERS du test ci-dessus, et la raison d'être de la garde de `ContentView` : sans aucun
+  /// titre, `reconciled` juge mort CHAQUE raccourci de liste et les efface tous. C'est le
+  /// comportement voulu quand on SAIT qu'il ne reste plus de liste ; c'en est un effacement de
+  /// réglages quand la liste est vide parce que le fetch a échoué. L'appelant doit donc garder.
+  func testEmptyTitlesWipeEveryListShortcutWhichIsWhyTheCallerMustGuard() {
+    let texts = [
+      TextShortcut(trigger: "crs", expansion: "#Courses"),
+      TextShortcut(trigger: "bug", expansion: "#Bugs"),
+    ]
+    XCTAssertTrue(texts.reconciled(against: []).isEmpty)
+  }
 }

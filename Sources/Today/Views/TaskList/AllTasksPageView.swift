@@ -40,8 +40,8 @@ struct AllTasksPageView: View {
   /// Le glissement en cours. Il est borné à la section de la tâche tirée — chaque dépliant est sa
   /// propre zone, avec ses butées (cf. `rowsView`, qui dit pourquoi la traversée a été retirée).
   @State private var reorder = TaskPageReorder()
-  /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskRow.collapsedForDrag`).
-  @State private var dragCollapsedID: PersistentIdentifier?
+  /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskDragCollapse`).
+  @State private var dragCollapse = TaskDragCollapse()
   /// Sections dont le repli DIFFÈRE de leur défaut (cf. `expansion(of:)`) — stocker l'écart plutôt
   /// que l'état permet à chaque section de garder son propre défaut sans initialisation.
   /// ponytail: état de session, non persisté. Le persister demanderait une clé stable par projet ;
@@ -61,13 +61,8 @@ struct AllTasksPageView: View {
     // refiltrait et retriait toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, projects: allProjects, lists: allLists)
     let offsets = reorder.offsets()
-    // `GeometryReader` + largeur EXPLICITE, pas `maxWidth: .infinity` : un `ScrollView` ne borne
-    // pas la largeur de son contenu, et un `VStack` ne propose pas la sienne à ses enfants — un
-    // `TextField` focalisé (le titre en édition) délègue alors son rendu au field editor d'AppKit,
-    // de largeur idéale nulle, et le titre disparaît purement et simplement. Même correctif que
-    // `ListPageView` (cf. son en-tête de fichier), qui manquait ici. Les `.frame(maxWidth: .infinity)`
-    // plus bas (sections, lignes) restent tels quels : une fois la racine bornée à une largeur
-    // CONCRÈTE, ils la relaient sans avoir besoin de la recalculer eux-mêmes.
+    // Largeur EXPLICITE et pas `maxWidth: .infinity`, sans quoi le titre d'une tâche en édition
+    // disparaît. Le pourquoi est dans `PIEGES.md` § Layout, avec la mesure.
     return GeometryReader { geo in
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
@@ -363,7 +358,7 @@ struct AllTasksPageView: View {
       onDuplicate: { duplicate(task) },
       onDelete: { delete(task) },
       onCompletionChanged: {},
-      collapsedForDrag: dragCollapsedID == task.persistentModelID
+      collapsedForDrag: dragCollapse.isCollapsed(task)
     )
     .rowPressGesture(
       isSelected: focus.isSelected(task),
@@ -371,17 +366,10 @@ struct AllTasksPageView: View {
       onSelect: { select(task) },
       onEdit: { beginEditing(task) },
       onDrag: { translation, start in
-        // Replier AVANT d'armer, et renoncer à CETTE image du geste : les cadres se gèlent dès le
-        // premier `track`. Cf. `TaskRow.collapsedForDrag`.
-        if !reorder.isDragging, dragCollapsedID == nil, !task.subtasks.isEmpty {
-          dragCollapsedID = task.persistentModelID
-          return
-        }
+        // Replier AVANT d'armer, et renoncer à cette image : cf. `TaskDragCollapse`.
+        guard !dragCollapse.collapseIfNeeded(task, translation: translation) else { return }
         reorder.track(task, by: translation, in: rows)
-        // Cadre de repos gelé dès l'empoignade : toujours la même valeur pendant tout le geste.
-        if let restingMinX = reorder.frames[.task(task.persistentModelID)]?.minX {
-          filing.arm(grabOffsetX: start.x - restingMinX)
-        }
+        filing.arm(grabbedAt: start, restingFrame: reorder.frames[.task(task.persistentModelID)])
       },
       onDrop: { dropDraggedTask() }
     )
@@ -395,10 +383,10 @@ struct AllTasksPageView: View {
   /// Relâchement. La mécanique est partagée (`dropTaskDrag`) ; ce qui appartient à cette page,
   /// c'est la règle de rattachement — une tâche lâchée dans un dépliant rejoint sa liste.
   private func dropDraggedTask() {
-    // Le dépliant se rouvre en partant, quoi qu'il arrive ensuite — y compris quand le geste s'est
-    // arrêté sur le repli, avant d'avoir armé le moindre glissement (d'où la place AVANT le garde).
-    if dragCollapsedID != nil {
-      withAnimation(disclosureFlow) { dragCollapsedID = nil }
+    // AVANT le garde ci-dessous : le dépliant se rouvre même quand le geste s'est arrêté sur le
+    // repli, sans avoir armé le moindre glissement.
+    if dragCollapse.isCollapsing {
+      withAnimation(disclosureFlow) { dragCollapse.reset() }
     }
     guard let dragged = reorder.draggedTask else { return }
     // Reconstruite ici plutôt que passée de rangée en rangée : ça n'arrive qu'une fois par geste,

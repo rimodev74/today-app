@@ -40,6 +40,37 @@ struct KeyShortcut: Codable, Identifiable, Hashable {
   var key: KeyCombo?
 }
 
+/// Ce que les deux sortes de raccourcis ont en commun : viser une destination par un JETON. C'est
+/// tout ce dont `reconciled(against:)` a besoin, et c'est la seule raison d'être de ce protocole —
+/// la règle d'élagage était écrite deux fois, à l'identique au type près.
+protocol ListTokenShortcut {
+  var expansion: String { get set }
+}
+
+extension KeyShortcut: ListTokenShortcut {}
+extension TextShortcut: ListTokenShortcut {}
+
+extension Array where Element: ListTokenShortcut {
+  /// Recolle chaque `expansion` de liste à son titre COURANT (cf. `QuickEntry.reconciledListToken`).
+  /// Appelée à chaque sauvegarde par `ContentView`, pas seulement quand les Réglages sont ouverts —
+  /// sans quoi un raccourci posé sur « #Courses », la liste renommée « Achats » pendant que les
+  /// Réglages sont fermés, vise un nom qui n'existe plus jusqu'à leur prochaine ouverture.
+  ///
+  /// Une ligne dont AUCUN titre courant ne reconnaît le jeton est RETIRÉE — liste supprimée, ou
+  /// renommée au point de perdre tout préfixe commun (cf. `QuickEntry.listTokenIsAlive`) : elle ne
+  /// route plus nulle part, et « crs » ⇥ écrivait alors « #Courses » en toutes lettres dans le titre
+  /// au lieu de se résoudre en destination. L'appelant garantit que `listTitles` n'est pas vide —
+  /// sans titres, tout jeton passe pour mort (cf. `ContentView.reconcileShortcuts`).
+  func reconciled(against listTitles: [String]) -> [Element] {
+    compactMap { shortcut in
+      guard QuickEntry.listTokenIsAlive(shortcut.expansion, against: listTitles) else { return nil }
+      var reconciled = shortcut
+      reconciled.expansion = QuickEntry.reconciledListToken(shortcut.expansion, against: listTitles)
+      return reconciled
+    }
+  }
+}
+
 extension KeyShortcut {
   static let storageKey = "keyShortcuts"
 
@@ -77,25 +108,6 @@ extension Array where Element == KeyShortcut {
       append(KeyShortcut(expansion: token, key: combo))
     }
   }
-
-  /// Recolle chaque `expansion` de liste à son titre COURANT (cf.
-  /// `QuickEntry.reconciledListToken`). Appelée à chaque sauvegarde par `ContentView`, pas
-  /// seulement quand les Réglages sont ouverts — sans quoi une combinaison globale posée sur
-  /// « #Courses », la liste renommée « Achats » pendant que les Réglages sont fermés, continue de
-  /// viser un nom qui n'existe plus jusqu'à leur prochaine ouverture.
-  ///
-  /// Une ligne dont AUCUN titre courant ne reconnaît le jeton est RETIRÉE — liste supprimée, ou
-  /// renommée au point de perdre tout préfixe commun (cf. `QuickEntry.listTokenIsAlive`) : dans les
-  /// deux cas la combinaison ne route plus nulle part, la garder ne ferait que grossir l'onglet
-  /// Raccourcis d'une ligne morte.
-  func reconciled(against listTitles: [String]) -> [KeyShortcut] {
-    compactMap { shortcut in
-      guard QuickEntry.listTokenIsAlive(shortcut.expansion, against: listTitles) else { return nil }
-      var reconciled = shortcut
-      reconciled.expansion = QuickEntry.reconciledListToken(shortcut.expansion, against: listTitles)
-      return reconciled
-    }
-  }
 }
 
 extension Array where Element == TextShortcut {
@@ -113,21 +125,6 @@ extension Array where Element == TextShortcut {
       self[index].trigger = trimmed
     } else {
       append(TextShortcut(trigger: trimmed, expansion: token))
-    }
-  }
-
-  /// Même correction que `[KeyShortcut].reconciled(against:)`, pour l'abréviation tapée dans la
-  /// capsule : sans elle, « crs » ⇥ continue d'écrire « #Courses » — un jeton qu'aucune liste ne
-  /// porte plus — au lieu de « #Achats ». Et même élagage des lignes mortes : sans lui, supprimer
-  /// la liste « Courses » laissait « crs » ⇥ écrire « #Courses » en toutes lettres dans le titre de
-  /// la tâche suivante — la ligne ne route plus nulle part, mais rien ne prévenait que le jeton
-  /// restait tel quel dans le champ au lieu de se résoudre en destination.
-  func reconciled(against listTitles: [String]) -> [TextShortcut] {
-    compactMap { shortcut in
-      guard QuickEntry.listTokenIsAlive(shortcut.expansion, against: listTitles) else { return nil }
-      var reconciled = shortcut
-      reconciled.expansion = QuickEntry.reconciledListToken(shortcut.expansion, against: listTitles)
-      return reconciled
     }
   }
 }

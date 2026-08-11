@@ -229,13 +229,6 @@ struct QuickPalette {
     QuickPalette(rows: project.orderedLists.prefix(limit).map(listRow))
   }
 
-  /// Les commandes se glissent AVANT les tâches et après les endroits : ce sont des actions, elles
-  /// se rangent avec ce qui emmène quelque part, pas avec le contenu.
-  private static func commandInsertion(in rows: [Row]) -> Int {
-    rows.firstIndex { if case .complete = $0.action { return true } else { return false } }
-      ?? rows.count
-  }
-
   // MARK: Les lignes, par nature
 
   private static func smartRow(_ smart: SmartList, target: TaskTarget) -> Row {
