@@ -169,12 +169,9 @@ struct TodayPageView: View {
         .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
-    // Même retrait que les lignes : depuis que la page rend des `TaskRow`, celles-ci portent
-    // `rowInset` à l'intérieur de leur fond. Sans ça l'icône du titre déborde de 10 pt à gauche
-    // de la colonne des cases à cocher (cf. `ListPageView.inboxHeader`, même règle).
-    // ×2 depuis que le fond de sélection d'une `TaskRow` est flush avec une en-tête (cf. TaskRow) :
-    // la case a suivi d'un `rowInset` de plus, cette icône doit la suivre pour rester sur sa colonne.
-    .padding(.leading, rowInset * 2)
+    // Colonne des repères de section (cf. `ListPageView.inboxHeader`, même règle) : les lignes
+    // décrochent d'un `rowInset` de plus, c'est ce qui creuse la hiérarchie.
+    .padding(.leading, taskContentColumn)
     .padding(.bottom, 14)
   }
 
@@ -331,9 +328,8 @@ struct TodayPageView: View {
     // création garde exactement le rythme des tâches — même règle que `ListPageView.draftRow`.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
-    // Même décalage que `TaskRow` (cf. son fond de sélection) : la case garde sa colonne, ce ＋
-    // doit la suivre pour rester sur la même verticale.
-    .padding(.leading, rowInset)
+    // Même décalage que `TaskRow` : ce ＋ tient la place d'une case, il suit donc `taskRowColumn`.
+    .padding(.leading, taskContentColumn)
   }
 
   /// ⌘N : la tâche est créée VIDE et s'ouvre AUSSITÔT en édition — carte complète, avec notes,
@@ -464,13 +460,18 @@ struct EventRow: View {
       Spacer(minLength: 0)
     }
     .font(.app(.callout))
-    .padding(.horizontal, 10)
+    .padding(.horizontal, rowInset)
     .padding(.vertical, 6)
     .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .strokeBorder(tint.opacity(0.4))
     )
+    // Le CADRE (pas seulement le texte) se cale sur `taskContentColumn` : un encadré TOUJOURS
+    // affiché s'aligne par son bord, comme `NotesBox` — sinon c'est lui qui déborde à gauche de
+    // tout le reste (mesuré : la pastille restait flush avec les bords du conteneur, 10 pt à
+    // gauche de la colonne des cases, sur « Tâches » ET « Aujourd'hui »).
+    .padding(.leading, taskContentColumn)
   }
 
   private var timeLabel: String {

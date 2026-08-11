@@ -18,6 +18,10 @@ import SwiftUI
 /// C'était la seule façon d'y avoir édition, suppression, dates et durée sans réécrire la ligne —
 /// une deuxième implémentation aurait dérivé de celle-ci au premier changement.
 struct TaskRow: View {
+  /// Respiration de la carte d'édition, en place du `rowInset` d'une ligne au repos. Nommée parce
+  /// que le retrait gauche s'en déduit, pour que la case ne bouge pas au clic.
+  private static let editInset: CGFloat = 16
+
   @Bindable var task: TaskItem
   let isSelected: Bool
   let isEditing: Bool
@@ -233,15 +237,14 @@ struct TaskRow: View {
     // Au repos, une tâche DÉPLIÉE finit sur une rangée de sous-tâche et non sur son titre : il lui
     // faut un peu plus de fond que les 4 pt d'une ligne simple. Repliée, elle EST une ligne simple.
     .padding(.bottom, isEditing ? 14 : (showsSubtasks ? 8 : 4))
-    .padding(.horizontal, isEditing ? 16 : rowInset)
+    .padding(.horizontal, isEditing ? Self.editInset : rowInset)
     .background { rowBackground }
-    // Repos/sélection : décale tout le bloc (fond ET case) de `rowInset` vers la droite — pas de
-    // retrait en moins. Le double retrait interne reste intact (la case garde son écart avec le
-    // bord du fond) ; c'est le bloc entier qui glisse pour amener le bord gauche du fond sur la
-    // même colonne qu'une en-tête (`gutter + rowInset`, cf. `HeaderRow.pill`), au lieu de `gutter`.
-    // Première tentative fausse : supprimer le retrait gauche interne collait la case au bord du
-    // fond au lieu de la faire suivre.
-    .padding(.leading, isEditing ? 0 : rowInset)
+    // Le bloc ENTIER glisse (fond ET case), le retrait interne reste intact : la case tombe sur
+    // `taskRowColumn`, donc sur le TEXTE d'une en-tête, et le fond un `rowInset` avant, à l'aplomb
+    // de la pilule de cette en-tête. En édition, le retrait interne passe à `editInset` : on retire
+    // d'autant à gauche pour que la case ne BOUGE PAS au clic — la carte s'ouvre autour d'elle, en
+    // débordant seulement de ce qu'elle a gagné en respiration.
+    .padding(.leading, isEditing ? taskRowColumn - Self.editInset : taskContentColumn)
     .contentShape(Rectangle())
     // Survol : révèle le ••• à droite. Clic droit : même menu que le •••, via contentShape ;
     // bascule aussi en édition, via `RightClickObserver` posé par la page (cf. ce type).

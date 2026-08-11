@@ -176,10 +176,11 @@ struct HeaderRow: View {
         )
         .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
     }
-    // Même règle que le cadre de notes : la pilule est TOUJOURS visible, c'est donc son BORD qui
-    // s'aligne sur la colonne (case à cocher, anneau, ＋), pas son titre. Le fond de sélection d'une
-    // tâche, lui, reste 10 pt plus à gauche — il n'apparaît qu'au clic et doit dégager la case.
-    .padding(.leading, rowInset)
+    // Même règle que le cadre de notes : la pilule est TOUJOURS visible, c'est donc son BORD qui se
+    // cale sur `taskContentColumn`, pas son titre (que le retrait intérieur pose ensuite 10 pt plus
+    // loin, comme « Notes »). Un simple `rowInset` la laissait 10 pt à gauche de l'anneau et des
+    // cases — même oubli qu'`EventRow`, le dépliant des archivées et le `NotesBox` avant elle.
+    .padding(.leading, taskContentColumn)
     // Clic droit = le même jeu d'actions que le •••, qui n'apparaît qu'au survol : sans ça,
     // supprimer une en-tête demandait de viser un bouton invisible au repos.
     .contextMenu { menuItems }

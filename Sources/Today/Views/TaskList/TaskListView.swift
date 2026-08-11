@@ -474,9 +474,9 @@ private struct ListPageView: View {
     let archived = archivedTasks
     let plural = archived.count > 1 ? "s" : ""
     if !archived.isEmpty {
-      // `rowInset` sur tout le bloc : même colonne que le fond d'une `TaskRow` (`gutter + rowInset`,
-      // cf. son commentaire), sans quoi le dépliant et son divider partaient du bord de page, `rowInset`
-      // trop à gauche de la case à cocher des tâches vivantes juste au-dessus.
+      // `taskContentColumn` sur tout le bloc : ce dépliant est un repère de SECTION, comme une
+      // en-tête ou le cadre de notes. Son divider et ses `ArchiveRow` n'ont pas de retrait à eux
+      // (cf. `ArchiveRow`) et suivent donc le bloc.
       VStack(alignment: .leading, spacing: 0) {
         Divider().padding(.vertical, 10)
 
@@ -514,7 +514,7 @@ private struct ListPageView: View {
           .transition(.opacity)
         }
       }
-      .padding(.leading, rowInset)
+      .padding(.leading, taskContentColumn)
       .transition(.opacity)
     }
   }
@@ -959,8 +959,8 @@ private struct ListPageView: View {
   /// serait visiblement plus grand que ce qu'on transporte. Une tâche a ses marges dedans, l'inset
   /// vaut donc 0 et l'expression retombe sur le cas simple.
   ///
-  /// Le retrait HORIZONTAL, lui, ne se fait pas ici mais dans `taskReorderPlaceholder` : il vaut
-  /// pour les deux moteurs de glissement, et il valait déjà pour les deux avant qu'on ne le voie.
+  /// Le retrait HORIZONTAL est dans `taskReorderPlaceholder`, partagé par les deux moteurs : tâche
+  /// comme en-tête, la pilule part de la même colonne.
   private func dragPlaceholderRect(_ state: DragState) -> CGRect? {
     guard let first = state.dragged.first,
       let dragFrame = rowFrames[.task(first.persistentModelID)],
@@ -1176,9 +1176,8 @@ private struct ListPageView: View {
     // création garde exactement le rythme des tâches, sans détachement visuel.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
-    // Même décalage que `TaskRow` (cf. son fond de sélection) : la case garde sa colonne, ce ＋
-    // doit la suivre pour rester sur la même verticale.
-    .padding(.leading, rowInset)
+    // Même décalage que `TaskRow` : ce ＋ tient la place d'une case, il suit donc `taskRowColumn`.
+    .padding(.leading, taskContentColumn)
     .contentShape(Rectangle())
     .onTapGesture { focusedDraft = block.id }
   }
@@ -1278,14 +1277,9 @@ private struct ListPageView: View {
         .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
-    // Seul en-tête de ListPageView à reprendre `rowInset` : son icône fait la largeur d'une case à
-    // cocher, elle se lit donc comme la tête de cette colonne. Même règle dans « Aujourd'hui »,
-    // qui rend les mêmes `TaskRow`. L'en-tête d'une liste nommée, lui, porte un anneau plus large
-    // et l'encadré de notes : c'est le bord de section qui lui sert d'aplomb.
-    // ×2 depuis que le fond de sélection d'une `TaskRow` est flush avec une en-tête (cf. TaskRow) :
-    // la case a suivi d'un `rowInset` de plus, cette icône doit la suivre pour rester sur sa
-    // colonne.
-    .padding(.leading, rowInset * 2)
+    // Colonne des repères de section, comme les bandeaux d'« Aujourd'hui » et « Archives » — les
+    // lignes, elles, décrochent d'un `rowInset` de plus (cf. `taskRowColumn`).
+    .padding(.leading, taskContentColumn)
   }
 
   private var header: some View {
@@ -1308,13 +1302,10 @@ private struct ListPageView: View {
         listMenu.opacity(headerHovering ? 1 : 0)
         Spacer(minLength: 0)
       }
-      // L'anneau est du CONTENU, pas un fond : il se cale donc sur la colonne des cases à cocher
-      // (cf. `gutter`), comme l'icône des bandeaux d'« Aujourd'hui » et « Tâches ». Le `notesBox`,
-      // lui, ne prend rien : c'est un fond, il part du bord de section comme les pilules de ligne —
-      // et son propre retrait intérieur de 10 pt remet son texte sur la même colonne que l'anneau.
-      // ×2 : la case a suivi le fond de sélection d'un `rowInset` de plus (cf. TaskRow), l'anneau la
-      // suit. `notesBox` n'a rien à changer — son propre retrait de 10 pt l'y amenait déjà.
-      .padding(.leading, rowInset * 2)
+      // L'anneau est du contenu : il se cale sur `taskContentColumn`, comme l'icône des bandeaux
+      // d'« Aujourd'hui » et « Tâches ». `notesBox` se cale sur la MÊME colonne par son propre bord
+      // (cf. son commentaire) — les deux tombent d'aplomb sans rien partager de plus.
+      .padding(.leading, taskContentColumn)
 
       notesBox
     }
@@ -1644,6 +1635,10 @@ private struct ProjectPageView: View {
           }
           createCard
         }
+        // Même colonne que `listsHeader` et l'anneau du titre juste au-dessus (cf.
+        // `taskContentColumn`) : sans elle, les cartes partaient du bord de section, 20 pt trop à
+        // gauche de tout le reste de la page (mesuré le 10 août 2026).
+        .padding(.leading, taskContentColumn)
       }
       // `gutter`, comme toutes les autres pages : à `gutter - 8`, l'en-tête et son encadré de notes
       // tombaient 8 pt à gauche de ceux d'une liste — un décalage que rien ne justifiait, visible
@@ -1687,12 +1682,9 @@ private struct ProjectPageView: View {
           .textFieldStyle(.plain)
           .font(.app(.title).bold())
       }
-      // L'anneau est du CONTENU : il se cale sur la colonne, comme sur la page d'une liste (cf.
-      // `ListPageView.header`). Le `NotesBox`, lui, est un FOND : il part du bord de section et
-      // son retrait intérieur de 10 pt ramène « Notes » sur la même colonne que l'anneau. Sans ce
-      // retrait ici, l'anneau tombait 10 pt à gauche de l'encadré.
-      // ×2 : même ajustement que `ListPageView.header`, pour que les deux pages restent une seule.
-      .padding(.leading, rowInset * 2)
+      // L'anneau se cale sur `taskContentColumn`, comme sur la page d'une liste (cf.
+      // `ListPageView.header`) — même colonne que le bord du `NotesBox` juste en dessous.
+      .padding(.leading, taskContentColumn)
 
       // Même encadré que la page de liste (cf. `NotesBox`).
       NotesBox(notes: $project.notes, font: .app(), textColor: .labelColor, focused: $notesFocused)
@@ -1702,7 +1694,9 @@ private struct ProjectPageView: View {
     }
   }
 
-  /// La ligne qui coiffe la grille : ce qu'on regarde à gauche, ce que ça pèse à droite.
+  /// La ligne qui coiffe la grille : ce qu'on regarde à gauche, ce que ça pèse à droite. Même
+  /// colonne que l'anneau du titre juste au-dessus (cf. `taskContentColumn`) — un simple `rowInset`
+  /// la laissait 10 pt trop à gauche (mesuré le 10 août 2026).
   private func listsHeader(_ board: ProjectBoard) -> some View {
     HStack(alignment: .firstTextBaseline) {
       Text("Listes").font(.app(.headline))
@@ -1711,7 +1705,7 @@ private struct ProjectPageView: View {
         .font(.app(.callout))
         .foregroundStyle(.secondary)
     }
-    .padding(.leading, rowInset)
+    .padding(.leading, taskContentColumn)
   }
 
   private func remainingLabel(_ board: ProjectBoard) -> String {
@@ -1975,10 +1969,10 @@ private struct NotesBox: View {
     .background(
       Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
     )
-    // APRÈS le fond, donc c'est le CADRE qui se cale sur la colonne (case à cocher, anneau, ＋), pas
-    // le texte qu'il contient — un encart visible s'aligne par son bord, sinon c'est lui qui déborde
-    // à gauche de tout le reste. Son retrait intérieur pose ensuite « Notes » 10 pt plus loin.
-    .padding(.leading, rowInset)
+    // APRÈS le fond, donc c'est le CADRE qui se cale sur `taskContentColumn` (anneau, pilule
+    // d'en-tête), pas le texte qu'il contient — un encart visible s'aligne par son bord. Son retrait
+    // intérieur pose ensuite « Notes » sur `taskRowColumn`, là où tombent les cases.
+    .padding(.leading, taskContentColumn)
     .padding(.top, 4)
     .padding(.bottom, 10)
   }

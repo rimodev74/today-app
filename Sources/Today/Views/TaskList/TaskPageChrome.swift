@@ -25,12 +25,29 @@ let gutter: CGFloat = 65
 /// 10 pt à gauche de toutes les tâches qu'il coiffe.
 let rowInset: CGFloat = 10
 
+/// DEUX colonnes, et c'est voulu — le décrochement entre elles est ce qui donne la hiérarchie.
+///
+/// `taskContentColumn` est celle des repères de SECTION : bandeau de page (icône, anneau), bord
+/// gauche d'un encadré TOUJOURS affiché (notes, carte de liste, pastille Calendrier), pilule d'une
+/// en-tête, libellé d'un dépliant. `taskRowColumn` est celle du CONTENU d'une ligne de tâche : case
+/// à cocher et ＋ de création. Une case se cale donc sur le TEXTE d'une en-tête, pas sur le bord de
+/// sa pilule (`rowInset` les sépare : c'est le retrait intérieur de cette pilule).
+///
+/// RÈGLE — tout élément qui montre un bord gauche se cale sur l'une des DEUX, jamais sur `rowInset`
+/// nu ni sur une valeur recalculée à la main : c'est l'erreur qui a désaligné `EventRow`, le
+/// dépliant « archivées », son `NotesBox`, la grille de cartes d'un projet et la pilule d'en-tête —
+/// cinq endroits, cinq fois le même oubli (cf. `PIEGES.md` § Layout).
+///
+/// SEULE exception : la carte d'édition d'une `TaskRow`, qui déborde délibérément à gauche pour
+/// s'ouvrir autour d'un contenu qui, lui, ne bouge pas au clic.
+let taskContentColumn: CGFloat = rowInset * 2
+let taskRowColumn: CGFloat = taskContentColumn + rowInset
+
 /// Icône d'un bandeau de page (« Tâches », « Aujourd'hui », « Archives »). Dessinée à la taille du
 /// titre, mais LARGEUR de layout figée à celle d'une `TaskCheckbox` et alignée à gauche : le glyphe
 /// débordera de quelques points dans l'espace qui suit (SwiftUI ne rogne pas), ce qui est exactement
-/// l'effet voulu — la colonne reste juste des deux côtés, bord gauche sur celui des cases à cocher et
-/// titre de page sur celui des titres de tâche, quel que soit le symbole (une étoile est plus large
-/// qu'une coche). Sans ce cadrage, chaque page décale son titre d'une valeur différente.
+/// l'effet voulu — la colonne reste juste des deux côtés quel que soit le symbole (une étoile est
+/// plus large qu'une coche). Sans ce cadrage, chaque page décale son titre d'une valeur différente.
 struct PageHeaderIcon: View {
   let systemImage: String
   let tint: Color
@@ -329,17 +346,17 @@ extension View {
   /// glissement et son propre calcul du trou, mais il n'y a aucune raison qu'il le DESSINE
   /// autrement. Le trou avait déjà divergé une fois par ce chemin-là.
   ///
-  /// **Le trou se dessine à la PILULE, pas au CADRE de la rangée.** Une rangée — tâche comme
-  /// en-tête — se termine par `.padding(.leading, rowInset)` posé HORS de son fond : le cadre
-  /// mesuré déborde donc de 10 pt à gauche de ce qu'on voit d'elle, et le trou dessiné dessus
-  /// sortait seul de la colonne. À droite il n'y a rien à retirer : la pilule y va jusqu'au bord.
+  /// **Le trou se dessine à la PILULE, pas au CADRE de la rangée.** Une rangée porte son retrait
+  /// gauche HORS de son fond : le cadre mesuré déborde donc à gauche de ce qu'on voit d'elle. Tâche
+  /// comme en-tête, cette pilule commence sur `taskContentColumn`. À droite il n'y a rien à retirer :
+  /// elle va jusqu'au bord.
   func taskReorderPlaceholder(_ hole: CGRect?) -> some View {
     background(alignment: .topLeading) {
       if let hole {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
           .fill(Color.primary.opacity(0.06))
-          .frame(width: max(hole.width - rowInset, 0), height: hole.height)
-          .offset(x: hole.minX + rowInset, y: hole.minY)
+          .frame(width: max(hole.width - taskContentColumn, 0), height: hole.height)
+          .offset(x: hole.minX + taskContentColumn, y: hole.minY)
           .allowsHitTesting(false)
       }
     }

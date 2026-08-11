@@ -144,9 +144,6 @@ struct AllTasksPageView: View {
           calendarExpansion.wrappedValue.toggle()
         } label: {
           HStack(spacing: 6) {
-            Image(systemName: "chevron.right")
-              .font(.app(10, weight: .semibold))
-              .rotationEffect(.degrees(calendarExpanded ? 90 : 0))
             Image(systemName: "calendar")
               .font(.app(11))
               .foregroundStyle(Color.secondary)
@@ -154,14 +151,20 @@ struct AllTasksPageView: View {
             Text("\(events.count)")
               .foregroundStyle(.tertiary)
             Spacer(minLength: 0)
+            // À droite, comme tous les autres dépliants de l'app (cf. `sectionView` juste
+            // au-dessus, `archiveSection`) — jamais à gauche.
+            Image(systemName: "chevron.right")
+              .font(.app(10, weight: .semibold))
+              .rotationEffect(.degrees(calendarExpanded ? 90 : 0))
           }
           .font(.app(.subheadline).weight(.semibold))
           .foregroundStyle(.secondary)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Même retrait que les sections de tâches juste au-dessus (cf. `sectionView`).
-        .padding(.horizontal, rowInset * 2)
+        // Même colonne que les sections de tâches juste au-dessus (cf. `sectionView`,
+        // `taskContentColumn`).
+        .padding(.horizontal, taskContentColumn)
 
         if calendarExpanded {
           VStack(alignment: .leading, spacing: 6) {
@@ -191,11 +194,8 @@ struct AllTasksPageView: View {
         .font(.app(.title).bold())
       Spacer(minLength: 0)
     }
-    // Même retrait que les lignes, qui portent `rowInset` À L'INTÉRIEUR de leur fond (même règle
-    // que `TodayPageView.header`).
-    // ×2 depuis que le fond de sélection d'une `TaskRow` est flush avec une en-tête (cf. TaskRow) :
-    // la case a suivi d'un `rowInset` de plus, cette icône doit la suivre pour rester sur sa colonne.
-    .padding(.leading, rowInset * 2)
+    // Colonne des repères de section (même règle que `TodayPageView.header`).
+    .padding(.leading, taskContentColumn)
     .padding(.bottom, 14)
   }
 
@@ -244,11 +244,9 @@ struct AllTasksPageView: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Même retrait que les lignes, qui portent `rowInset` DEUX fois : une fois autour de leur
-        // fond, une fois à l'intérieur (cf. `TaskRow`). Un seul `rowInset` laissait l'icône du
-        // bandeau 10 pt à gauche des cases — le désalignement visible d'un coup d'œil, et la même
-        // correction que le titre de page (cf. `header`).
-        .padding(.horizontal, rowInset * 2)
+        // Colonne des repères de section, comme le titre de page (cf. `header`) : les lignes qu'elle
+        // coiffe décrochent d'un `rowInset` de plus (cf. `taskRowColumn`).
+        .padding(.horizontal, taskContentColumn)
 
         if open {
           rowsView(of: section, offsets: offsets)
@@ -486,9 +484,8 @@ struct AllTasksPageView: View {
     // Mêmes paddings qu'une `TaskRow` au repos : la rangée de création garde le rythme des tâches.
     .padding(.vertical, 6)
     .padding(.horizontal, rowInset)
-    // Même décalage que `TaskRow` (cf. son fond de sélection) : la case garde sa colonne, ce ＋
-    // doit la suivre pour rester sur la même verticale.
-    .padding(.leading, rowInset)
+    // Même décalage que `TaskRow` : ce ＋ tient la place d'une case, il suit donc `taskRowColumn`.
+    .padding(.leading, taskContentColumn)
     // Pendant un glisser, le champ s'efface — il encombrerait le déplacement, et une page de liste
     // le fait depuis toujours (cf. `ListPageView`, même modificateur). Deux pages qui se comportent
     // différemment pendant le MÊME geste, c'est exactement ce que le socle commun sert à éviter.
