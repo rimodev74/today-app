@@ -472,10 +472,11 @@ Une forme (`RoundedRectangle`, `Circle`, `Capsule`) est flexible dans les deux d
 FRÈRE dans un `ZStack`, elle fait gonfler sa rangée jusqu'à avaler la page. Une décoration se pose
 en `.background` / `.overlay` de ce qu'elle habille — elle en reçoit alors la taille.
 
-### Sur « Tâches », chaque section est sa PROPRE zone de glissement
+### Sur une page à sections, chaque section est sa PROPRE zone de glissement
 
-La séquence donnée au moteur est `section.tasks`, jamais les lignes de la page (cf.
-`AllTasksPageView.rowsView`).
+**Périmé depuis le 12 août 2026 — « Tâches » n'a plus de sections** (cf. « Ce que « Tâches » a cessé
+de montrer », plus bas). La règle vaut toujours pour la page à sections que quelqu'un rajouterait :
+la séquence donnée au moteur est celle d'UNE section, jamais les lignes de toute la page.
 
 Le glisser traversant a existé, avec toute une machinerie pour deviner la section d'accueil
 (`SectionBandKey`, `AllTasksPage.emptySection(at:bands:)`, `measureSectionBand` — **tous
@@ -566,8 +567,9 @@ autour de l'écriture de l'état (`isCollapsed.toggle()`, `toggled.insert/remove
 `undatedExpanded = …`), jamais un `.animation(value:)` posé sur la vue. Un `DisclosureGroup` change
 son binding depuis son propre bouton AppKit, hors de notre code : un `.animation(value:)` à côté
 n'attrape pas cette transaction-là — testé, résultat instantané et saccadé. Passer par un `Binding`
-maison dont le `set` fait le `withAnimation` (cf. `TodayPageView.undatedExpansion`,
-`AllTasksPageView.expansion(of:)`).
+maison dont le `set` fait le `withAnimation`. (Plus aucun `DisclosureGroup` dans l'app depuis le
+12 août 2026 : tous les dépliants sont faits main, et leur bouton appelle `withAnimation`
+directement. La règle vaut pour celui qui en réintroduirait un.)
 
 ### Le contenu fond en s'ouvrant, et toujours EXPLICITEMENT
 
@@ -580,14 +582,15 @@ l'éteindrait sans qu'on le voie). Deux cas, selon si le contenu est démonté o
   change donc rien → `.opacity(isOpen ? 1 : 0)` sur le contenu, qui suit la même transaction que le
   `withAnimation` du binding puisqu'il lit le même booléen.
 
-### Les sections de « Tâches » ne sont plus des `DisclosureGroup`
+### Un dépliant qui contient une ligne GLISSABLE n'est pas un `DisclosureGroup`
 
-(6 août 2026.) Un `DisclosureGroup` rogne son contenu à son propre cadre, et la ligne qu'on tire en
-sortait — elle se faisait couper net en pleine course. Remplacés par un dépliant fait main (bouton +
-`if open { rows }`), qui ne rogne rien. Bénéfice au passage : le contenu est vraiment RETIRÉ quand
-la section est repliée, au lieu d'être seulement replié en hauteur — une section fermée ne coûte
-donc plus rien à rendre. Le binding maison (`AllTasksPageView.expansion(of:)`) reste, lui : c'est ce
-qui met la mutation dans la transaction animée, quel que soit le dépliant.
+(6 août 2026, sur les sections de « Tâches » — parties depuis, la leçon reste.) Un
+`DisclosureGroup` rogne son contenu à son propre cadre, et la ligne qu'on tire en sortait : elle se
+faisait couper net en pleine course. `.zIndex` n'y peut rien — il ordonne des voisines, il ne fait
+pas sortir d'un cadre qui rogne. Remplacés par un dépliant fait main (bouton + `if open { rows }`),
+qui ne rogne rien. Bénéfice au passage : le contenu est vraiment RETIRÉ quand la section est
+repliée, au lieu d'être seulement replié en hauteur — une section fermée ne coûte donc plus rien à
+rendre. Le motif est toujours en service dans `ListPageView.archiveSection`.
 
 ### L'état du dépliant n'est JAMAIS un `@AppStorage`
 
@@ -597,7 +600,7 @@ mécanisme d'observation que SwiftUI sait capturer dans une transaction animée.
 « Tâches sans date » (Aujourd'hui), invisible tant que personne ne comparait à un dépliant voisin.
 Un `@State` ordinaire, avec la persistance écrite à la main À CÔTÉ de la mutation animée, donne le
 même résultat SANS ce piège. Deux formes en service : un `Binding` maison dont le `set` fait le
-`withAnimation` (`AllTasksPageView.calendarExpansion`, `expansion(of:)`), et — quand l'état doit
+`withAnimation` (`TodayPageView.undatedExpansion`), et — quand l'état doit
 survivre au relancement — un `@State` qui pilote le rendu doublé d'un enregistrement écrit juste
 après lui (`TaskRow` + `SubtaskExpansion`, pour le repli des sous-tâches).
 
@@ -771,6 +774,29 @@ curseur.
 ### Le glisser d'une section à l'autre sur « Tâches », et « la section repliée s'ouvre au survol »
 
 Écrit, mesuré, retiré le 6 août 2026. Détail et les deux défauts : § Layout ci-dessus.
+
+### Ce que « Tâches » a cessé de montrer
+
+(12 août 2026.) L'onglet a porté l'inventaire complet : le non-classé à nu, puis « Aujourd'hui »,
+puis un dépliant par projet et par liste hors projet, plus les événements du Calendrier du jour. Il
+avait sa règle d'or — « une tâche n'apparaît QU'UNE fois » — et toute la mécanique qui allait avec :
+`AllTasksPage.Kind`/`Section`/`applyDrop`, un dépliant fait main par section, un repli par section
+(`toggled`), le retrait des tâches du jour de partout ailleurs.
+
+Une **barre de tags** a été tentée en remplacement des dépliants (Tout / À classer / Aujourd'hui /
+un tag par projet, avec défilement horizontal — pas de « … », qui aurait été un popover). Écrite,
+regardée dans les deux thèmes, jetée le même jour : elle rendait la lecture d'un projet plus rapide
+sans répondre au vrai reproche, à savoir que la page redisait ce que la barre latérale disait déjà.
+
+Ce qui reste : **la boîte de réception, seule.** Une zone de dépôt — on note ici, on classe après.
+Le raisonnement qui a tranché : chaque section répondait à une question à laquelle sa propre page
+répond déjà (le projet → sa page, la liste → la sienne, le jour → « Aujourd'hui »), et un événement
+du Calendrier n'est rien qu'on puisse classer. Conséquence assumée : la page ressemble de nouveau à
+une page de liste, ce qui avait justement motivé l'inventaire en août. La différence est qu'elle
+l'assume — c'est bien une liste, celle de l'Inbox, et son titre le dit.
+
+Une tâche datée du jour RESTE désormais dans « Tâches » : elle n'en était retirée que parce que la
+section « Aujourd'hui » l'aurait montrée une seconde fois.
 
 ### Les trois faux-semblants retirés le 2 août 2026
 

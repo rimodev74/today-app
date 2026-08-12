@@ -178,7 +178,7 @@ Une demande qui exige l'un de ces points ne s'implémente pas en l'état :
 - présenter un popover depuis un item de menu ;
 - poser un `.animation(value:)` sur une rangée dont la page pilote déjà l'état ;
 - appeler un service système en synchrone depuis une vue ;
-- rétablir le glisser entre sections de « Tâches ».
+- rétablir l'inventaire par sections sur « Tâches » (et avec lui le glisser entre sections).
 
 Conduite à tenir : **dire lequel de ces points est en cause, proposer l'alternative qui le respecte —
 et si elle n'existe pas, proposer d'ABANDONNER la fonctionnalité** plutôt que de la livrer en dette.
@@ -200,6 +200,10 @@ Chiffres et détail : `PIEGES.md` § Déjà rejeté.
 8. Le **curseur « main »** sur toute la ligne.
 9. Le **glisser entre sections de « Tâches »**, et l'ouverture d'une section au survol. (Le
    déplier-au-survol de la SIDEBAR, lui, est voulu et il reste — rien n'y est calculé au survol.)
+10. **L'inventaire complet sur « Tâches »** — le non-classé, « Aujourd'hui », un dépliant par projet
+    et par liste, les événements du Calendrier. Puis, en remplacement des dépliants, une **barre de
+    tags** (Tout / À classer / Aujourd'hui / les projets) : écrite, regardée, jetée le même jour.
+    Les deux répondaient à la même question qu'ailleurs — la page ne montre plus que l'Inbox.
 
 ## Conventions
 
@@ -243,7 +247,12 @@ Chiffres et détail : `PIEGES.md` § Déjà rejeté.
   références. Après création ou renommage d'un fichier, son index remonte des erreurs fantômes —
   **`swift build` fait foi**.
 - Formatage : `xcrun swift-format -i -r Sources Tests` (valeurs par défaut).
-- Publier : `./Scripts/quick.sh "message"` (bump + DMG signé + release + appcast + push).
+- Publier : `./Scripts/quick.sh "message"` (bump + DMG signé + release + appcast + push). Il fait
+  `git add -A` et le commit LUI-MÊME — ne rien commiter avant, ça ferait deux commits.
+- **`/push`** enveloppe ce script : cliquet d'avertissements complet, tests, revue du diff contre la
+  liste ci-dessus, contrôle visuel si l'UI bouge, **arrêt obligatoire pour faire valider à la main
+  le message de mise à jour**, puis `quick.sh`. Un point rouge et il s'arrête.
+  Sa définition est dans `.claude/commands/push.md`.
 
 ## État réel
 
@@ -269,9 +278,13 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   la capsule depuis une autre app, un pomodoro piloté au clavier (`!pomodoro…` d'`AppCommand`, qui
   n'active délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux, l'y ajouter en
   ferait du bruit.
-- **Le glisser** existe sur une liste, « Aujourd'hui » et « Tâches » (borné à sa section). « À venir »
-  et « Archives » n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus —
-  c'est un tableau de cartes, il n'y a aucune ligne de tâche à y glisser.
+- **Le glisser** existe sur une liste, « Aujourd'hui » et « Tâches ». « À venir » et « Archives »
+  n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus — c'est un tableau
+  de cartes, il n'y a aucune ligne de tâche à y glisser.
+- **« Tâches » ne montre QUE la boîte de réception** — une zone de dépôt, l'endroit où l'on note sans
+  classer. Elle a porté l'inventaire complet (sections par projet, par liste, « Aujourd'hui »,
+  Calendrier) : retiré le 12 août 2026, chaque section répondait à une question à laquelle sa propre
+  page répondait déjà.
 
 ### Dette connue, par ordre de coût
 

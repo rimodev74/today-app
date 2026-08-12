@@ -113,15 +113,15 @@ let taskInsert = Animation.spring(response: 0.32, dampingFraction: 1)
 /// inventées séparément. Même raisonnement que `ProgressRing.ringFlow`.
 let boardFlow = Animation.spring(response: 0.32, dampingFraction: 1)
 /// TOUT dépliant de l'app : chevron qui tourne et contenu qui apparaît/disparaît — repli d'un
-/// projet dans la sidebar, section d'« Aujourd'hui » ou de « Tâches », archives d'une liste,
-/// sous-tâches d'une ligne. Quatre valeurs coexistaient (`.snappy(0.2)`, `.snappy(0.22)`,
+/// projet dans la sidebar, section d'« Aujourd'hui », archives d'une liste, sous-tâches d'une
+/// ligne. Quatre valeurs coexistaient (`.snappy(0.2)`, `.snappy(0.22)`,
 /// `.easeInOut(0.2)`, et le défaut de `DisclosureGroup`) : le même geste ne se sentait pas pareil
 /// d'un endroit à l'autre. Toujours en `withAnimation(disclosureFlow) { … }` autour de l'écriture
 /// de l'état — jamais un `.animation(value:)` posé sur la vue : un `DisclosureGroup` change son
 /// binding depuis son propre bouton AppKit, hors de notre code, et `.animation(value:)` n'attrape
-/// pas cette transaction-là (testé : résultat instantané et saccadé). Pour un `DisclosureGroup`,
-/// passer un `Binding` maison dont le `set` fait le `withAnimation` (cf.
-/// `AllTasksPageView.expansion(of:)`).
+/// pas cette transaction-là (testé : résultat instantané et saccadé). Aucun `DisclosureGroup` ne
+/// subsiste dans l'app ; le jour où l'un revient, il lui faudra un `Binding` maison dont le `set`
+/// fait le `withAnimation` — c'est la seule façon d'attraper une écriture venue de son bouton.
 let disclosureFlow = Animation.snappy(duration: 0.2)
 
 /// Le repos d'un réordonnancement : écartement des voisines pendant le geste, et retour des
