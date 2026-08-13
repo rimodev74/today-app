@@ -204,8 +204,9 @@ struct ContentView: View {
     .onReceive(NotificationCenter.default.publisher(for: AppCommand.selectionNotification)) { _ in
       applyPendingSelection()
     }
-    // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande,
-    // donc elle arrive APRÈS la notification et doit venir chercher la sélection elle-même.
+    // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande, et
+    // c'est le SEUL chemin dans ce cas — `AppCommand.deliver` ne poste alors AUCUNE notification,
+    // qui serait consommée par la `ContentView` sortante, encore abonnée.
     .onAppear(perform: applyPendingSelection)
     // La base a refusé de s'ouvrir au lancement : le dire, ICI, parce que c'est le premier moment
     // où une fenêtre existe (la quarantaine, elle, a lieu pendant la construction du container).

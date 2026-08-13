@@ -118,6 +118,29 @@ date d'une liste et la feuille `SchedulePlannerView` (qui, elle, a encore un cha
 champs d'heure) restent des fenêtres présentées depuis le layout. Le correctif de fond reste le même
 qu'ailleurs : se révéler DANS la fenêtre.
 
+### Une fenêtre fermée reste ABONNÉE, et elle consomme ce qui était pour sa remplaçante
+
+⌘↩ dans la capsule ouvrait l'app sur « Aujourd'hui » au lieu de la liste visée — mais SEULEMENT
+quand la fenêtre principale avait été fermée au bouton rouge. Tracé le 13 août 2026 : la sélection
+partait bien, elle était bien appliquée, et elle l'était **deux fois**.
+
+```
+applyPendingSelection applied -> list(Marketing)   ← la ContentView SORTANTE, fenêtre déjà fermée
+applyPendingSelection pending=nil                  ← la NEUVE, 158 ms plus tard : plus rien
+```
+
+`AppCommand.activate` recrée la fenêtre (`NSWorkspace.openApplication`) quand il n'y en a plus ;
+c'est asynchrone, donc la notification postée juste après ne pouvait viser que l'ancienne — qui
+n'est PAS encore démontée et écrit la sélection dans un `@State` que plus personne ne rendra. La
+neuve démarre alors sur sa valeur par défaut.
+
+D'où `AppCommand.deliver` : la notification n'est postée QUE si `activate` a trouvé une fenêtre
+vivante. Sinon la destination reste posée dans `pendingSelection` et c'est l'`onAppear` de la
+`ContentView` neuve qui la lit — le chemin qui existait déjà, et qui suffit.
+
+**La leçon, plus large que ce bug :** une vue dont la fenêtre est fermée n'est pas une vue morte.
+Tout état « à consommer une fois » traversé par notification doit se demander QUI le consomme.
+
 ### Reconstruire le bundle sous les pieds d'une instance vivante
 
 `Scripts/make-app.sh` REFUSE de tourner si une instance de Today est en cours : reconstruire sous

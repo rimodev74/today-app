@@ -106,19 +106,26 @@ enum AppCommand: String, CaseIterable, Identifiable {
 
   @MainActor func run() {
     if isPomodoro { return runPomodoro() }
-    activate()
+    // `activate` en premier même sans destination (cf. `!show`), et son verdict sert juste après.
+    let live = activate()
     guard let smartList else { return }
-    Self.reveal(.smartList(smartList), activating: false)
+    Self.deliver(.smartList(smartList), toLiveWindow: live)
   }
 
   /// Ramène l'app et l'ouvre SUR un élément précis — ce que `!today` faisait pour une vue, étendu à
   /// n'importe quelle destination de la barre latérale.
+  @MainActor static func reveal(_ selection: SidebarSelection) {
+    deliver(selection, toLiveWindow: show.activate())
+  }
+
+  /// Pose la destination, et ne réveille par notification que la fenêtre DÉJÀ vivante.
   ///
-  /// `activating` distingue les deux appelants : `run` a déjà activé l'app avant de savoir où aller
-  /// (elle active même quand il n'y a nulle part où aller, cf. `!show`), la capsule non.
-  @MainActor static func reveal(_ selection: SidebarSelection, activating: Bool = true) {
+  /// Fenêtre recréée, la notification est pire qu'inutile : la `ContentView` sortante est encore
+  /// abonnée, elle consomme la sélection sans jamais la montrer, et la neuve démarre alors sur sa
+  /// valeur par défaut — « Aujourd'hui ». C'est à elle de la lire, à son apparition.
+  @MainActor private static func deliver(_ selection: SidebarSelection, toLiveWindow live: Bool) {
     pendingSelection = selection
-    if activating { AppCommand.show.run() }
+    guard live else { return }
     NotificationCenter.default.post(name: selectionNotification, object: nil)
   }
 
@@ -157,7 +164,10 @@ enum AppCommand: String, CaseIterable, Identifiable {
 
   /// Ramène Today au premier plan, exactement comme un clic sur son icône du Dock — y compris quand
   /// la fenêtre a été fermée au bouton rouge.
-  @MainActor private func activate() {
+  ///
+  /// Renvoie `false` quand il a fallu RECRÉER la fenêtre : elle n'existe pas encore, rien ne peut
+  /// l'atteindre par notification (cf. `deliver`).
+  @MainActor private func activate() -> Bool {
     NSApp.activate(ignoringOtherApps: true)
     // Les fenêtres hors sujet s'écartent d'elles-mêmes : la capsule de saisie rapide et le
     // `MenuBarExtra` sont sans bordure, donc jamais `canBecomeMain`.
@@ -171,12 +181,13 @@ enum AppCommand: String, CaseIterable, Identifiable {
       // « oui, comportement par défaut » à un AppKit qui n'écoute pas — la fenêtre ne revenait jamais.
       NSWorkspace.shared.openApplication(
         at: Bundle.main.bundleURL, configuration: NSWorkspace.OpenConfiguration())
-      return
+      return false
     }
     if window.isMiniaturized {
       window.deminiaturize(nil)
     } else {
       window.makeKeyAndOrderFront(nil)
     }
+    return true
   }
 }
