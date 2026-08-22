@@ -25,7 +25,7 @@ struct RichTextEditor: NSViewRepresentable {
   var insets: NSSize = .zero
 
   func makeNSView(context: Context) -> NSTextView {
-    let textView = NSTextView()
+    let textView = RichNoteTextView()
     textView.delegate = context.coordinator
     textView.isRichText = true
     textView.isAutomaticLinkDetectionEnabled = true
@@ -47,6 +47,8 @@ struct RichTextEditor: NSViewRepresentable {
     textView.font = font
     textView.textColor = textColor
     textView.typingAttributes = [.font: font, .foregroundColor: textColor]
+    textView.defaultFont = font
+    textView.defaultTextColor = textColor
     textView.textStorage?.setAttributedString(NotesCodec.decode(data))
     context.coordinator.lastPushed = data
     return textView
@@ -199,6 +201,52 @@ struct RichTextEditor: NSViewRepresentable {
       textView.typingAttributes = listAttrs
       return true
     }
+  }
+}
+
+/// Sous-classe qui reset les attributs de style quand du texte est collé — le texte garde son
+/// contenu mais prend la police/couleur par défaut de la note, pas celles de sa source. Les images
+/// collées sont ignorées (on ne colle que le texte brut).
+final class RichNoteTextView: NSTextView {
+  var defaultFont: NSFont?
+  var defaultTextColor: NSColor?
+
+  override func paste(_ sender: Any?) {
+    let pasteboard = NSPasteboard.general
+    let attrs: [NSAttributedString.Key: Any] = [
+      .font: defaultFont ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
+      .foregroundColor: defaultTextColor ?? NSColor.labelColor,
+    ]
+    let sel = selectedRange()
+
+    // Préférer le texte brut (string) plutôt que RTF pour éviter les images et styles complexes
+    if let string = pasteboard.string(forType: .string) {
+      guard shouldChangeText(in: sel, replacementString: string) else { return }
+      textStorage?.replaceCharacters(
+        in: sel, with: NSAttributedString(string: string, attributes: attrs))
+      didChangeText()
+      // Longueur UTF-16, pas `String.count` : un emoji compte pour deux et décalerait le curseur.
+      setSelectedRange(NSRange(location: sel.location + (string as NSString).length, length: 0))
+      return
+    }
+
+    // Sinon, essayer RTF mais filtrer les images et réappliquer les attributs
+    if let rtfData = pasteboard.data(forType: .rtf),
+      let attributed = NSAttributedString(rtf: rtfData, documentAttributes: nil)
+    {
+      // `setAttributes` REMPLACE le dictionnaire entier : la mise en forme de la source disparaît,
+      // et les attachements (images) avec elle — vérifié, pas besoin de les retirer à part.
+      let plain = NSMutableAttributedString(attributedString: attributed)
+      plain.setAttributes(attrs, range: NSRange(location: 0, length: plain.length))
+      guard shouldChangeText(in: sel, replacementString: plain.string) else { return }
+      textStorage?.replaceCharacters(in: sel, with: plain)
+      didChangeText()
+      setSelectedRange(NSRange(location: sel.location + plain.length, length: 0))
+      return
+    }
+
+    // Fallback : comportement natif
+    super.paste(sender)
   }
 }
 
