@@ -453,6 +453,8 @@ private struct PendingTask: Identifiable {
   var title: String
   var subtasks: [String]
   var when: Date?
+  /// Heure planifiée, en minutes depuis minuit (cf. `TaskItem.whenMinutes`).
+  var minutes: Int?
   var targetID: PersistentIdentifier?
 }
 
@@ -469,6 +471,7 @@ private final class QuickEntryDraftStore {
     var title = ""
     var subtasks: [String] = []
     var when: Date?
+    var minutes: Int?
     var targetID: PersistentIdentifier?
     var queued: [PendingTask] = []
 
@@ -515,6 +518,8 @@ private struct QuickEntryView: View {
   /// rechargé sous le panneau. Un jeton `#liste` dans le titre l'emporte au moment d'enregistrer.
   @State private var targetID: PersistentIdentifier?
   @State private var when: Date?
+  /// L'heure, à CÔTÉ du jour et pas dedans — même partage que le modèle (cf. `TaskItem.whenMinutes`).
+  @State private var whenMinutes: Int?
   /// La fournée en attente : ⌘↩ y dépose la tâche en cours et rend le champ vide, ↩ enregistre tout
   /// et ferme. Vider trois idées d'affilée ne demande plus de rouvrir le panneau à chaque fois.
   @State private var queued: [PendingTask] = []
@@ -871,6 +876,7 @@ private struct QuickEntryView: View {
       title = ""
       subtasks = []
       when = nil
+      whenMinutes = nil
       expanded = false
       selection = 0
     }
@@ -1050,8 +1056,12 @@ private struct QuickEntryView: View {
       // (cf. `TokenPill`) : c'est là que se lit ce qui est déjà décidé. Le menu calendrier de
       // droite n'en garde que l'icône, sans quoi la date s'afficherait deux fois.
       if step.composesTask, let when {
-        TokenPill(text: when.formatted(.dateTime.day().month(.abbreviated)))
-          .onTapGesture { self.when = nil }
+        // Jour et heure dans UNE pastille, comme sur la ligne au repos (cf. `TokenPill.schedule`).
+        TokenPill(text: TokenPill.schedule(when, minutes: whenMinutes))
+          .onTapGesture {
+            self.when = nil
+            whenMinutes = nil
+          }
           .help("Retirer la date")
       }
       TextField(placeholder, text: $title, axis: .vertical)
@@ -1126,8 +1136,10 @@ private struct QuickEntryView: View {
     .padding(.horizontal, 17)
     .padding(.vertical, 15)
     // La pastille de date entre et sort de la rangée : sans ça, la barre se réagence d'un coup
-    // sous le curseur au moment où le jeton est reconnu.
+    // sous le curseur au moment où le jeton est reconnu. L'heure la fait GRANDIR sans la faire
+    // entrer — même réagencement, même courbe.
     .animation(.bouncy(duration: 0.35), value: when)
+    .animation(.bouncy(duration: 0.35), value: whenMinutes)
   }
 
   /// Les sous-tâches, et rien d'autre.
@@ -1187,7 +1199,7 @@ private struct QuickEntryView: View {
       Text(pending.title).font(.app(14)).lineLimit(1)
       Spacer(minLength: 10)
       if let when = pending.when {
-        Text(when.formatted(.dateTime.day().month(.abbreviated)))
+        Text(TokenPill.schedule(when, minutes: pending.minutes))
           .font(.app(11))
           .foregroundStyle(Color.accentColor)
       }
@@ -1401,7 +1413,10 @@ private struct QuickEntryView: View {
       }
       if when != nil {
         Divider()
-        Button("Aucune date") { when = nil }
+        Button("Aucune date") {
+          when = nil
+          whenMinutes = nil  // l'heure ne survit pas à son jour (cf. `TaskItem.whenMinutes`)
+        }
       }
     } label: {
       // Icône seule : la date choisie se lit dans la pastille de gauche (cf. `bar`).
@@ -1462,6 +1477,7 @@ private struct QuickEntryView: View {
     title = saved.title
     subtasks = saved.subtasks
     when = saved.when
+    whenMinutes = saved.minutes
     if let savedTarget = saved.targetID { targetID = savedTarget }
     queued = saved.queued
     if !saved.subtasks.isEmpty { expanded = true }
@@ -1471,7 +1487,8 @@ private struct QuickEntryView: View {
   /// brouillon devenu obsolète plutôt que d'en garder un fantôme.
   private func persistDraft() {
     let saved = QuickEntryDraftStore.Draft(
-      title: title, subtasks: subtasks, when: when, targetID: targetID, queued: queued)
+      title: title, subtasks: subtasks, when: when, minutes: whenMinutes, targetID: targetID,
+      queued: queued)
     QuickEntryDraftStore.shared.draft = saved.isEmpty ? nil : saved
   }
 
@@ -1499,7 +1516,8 @@ private struct QuickEntryView: View {
     // disparaît alors d'elle-même — c'est `save` qui exécute la commande.
     let text = QuickEntry.resolving(title, shortcuts: shortcuts)?.text ?? title
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-    return PendingTask(title: text, subtasks: subtasks, when: when, targetID: targetID)
+    return PendingTask(
+      title: text, subtasks: subtasks, when: when, minutes: whenMinutes, targetID: targetID)
   }
 
   /// ⌘↩ depuis n'importe quel champ : dépose et rend le champ vide. Partagé plutôt que réécrit sur
@@ -1521,6 +1539,7 @@ private struct QuickEntryView: View {
       title = ""
       subtasks = []
       when = nil
+      whenMinutes = nil
       expanded = false  // les sous-tâches sont parties avec la tâche déposée
     }
     // `targetID` survit exprès : trois tâches lancées d'affilée vont le plus souvent au même
@@ -1593,8 +1612,12 @@ private struct QuickEntryView: View {
     // tâche notée depuis la capsule atterrirait sous des tâches déjà terminées.
     let anchor = TodoList.appendAnchor(among: list.orderedTasks)?.sortIndex ?? -1
     for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
+    // Le jeton resté dans le titre l'emporte sur la pastille, pour l'heure comme pour la date ; une
+    // heure sans jour se complète par aujourd'hui (cf. `QuickEntry.day`).
+    let minutes = entry.minutes ?? pending.minutes
     let task = TaskItem(
-      title: text, when: entry.when ?? pending.when, list: list)
+      title: text, when: QuickEntry.day(entry.when ?? pending.when, minutes: minutes),
+      whenMinutes: minutes, list: list)
     task.sortIndex = anchor + 1
     // Avant l'insertion : SwiftData propage la relation, les sous-tâches entrent avec la tâche.
     for line in pending.subtasks {
@@ -1638,7 +1661,11 @@ private struct QuickEntryView: View {
       return text
     }
     if let date = entry.when { when = date }
+    if let minutes = entry.minutes { whenMinutes = minutes }
     if let list = entry.target.flatMap(resolve) { targetID = list.persistentModelID }
+    // Une heure seule vise aujourd'hui, sinon la pastille n'aurait aucun jour à afficher. Après le
+    // jeton de date, jamais avant : « @14h @demain » doit garder demain.
+    when = QuickEntry.day(when, minutes: whenMinutes)
     return remaining
   }
 

@@ -139,7 +139,8 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollContentBackground(.hidden)
-      .scrollIndicators(.hidden)
+      // `.hidden` laisse macOS réafficher la barre au défilement ; `.never` seul la supprime.
+      .scrollIndicators(.never)
       // Fondu en haut du défilement : sans lui, une ligne qui passait sous le champ de recherche
       // était tranchée net au pixel. Un masque dégradé plutôt qu'un calque flou par-dessus — la
       // sidebar est translucide (vibrancy), n'importe quel voile opaque y ferait une bande grise

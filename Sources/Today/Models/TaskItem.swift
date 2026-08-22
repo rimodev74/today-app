@@ -74,6 +74,7 @@ final class TaskItem {
     title: String,
     notes: Data = Data(),
     when: Date? = nil,
+    whenMinutes: Int? = nil,
     isHeader: Bool = false,
     list: TodoList? = nil
   ) {
@@ -82,6 +83,7 @@ final class TaskItem {
     self.isCompleted = false
     self.isHeader = isHeader
     self.when = when
+    self.whenMinutes = whenMinutes
     self.list = list
     self.createdAt = Date()
   }

@@ -130,4 +130,57 @@ final class QuickEntryTests: XCTestCase {
     XCTAssertNil(consume("Faire la vaisselle "))
     XCTAssertNil(consume("#inconnu ", names: ["Courses"]))
   }
+
+  // MARK: Heure
+
+  func testTimeTokenFormats() {
+    XCTAssertEqual(parse("@14h30 Faire à manger").minutes, 14 * 60 + 30)
+    XCTAssertEqual(parse("@14:30 Faire à manger").minutes, 14 * 60 + 30)
+    XCTAssertEqual(parse("@14h Faire à manger").minutes, 14 * 60)
+    XCTAssertEqual(parse("@9h05 Faire à manger").minutes, 9 * 60 + 5)
+    XCTAssertEqual(parse("@0h Faire à manger").minutes, 0)
+    XCTAssertEqual(parse("@14h30 Faire à manger").title, "Faire à manger")
+  }
+
+  /// L'heure est un SECOND jeton, indépendant du jour : l'ordre ne compte pas.
+  func testDayAndTimeInEitherOrder() {
+    for raw in ["@demain @14h30 Dentiste", "@14h30 @demain Dentiste"] {
+      let entry = parse(raw)
+      XCTAssertEqual(entry.title, "Dentiste", raw)
+      XCTAssertEqual(day(entry), DateComponents(year: 2026, month: 7, day: 28), raw)
+      XCTAssertEqual(entry.minutes, 14 * 60 + 30, raw)
+    }
+  }
+
+  /// Un séparateur est exigé, et les bornes sont vraies : le reste redevient du texte.
+  func testRejectedTimesStayInTheTitle() {
+    for raw in ["@14", "@25h", "@14h60", "@h30", "@14h305", "@2pm"] {
+      let entry = parse("\(raw) Faire à manger")
+      XCTAssertNil(entry.minutes, raw)
+      XCTAssertEqual(entry.title, "\(raw) Faire à manger", raw)
+    }
+  }
+
+  /// Une heure seule n'a pas de jour : c'est l'appelant qui le complète, par aujourd'hui.
+  func testTimeAloneImpliesToday() {
+    let entry = parse("@14h30 Faire à manger")
+    XCTAssertNil(entry.when)
+    let filled = QuickEntry.day(entry.when, minutes: entry.minutes, now: now)
+    XCTAssertEqual(
+      filled.map { Calendar.current.dateComponents([.year, .month, .day], from: $0) },
+      DateComponents(year: 2026, month: 7, day: 27))
+  }
+
+  /// Complété APRÈS le jeton de date : « @14h @demain » garde demain.
+  func testDayWinsOverTheImpliedToday() {
+    let entry = parse("@14h @demain Dentiste")
+    XCTAssertEqual(
+      QuickEntry.day(entry.when, minutes: entry.minutes, now: now), entry.when)
+  }
+
+  func testSpaceValidatesATimeToken() {
+    let result = consume("@14h30 ")
+    XCTAssertEqual(result?.text, "")
+    XCTAssertEqual(result?.entry.minutes, 14 * 60 + 30)
+  }
 }

@@ -536,17 +536,14 @@ struct TaskRow: View {
   @ViewBuilder
   private var dateTag: some View {
     if let when = task.when {
-      let time = task.whenMinutes.map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
+      // Chaque libellé est mis en forme DANS la branche qui l'affiche, jamais au-dessus : une date
+      // formatée pour toutes les lignes de toutes les pages puis jetée par « Aujourd'hui » (qui ne
+      // montre que l'heure) n'est pas gratuite, et une ligne se redessine plusieurs fois par image
+      // pendant une animation.
       if showsDate {
-        // Le formatage de la date est calculé ICI, à l'intérieur du `if` qui l'affiche. Il était
-        // au-dessus, donc fait pour TOUTES les lignes de TOUTES les pages, y compris celles qui
-        // n'affichent pas la date (« Aujourd'hui », où le jour est implicite) — puis jeté. Une mise
-        // en forme de date n'est pas gratuite, et une ligne se redessine plusieurs fois par image
-        // pendant une animation.
-        let day = when.formatted(.dateTime.day().month(.abbreviated))
-        TokenPill(text: [day, time].compactMap { $0 }.joined(separator: " "))
-      } else if let time {
-        TokenPill(text: time)
+        TokenPill(text: TokenPill.schedule(when, minutes: task.whenMinutes))
+      } else if let minutes = task.whenMinutes {
+        TokenPill(text: TokenPill.time(minutes))
       }
     }
   }

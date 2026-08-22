@@ -7,8 +7,12 @@ import Foundation
 /// parseur reçoit les noms de destinations possibles (`names`) au lieu de deviner.
 struct QuickEntry {
   let title: String
-  /// Jour planifié, minuit (la saisie rapide ne porte pas d'heure — cf. `TaskItem.hasTime`).
+  /// Jour planifié, minuit — l'heure est à côté (`minutes`), jamais dedans (cf. `TaskItem.when`).
   let when: Date?
+  /// Heure planifiée en minutes depuis minuit (cf. `TaskItem.whenMinutes`), tirée d'un SECOND jeton
+  /// `@` : « @demain @14h30 ». Deux jetons indépendants, dans n'importe quel ordre, plutôt qu'une
+  /// syntaxe composée — c'est ce qui laisse poser l'heure seule, ou la changer sans retoucher le jour.
+  let minutes: Int?
   /// Nom exact tiré de `names`, à résoudre par l'appelant (liste ou projet).
   let target: String?
 
@@ -19,6 +23,7 @@ struct QuickEntry {
     calendar: Calendar = .current
   ) {
     var when: Date?
+    var minutes: Int?
     var target: String?
     var words: [Substring] = []
 
@@ -28,6 +33,8 @@ struct QuickEntry {
         let date = Self.date(token, now: now, calendar: calendar)
       {
         when = date
+      } else if word.hasPrefix("@"), minutes == nil, let time = Self.time(token) {
+        minutes = time
       } else if word.hasPrefix("#"), target == nil, let match = Self.match(token, in: names) {
         target = match
       } else {
@@ -37,7 +44,22 @@ struct QuickEntry {
 
     self.title = words.joined(separator: " ")
     self.when = when
+    self.minutes = minutes
     self.target = target
+  }
+
+  /// Le jour qu'IMPLIQUE une heure posée sans date : aujourd'hui, même s'il est déjà passé — on lit
+  /// ce qui a été tapé, pas ce qu'on aurait voulu dire. Sans ça une tâche sortirait avec une heure
+  /// et aucun jour, donc invisible partout (`TaskRow.dateTag` n'affiche l'heure que datée).
+  ///
+  /// Ici et pas dans l'init : le jour peut venir d'AILLEURS que du texte (le menu calendrier de la
+  /// capsule, une pastille déjà posée), et l'init ne le voit pas. C'est l'appelant qui a l'état
+  /// complet — cette fonction lui évite d'écrire la règle deux fois.
+  static func day(
+    _ when: Date?, minutes: Int?, now: Date = Date(), calendar: Calendar = .current
+  ) -> Date? {
+    guard when == nil, minutes != nil else { return when }
+    return calendar.startOfDay(for: now)
   }
 
   /// Saisie EN COURS : ne reconnaît que les jetons validés par un espace, et renvoie le texte à
@@ -53,7 +75,7 @@ struct QuickEntry {
     guard let lastSpace = text.lastIndex(where: \.isWhitespace) else { return nil }
     let entry = QuickEntry(
       parsing: String(text[..<lastSpace]), names: names, now: now, calendar: calendar)
-    guard entry.when != nil || entry.target != nil else { return nil }
+    guard entry.when != nil || entry.minutes != nil || entry.target != nil else { return nil }
     // `entry.title` est déjà nettoyé ; on lui recolle la fin non validée (espace + mot en cours).
     let rest = text[lastSpace...]
     let remaining =
@@ -181,6 +203,19 @@ struct QuickEntry {
     }
 
     return numeric(key, today: today, calendar: calendar)
+  }
+
+  /// « 14h », « 14h30 », « 14:30 », « 9h05 ». Un séparateur est EXIGÉ : « @14 » nu reste du texte,
+  /// il ressemble trop à ce qu'on écrit dans une phrase (« @14 rue des Lilas »). Pas d'am/pm —
+  /// l'app est en français, et « @2pm » n'y a jamais été tapé.
+  private static func time(_ token: String) -> Int? {
+    let key = fold(token)
+    guard let separator = key.firstIndex(where: { $0 == "h" || $0 == ":" }) else { return nil }
+    guard let hour = Int(key[..<separator]), (0...23).contains(hour) else { return nil }
+    let tail = key[key.index(after: separator)...]
+    guard !tail.isEmpty else { return hour * 60 }  // « 14h »
+    guard tail.count <= 2, let minute = Int(tail), (0...59).contains(minute) else { return nil }
+    return hour * 60 + minute
   }
 
   /// Prochaine occurrence STRICTE : « @lundi » un lundi vise le lundi suivant — pour aujourd'hui il

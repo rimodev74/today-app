@@ -1106,8 +1106,13 @@ private struct ListPageView: View {
       // exactement celles qu'affichera la tâche une fois créée (cf. `dateTag`). Clic = retrait.
       if let tokens = draftTokens[block.id] {
         if let when = tokens.when {
-          TokenPill(text: when.formatted(.dateTime.day().month(.abbreviated)))
-            .onTapGesture { draftTokens[block.id]?.when = nil }
+          // Jour et heure dans UNE pastille, comme sur la ligne au repos : deux pastilles
+          // demanderaient une règle de plus à comprendre pour retirer six caractères à retaper.
+          TokenPill(text: TokenPill.schedule(when, minutes: tokens.minutes))
+            .onTapGesture {
+              draftTokens[block.id]?.when = nil
+              draftTokens[block.id]?.minutes = nil
+            }
             .help("Retirer la date")
         }
         if let target = tokens.target {
@@ -1189,6 +1194,10 @@ private struct ListPageView: View {
       return
     }
     let destination = (entry.target ?? tokens?.target).flatMap(resolveQuickEntryTarget) ?? list
+    // Le jeton encore dans le texte l'emporte sur la pastille déjà posée, comme pour la date. Une
+    // heure sans jour se complète par aujourd'hui (cf. `QuickEntry.day`).
+    let minutes = entry.minutes ?? tokens?.minutes
+    let when = QuickEntry.day(entry.when ?? tokens?.when, minutes: minutes)
 
     if destination.persistentModelID != list.persistentModelID {
       // Autre liste : on la range à la fin de ce qui reste à faire, avant les cochées — pas de
@@ -1196,11 +1205,13 @@ private struct ListPageView: View {
       // rattacherait sinon la neuve à `destination.tasks` avant qu'on ait lu son ancre.
       let anchor = TodoList.appendAnchor(among: destination.orderedTasks)?.sortIndex ?? -1
       for t in destination.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
-      let task = TaskItem(title: entry.title, when: entry.when ?? tokens?.when, list: destination)
+      let task = TaskItem(
+        title: entry.title, when: when, whenMinutes: minutes, list: destination)
       task.sortIndex = anchor + 1
       modelContext.insertAndSave(task)
     } else {
-      let task = TaskItem(title: entry.title, when: entry.when ?? tokens?.when, list: destination)
+      let task = TaskItem(
+        title: entry.title, when: when, whenMinutes: minutes, list: destination)
       // Insère à la fin des tâches non cochées du bloc — avant ses cochées, avant le bloc suivant.
       // Les tâches situées après glissent d'un cran.
       let anchor =
@@ -1223,7 +1234,10 @@ private struct ListPageView: View {
     }
     var tokens = draftTokens[block.id] ?? DraftTokens()
     if let when = entry.when { tokens.when = when }
+    if let minutes = entry.minutes { tokens.minutes = minutes }
     if let target = entry.target { tokens.target = target }
+    // Une heure seule vise aujourd'hui : sans jour, la pastille n'aurait rien à afficher.
+    tokens.when = QuickEntry.day(tokens.when, minutes: tokens.minutes)
     draftTokens[block.id] = tokens
     return remaining
   }
@@ -2041,10 +2055,26 @@ struct TokenPill: View {
       )
       .fixedSize()
   }
+
+  /// « 31 juil. », « 31 juil. 14:30 » : le libellé d'un jour planifié et de son heure éventuelle.
+  /// Écrit ici, en un seul endroit, parce que trois surfaces l'affichent — la ligne au repos, la
+  /// capsule et le champ « Nouvelle tâche » — et qu'elles doivent se lire pareil.
+  static func schedule(_ when: Date, minutes: Int?) -> String {
+    let day = when.formatted(.dateTime.day().month(.abbreviated))
+    guard let minutes else { return day }
+    return day + " " + time(minutes)
+  }
+
+  /// L'heure seule, « 14:30 » — ce qu'affiche une page où le jour est implicite (« Aujourd'hui »).
+  static func time(_ minutes: Int) -> String {
+    String(format: "%02d:%02d", minutes / 60, minutes % 60)
+  }
 }
 
 /// Jetons de saisie rapide validés dans un champ « Nouvelle tâche », en attente de la création.
 struct DraftTokens {
   var when: Date?
+  /// Heure planifiée, en minutes depuis minuit (cf. `TaskItem.whenMinutes`).
+  var minutes: Int?
   var target: String?
 }
