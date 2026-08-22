@@ -189,4 +189,49 @@ final class ProjectBoardTests: XCTestCase {
 
     XCTAssertEqual(board.remainingCount, 3)
   }
+
+  // MARK: L'anneau de la carte
+
+  /// L'anneau vient de la MÊME passe que l'aperçu, il doit donc dire la même chose que
+  /// `TodoList.progress` — dont il est le déplacement, pas une seconde version.
+  func testCardProgress_matchesCompletedShare() {
+    let done = task("faite", sortIndex: 0, done: true)
+    done.completedAt = Date()
+    let board = ProjectBoard.build(
+      from: project([list("Liste", tasks: [done, task("à faire", sortIndex: 1)])]),
+      previewLimit: 4)
+    XCTAssertEqual(board.cards[0].progress, 0.5, accuracy: 0.0001)
+  }
+
+  /// Une liste VIDE reste à zéro. Sans le garde, 0/0 vaudrait `nan` et l'anneau se remplirait là
+  /// où il n'y a rien à faire.
+  func testCardProgress_emptyListStaysAtZero() {
+    let board = ProjectBoard.build(from: project([list("Vide")]), previewLimit: 4)
+    XCTAssertEqual(board.cards[0].progress, 0)
+  }
+
+  /// Une en-tête n'est pas une tâche : elle ne compte ni au numérateur ni au dénominateur.
+  func testCardProgress_ignoresHeaders() {
+    let done = task("faite", sortIndex: 1, done: true)
+    done.completedAt = Date()
+    let board = ProjectBoard.build(
+      from: project([
+        list("Liste", tasks: [task("section", sortIndex: 0, header: true), done])
+      ]),
+      previewLimit: 4)
+    XCTAssertEqual(board.cards[0].progress, 1)
+  }
+
+  /// Cochée AVANT aujourd'hui, elle sort de l'anneau (règle `countsTowardProgress`) — mais elle
+  /// reste absente du reste-à-faire, qui, lui, ne connaît pas la date.
+  func testCardProgress_dropsTasksArchivedBeforeToday() {
+    let old = task("faite hier", sortIndex: 0, done: true)
+    old.completedAt = Calendar.current.date(byAdding: .day, value: -1, to: Date())
+    let board = ProjectBoard.build(
+      from: project([list("Liste", tasks: [old, task("à faire", sortIndex: 1)])]),
+      previewLimit: 4,
+      bounds: DayBounds(progressResetsDaily: true))
+    XCTAssertEqual(board.cards[0].progress, 0)
+    XCTAssertEqual(board.cards[0].remainingCount, 1)
+  }
 }

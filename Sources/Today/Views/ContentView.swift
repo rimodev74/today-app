@@ -199,10 +199,14 @@ struct ContentView: View {
         .hidden()
     }
     .onChange(of: selection) { _, new in recordRecent(new) }
-    // Un raccourci texte « !aujourdhui » tapé dans la capsule de saisie rapide : elle vit dans une
-    // autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
-    .onReceive(NotificationCenter.default.publisher(for: AppCommand.selectionNotification)) { _ in
-      applyPendingSelection()
+    // Un ⌘↩ ou un raccourci texte (« !today ») venu de la capsule de saisie rapide : elle vit dans
+    // une autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
+    .onReceive(NotificationCenter.default.publisher(for: AppCommand.selectionNotification)) {
+      note in
+      // La destination est PORTÉE par la notification : une `ContentView` dont la fenêtre est
+      // fermée reste abonnée, et un jeton à consommer une fois partait à celle-là (cf. `deliver`).
+      guard let wanted = note.object as? SidebarSelection else { return }
+      selection = wanted
     }
     // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande, et
     // c'est le SEUL chemin dans ce cas — `AppCommand.deliver` ne poste alors AUCUNE notification,
@@ -694,11 +698,14 @@ private struct SidebarMenu: View {
   }
 
   private var panel: some View {
-    VStack(spacing: 0) {
+    // Les anneaux des rangées, calculés en UNE passe puis distribués — jamais `list.progress()`
+    // par rangée, qui retraverse les tâches de sa liste à chaque rendu (cf. `SidebarCounts`).
+    let counts = SidebarCounts(tasks: allTasks)
+    return VStack(spacing: 0) {
       searchField
       ScrollView {
         VStack(spacing: 1) {
-          if needle.isEmpty { groupedRows } else { filteredRows }
+          if needle.isEmpty { groupedRows(counts) } else { filteredRows(counts) }
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 8)
@@ -726,7 +733,7 @@ private struct SidebarMenu: View {
   }
 
   /// Ordre de la sidebar : vues intelligentes, Pomodoro, puis chaque projet suivi de ses listes.
-  @ViewBuilder private var groupedRows: some View {
+  @ViewBuilder private func groupedRows(_ counts: SidebarCounts) -> some View {
     ForEach(SmartList.allCases, id: \.self) { smartRow($0) }
     separator
     row(.pomodoro, title: "Pomodoro") {
@@ -735,11 +742,11 @@ private struct SidebarMenu: View {
     ForEach(projects) { project in
       separator
       projectRow(project)
-      ForEach(project.orderedLists) { listRow($0) }
+      ForEach(project.orderedLists) { listRow($0, counts) }
     }
   }
 
-  @ViewBuilder private var filteredRows: some View {
+  @ViewBuilder private func filteredRows(_ counts: SidebarCounts) -> some View {
     let smart = SmartList.allCases.filter { $0.label.localizedCaseInsensitiveContains(needle) }
     let matchedProjects = projects.filter { $0.title.localizedCaseInsensitiveContains(needle) }
     let matchedLists = projects.flatMap(\.orderedLists).filter {
@@ -753,7 +760,7 @@ private struct SidebarMenu: View {
     } else {
       ForEach(smart, id: \.self) { smartRow($0) }
       ForEach(matchedProjects) { projectRow($0) }
-      ForEach(matchedLists) { listRow($0) }
+      ForEach(matchedLists) { listRow($0, counts) }
     }
   }
 
@@ -774,9 +781,9 @@ private struct SidebarMenu: View {
     }
   }
 
-  private func listRow(_ list: TodoList) -> some View {
+  private func listRow(_ list: TodoList, _ counts: SidebarCounts) -> some View {
     row(.list(list), title: title(list.title)) {
-      ProgressRing(progress: list.progress(), size: 16)
+      ProgressRing(progress: counts[list].progress, size: 16)
         .tint(list.project?.color?.color)
     }
   }
@@ -845,9 +852,13 @@ private struct QuickFindPanel: View {
   }
 
   private var card: some View {
-    VStack(spacing: 0) {
+    // Une passe pour tous les anneaux, distribuée aux rangées (cf. `SidebarCounts`) : `row(for:)`
+    // lisait `list.progress()`, donc retraversait les tâches de chaque liste affichée, à chaque
+    // rendu — et champ vide, la palette les montre TOUTES.
+    let counts = SidebarCounts(tasks: tasks)
+    return VStack(spacing: 0) {
       searchField
-      content
+      content(counts)
     }
     .frame(width: 520)
     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -874,11 +885,11 @@ private struct QuickFindPanel: View {
   }
 
   @ViewBuilder
-  private var content: some View {
+  private func content(_ counts: SidebarCounts) -> some View {
     if needle.isEmpty {
-      recentsContent
+      recentsContent(counts)
     } else {
-      resultsContent
+      resultsContent(counts)
     }
   }
 
@@ -899,7 +910,7 @@ private struct QuickFindPanel: View {
     return lists.map { .list($0) } + projects.map { .project($0) }
   }
 
-  private var recentsContent: some View {
+  private func recentsContent(_ counts: SidebarCounts) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       sectionHeader("Récents")
       Divider().padding(.horizontal, 14)
@@ -907,7 +918,7 @@ private struct QuickFindPanel: View {
       ScrollView {
         VStack(spacing: 1) {
           ForEach(Array(recentItems.enumerated()), id: \.offset) { _, sel in
-            row(for: sel)
+            row(for: sel, counts)
           }
         }
         .padding(.horizontal, 8)
@@ -942,7 +953,7 @@ private struct QuickFindPanel: View {
   }
 
   @ViewBuilder
-  private var resultsContent: some View {
+  private func resultsContent(_ counts: SidebarCounts) -> some View {
     if matchingTasks.isEmpty && matchingLists.isEmpty && matchingProjects.isEmpty {
       Text("Aucun résultat")
         .foregroundStyle(.tertiary)
@@ -953,11 +964,11 @@ private struct QuickFindPanel: View {
         VStack(alignment: .leading, spacing: 1) {
           if !matchingProjects.isEmpty {
             sectionHeader("Projets")
-            ForEach(matchingProjects) { row(for: .project($0)) }
+            ForEach(matchingProjects) { row(for: .project($0), counts) }
           }
           if !matchingLists.isEmpty {
             sectionHeader("Listes")
-            ForEach(matchingLists) { row(for: .list($0)) }
+            ForEach(matchingLists) { row(for: .list($0), counts) }
           }
           if !matchingTasks.isEmpty {
             sectionHeader("Tâches")
@@ -986,7 +997,7 @@ private struct QuickFindPanel: View {
   /// Ligne pour une destination (liste ou projet), avec son icône façon sidebar et la coche
   /// bleue si c'est la destination courante.
   @ViewBuilder
-  private func row(for selection: SidebarSelection) -> some View {
+  private func row(for selection: SidebarSelection, _ counts: SidebarCounts) -> some View {
     switch selection {
     case .list(let list):
       QuickFindRow(
@@ -994,7 +1005,7 @@ private struct QuickFindPanel: View {
         isCurrent: current == selection,
         action: { onSelect(selection) }
       ) {
-        ProgressRing(progress: list.progress(), size: 16)
+        ProgressRing(progress: counts[list].progress, size: 16)
           .tint(list.project?.color?.color)
       }
     case .project(let project):

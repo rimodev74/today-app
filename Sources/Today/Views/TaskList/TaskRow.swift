@@ -105,7 +105,9 @@ struct TaskRow: View {
   /// l'édition ne fait qu'ajouter le corps sous elle et grossir le padding. SwiftUI a donc une
   /// hauteur continue à animer — un if/else échangerait deux vues d'un coup, d'où le « snap ».
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    // UNE traversée de la relation pour toute la rangée, distribuée ensuite (cf. `SubtaskTally`).
+    let subtasks = SubtaskTally(task)
+    return VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 10) {
         TaskCheckbox(isCompleted: task.isCompleted) {
           withAnimation(taskInsert) {
@@ -141,7 +143,7 @@ struct TaskRow: View {
         if !isEditing, let parentTag { parentPill(parentTag) }
         titleView
         Spacer(minLength: 0)
-        if !isEditing { trailing }
+        if !isEditing { trailing(subtasks) }
       }
 
       // Aperçu de la note au repos : sa première ligne sous le titre. Disparaît en édition — le
@@ -199,12 +201,12 @@ struct TaskRow: View {
       // Sous-tâches : montées au repos comme en édition, APRÈS l'éditeur de notes pour respecter
       // l'ordre titre → notes → sous-tâches. Repliées, elles ne sont pas montées du tout — un bloc
       // vide laisserait sa marge haute et gonflerait la ligne fermée de quelques points.
-      if showsSubtasks { subtasksSection }
+      if showsSubtasks(subtasks) { subtasksSection }
     }
     // Ajout/suppression d'une sous-tâche : `withAnimation` autour de la mutation ne suffit PAS —
     // SwiftData notifie le changement de relation hors de la transaction, la carte sautait donc à sa
     // nouvelle hauteur. On anime ici sur le compte, qui, lui, est observé au rendu.
-    .animation(taskFlow, value: task.subtasks.count)
+    .animation(taskFlow, value: subtasks.total)
     // PAS de `.clipped()` ici. Il y en avait un, « pour borner le contenu pendant que la carte
     // s'ouvre » — écrit quand une ligne avait une hauteur FIXE. Depuis que le titre est un
     // `TextField(axis: .vertical)`, la hauteur d'une ligne dépend du repli de son texte, donc de la
@@ -241,7 +243,7 @@ struct TaskRow: View {
     .padding(.top, isEditing ? 16 : 4)
     // Au repos, une tâche DÉPLIÉE finit sur une rangée de sous-tâche et non sur son titre : il lui
     // faut un peu plus de fond que les 4 pt d'une ligne simple. Repliée, elle EST une ligne simple.
-    .padding(.bottom, isEditing ? 14 : (showsSubtasks ? 8 : 4))
+    .padding(.bottom, isEditing ? 14 : (showsSubtasks(subtasks) ? 8 : 4))
     .padding(.horizontal, isEditing ? Self.editInset : rowInset)
     .background { rowBackground }
     // Le bloc ENTIER glisse (fond ET case), le retrait interne reste intact : la case tombe sur
@@ -629,8 +631,8 @@ struct TaskRow: View {
   /// En édition, toujours tout afficher (on manipule les sous-tâches) ; en mode normal, le repli
   /// est piloté par `isSubtasksExpanded` — et le temps d'un glissement, par `collapsedForDrag`, qui
   /// l'emporte sur les deux.
-  private var showsSubtasks: Bool {
-    !collapsedForDrag && !task.orderedSubtasks.isEmpty && (isEditing || isSubtasksExpanded)
+  private func showsSubtasks(_ subtasks: SubtaskTally) -> Bool {
+    !collapsedForDrag && !subtasks.isEmpty && (isEditing || isSubtasksExpanded)
   }
 
   private var subtasksSection: some View {
@@ -673,9 +675,8 @@ struct TaskRow: View {
   /// en-tête en gras sur sa propre ligne) doublait la hauteur d'une tâche à sous-tâches et cassait
   /// l'alignement de la liste ; ici la tâche garde exactement la hauteur d'une ligne simple.
   /// Absent en édition : la liste y est toujours dépliée, il n'y a rien à replier.
-  private var subtasksSummary: some View {
-    let total = task.subtasks.count
-    let done = task.subtasks.filter(\.isDone).count
+  private func subtasksSummary(_ subtasks: SubtaskTally) -> some View {
+    let total = subtasks.total
     return Button {
       // Le SEUL geste qui exprime une préférence, donc le seul qu'on retienne. `withAnimation`
       // enveloppe l'écriture du `@State`, qui est ce qui rend ; l'enregistrement à côté n'a pas à
@@ -685,7 +686,7 @@ struct TaskRow: View {
       SubtaskExpansion.set(next, for: task)
     } label: {
       HStack(spacing: 6) {
-        SubtaskProgressRing(fraction: total == 0 ? 0 : Double(done) / Double(total))
+        SubtaskProgressRing(fraction: subtasks.fraction)
           .frame(width: 12, height: 12)
         Text("\(total) sous-tâche\(total > 1 ? "s" : "")")
           .font(.app(.callout))
@@ -698,7 +699,7 @@ struct TaskRow: View {
           // Sur `showsSubtasks` et non sur `subtasksExpanded` : pendant un glissement le dépliant
           // est fermé sans que le chevron n'ait été touché, et un chevron qui pointe vers le bas
           // au-dessus de rien est un mensonge à l'écran.
-          .rotationEffect(.degrees(showsSubtasks ? 90 : 0))
+          .rotationEffect(.degrees(showsSubtasks(subtasks) ? 90 : 0))
       }
       .contentShape(Rectangle())
     }
@@ -800,9 +801,9 @@ struct TaskRow: View {
   ///   la gauche pour leur céder la place — comme Things, et sans réserver d'espace à sa droite.
   ///
   /// L'animation est bornée à `value: hovering` : elle ne se recalcule qu'au survol, pas au scroll.
-  private var trailing: some View {
+  private func trailing(_ subtasks: SubtaskTally) -> some View {
     HStack(spacing: 8) {
-      if !task.subtasks.isEmpty { subtasksSummary }
+      if !subtasks.isEmpty { subtasksSummary(subtasks) }
       ZStack(alignment: .trailing) {
         deadlineBadge.offset(x: hovering ? -Self.hoverActionsWidth : 0)
         HStack(spacing: 6) {

@@ -22,6 +22,13 @@ final class QuickEntryWindow {
   /// marge devient une zone morte — un clic y tombe dans le panneau sans le fermer.
   static let panelSize = NSSize(width: 770, height: 620)
   static let capsuleWidth: CGFloat = 650
+  /// L'écart entre le haut de la fenêtre et celui de la capsule. Lu des deux côtés : la vue s'en
+  /// sert pour son retrait, la fenêtre pour ancrer son ressort sur le haut de la capsule.
+  ///
+  /// 56, pas 32 : le halo de `paneShadow` (rayon 40) déborde d'environ radius − y = 22pt au-dessus
+  /// de la capsule, et sa traîne va plus loin encore (un flou n'a pas de bord net). 32pt le coupait
+  /// au ras de la fenêtre — un aplat au lieu d'un fondu.
+  static let capsuleTopInset: CGFloat = 56
 
   /// Le panneau, créé UNE fois et GARDÉ pour la vie du process. Le jeter à chaque fermeture coûtait
   /// un plantage : le champ de texte de la capsule fait créer la liste de complétion d'AppKit, qui
@@ -35,8 +42,15 @@ final class QuickEntryWindow {
   private var panel: FloatingPanel?
   private var channel: QuickEntryChannel?
 
-  /// Ouverte = le panneau est À L'ÉCRAN. `panel != nil` ne le dit plus : il survit aux fermetures.
-  private var isOpen: Bool { panel?.isVisible == true }
+  /// La sortie dure ~400 ms, pendant lesquelles le panneau est encore visible. Sans ces deux-là, le
+  /// raccourci global frappé dans cet intervalle ne ferait rien du tout : il verrait une capsule
+  /// « ouverte » et redemanderait une fermeture déjà en cours.
+  private var isClosing = false
+  private var closeGeneration = 0
+
+  /// Ouverte = le panneau est À L'ÉCRAN, sortie exclue. `panel != nil` ne le dit plus : il survit
+  /// aux fermetures.
+  private var isOpen: Bool { panel?.isVisible == true && !isClosing }
 
   private init() {}
 
@@ -72,12 +86,92 @@ final class QuickEntryWindow {
     )
     hosting.layer?.backgroundColor = .clear
     panel.contentView = hosting
+    // Une sortie en cours n'a plus lieu d'être : le contenu qu'elle escamotait vient d'être
+    // remplacé. Le compteur invalide son `finishClose` différé.
+    isClosing = false
+    closeGeneration += 1
+    animate(hosting, to: .shown)
     panel.makeKeyAndOrderFront(nil)
   }
 
-  /// Fermeture DEMANDÉE : la vue joue sa sortie et rappellera `close()` une fois le ressort fini.
-  /// Tout ce qui ferme le panneau passe par ici — Échap, le raccourci global rejoué — sans quoi la
-  /// fenêtre disparaîtrait au milieu de l'animation.
+  /// Le ressort d'entrée et de sortie de la capsule — sur le CALQUE, pas dans SwiftUI.
+  ///
+  /// Un `.scaleEffect` animé fait re-rendre tout l'arbre à CHAQUE image : mesuré 543 ms de CPU par
+  /// cycle ouverture+fermeture, dont 284 pour la seule mise à l'échelle — soit ~9 ms par image sur
+  /// un budget de 16,7. Dès qu'autre chose tourne, on rate un vsync sur deux et l'ouverture tombe à
+  /// 30 Hz. Confié à CoreAnimation, le contenu est rendu UNE fois et le serveur de rendu met la
+  /// texture à l'échelle : l'app ne fait plus rien pendant l'animation.
+  ///
+  /// `.compositingGroup()` et `.drawingGroup()` ont été essayés d'abord, pour rester en SwiftUI :
+  /// 614 → 578 et 528 ms/cycle, dans le bruit de la mesure. → `PIEGES.md` § Animations.
+  private enum Presentation { case hidden, shown }
+
+  /// Mêmes nombres que le ressort SwiftUI qu'il remplace (`response: 0.34`, `dampingFraction:
+  /// 0.62`) : `bounce` vaut `1 − dampingFraction`, `perceptualDuration` vaut `response`.
+  private static func spring() -> CASpringAnimation {
+    CASpringAnimation(perceptualDuration: 0.34, bounce: 0.38)
+  }
+
+  private func animate(
+    _ view: NSView, to state: Presentation, completion: (() -> Void)? = nil
+  ) {
+    guard let layer = view.layer else {
+      completion?()
+      return
+    }
+    // Les bornes de la VUE, pas celles du calque : celui-ci n'adopte le nouveau cadre qu'à la
+    // passe de layout, et un pivot calculé sur des bornes encore nulles ferait entrer la capsule
+    // de travers.
+    let from = state == .shown ? Self.shrunk(in: view.bounds) : CATransform3DIdentity
+    let to = state == .shown ? CATransform3DIdentity : Self.shrunk(in: view.bounds)
+
+    // Valeurs de départ posées SANS animation : sans ça, la capsule paraîtrait une image à sa
+    // taille pleine avant de rentrer.
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    layer.transform = from
+    layer.opacity = state == .shown ? 0 : 1
+    CATransaction.commit()
+
+    let scale = Self.spring()
+    scale.keyPath = "transform"
+    scale.fromValue = from
+    scale.toValue = to
+    let fade = Self.spring()
+    fade.keyPath = "opacity"
+    fade.fromValue = layer.opacity
+    fade.toValue = state == .shown ? 1 : 0
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    // CoreAnimation valide sa transaction sur le fil principal, mais son bloc de fin n'est pas
+    // typé pour le dire — et ce qu'on y fait démonte une fenêtre. Même formule que l'observateur
+    // de notification distribuée dans `TodayApp.init`.
+    CATransaction.setCompletionBlock { MainActor.assumeIsolated { completion?() } }
+    layer.transform = to
+    layer.opacity = state == .shown ? 1 : 0
+    layer.add(scale, forKey: "quickEntry.transform")
+    layer.add(fade, forKey: "quickEntry.opacity")
+    CATransaction.commit()
+  }
+
+  /// L'état replié : 0,88 pris depuis le HAUT DE LA CAPSULE, pas du calque. Ancrée au centre, elle
+  /// remonterait pendant le ressort — le bloc s'allonge vers le bas quand les sous-tâches s'ouvrent.
+  /// Le `transform` d'un calque s'applique autour de son `anchorPoint` : plutôt que de déplacer
+  /// celui-ci (AppKit le repositionnerait), on encadre l'échelle de deux translations.
+  private static func shrunk(in bounds: CGRect) -> CATransform3D {
+    let x = bounds.midX
+    // Repère du calque : origine en bas à gauche.
+    let y = bounds.maxY - capsuleTopInset
+    var t = CATransform3DTranslate(CATransform3DIdentity, x, y, 0)
+    t = CATransform3DScale(t, 0.88, 0.88, 1)
+    return CATransform3DTranslate(t, -x, -y, 0)
+  }
+
+  /// Fermeture DEMANDÉE : on passe la main à la VUE, qui seule sait si ce geste doit tout fermer
+  /// ou seulement défaire l'étape en cours (Échap sur un bloc ouvert). Elle rappelle `close()`,
+  /// qui joue le ressort de sortie. Tout ce qui ferme le panneau passe par ici — Échap, le
+  /// raccourci global rejoué — sans quoi la fenêtre disparaîtrait au milieu de l'animation.
   ///
   /// `discardDraft` distingue l'annulation VOLONTAIRE (Échap) de tout le reste (clic ailleurs, perte
   /// de la clé, raccourci global rejoué) : seule la première jette ce qui était en train de s'écrire,
@@ -91,10 +185,27 @@ final class QuickEntryWindow {
     channel.isRequested = true
   }
 
+  /// La sortie : le ressort d'entrée rejoué à l'envers, puis seulement le démontage. Un panneau
+  /// qui s'évanouit d'un coup après être entré en rebondissant se lit comme un plantage.
   func close() {
+    // `isVisible` écarte la fermeture d'un panneau déjà parti (`requestClose` sans canal y mène) :
+    // elle jouerait un ressort sur une fenêtre hors écran, puis la redémonterait.
+    guard let panel, panel.isVisible, let content = panel.contentView, !isClosing else { return }
+    isClosing = true
+    closeGeneration += 1
+    let generation = closeGeneration
+    animate(content, to: .hidden) { [weak self] in
+      // Une réouverture pendant la sortie a déjà remplacé le contenu : ce démontage-ci est périmé.
+      guard let self, self.closeGeneration == generation else { return }
+      self.finishClose()
+    }
+  }
+
+  private func finishClose() {
+    isClosing = false
     panel?.orderOut(nil)
-    // La fenêtre reste, son CONTENU part. Le garder laisserait les trois `@Query` de la capsule
-    // (listes, projets, TOUTES les tâches) se rejouer à chaque écriture SwiftData, capsule fermée.
+    // La fenêtre reste, son CONTENU part. Le garder laisserait les `@Query` de la capsule (listes,
+    // projets) se rejouer à chaque écriture SwiftData, capsule fermée.
     panel?.contentView = NSView()
     channel = nil
   }
@@ -269,18 +380,20 @@ private struct QuickEntryView: View {
   var prefill: String = ""
   var onClose: () -> Void
 
-  /// Le ressort de la capsule, joué à l'endroit à l'ouverture et à l'envers à la fermeture — c'est
-  /// la même courbe, donc le même rebond, dans les deux sens.
-  private static let motion = Animation.spring(response: 0.34, dampingFraction: 0.62)
-  /// Un poil au-delà du ressort : la fenêtre ne doit pas s'escamoter avant la fin du rebond.
-  private static let motionDuration = Duration.milliseconds(380)
-
   @Environment(\.modelContext) private var modelContext
   @Query(sort: [SortDescriptor(\TodoList.sortIndex)]) private var lists: [TodoList]
   @Query(sort: [SortDescriptor(\Project.sortIndex)]) private var projects: [Project]
+  /// Toutes les tâches, chargées À LA DEMANDE — pas par un `@Query`.
+  ///
+  /// Un `@Query` se matérialise pendant la construction de la vue, donc AVANT que la fenêtre
+  /// paraisse : mesuré 7 ms pour les requêtes du panneau, et un fetch complet coûte 2,4 ms à 136
+  /// tâches, 35 ms à 2 000. Or la capsule s'ouvre sur une barre VIDE, qui n'a besoin d'aucune
+  /// tâche. On paie donc à la première frappe, où la frappe couvre le coût.
+  ///
   /// Sans tri : `QuickPalette` pose le sien (l'ordre d'« Aujourd'hui » pour le coup d'œil, la
   /// pertinence pour une recherche), et un `SortDescriptor` de plus ne ferait que trier deux fois.
-  @Query private var allTasks: [TaskItem]
+  @State private var allTasks: [TaskItem] = []
+  @State private var allTasksLoaded = false
 
   @State private var title = ""
   /// Sous-tâches en brouillon : de simples chaînes, pas des `Subtask`. Le modèle n'existera qu'à
@@ -313,13 +426,38 @@ private struct QuickEntryView: View {
   /// Hauteur naturelle de la liste des destinations, mesurée en continu. Nécessaire parce que le
   /// bloc s'ouvre en animant sa hauteur : il faut une valeur cible, `nil` ne s'anime pas.
   @State private var destinationHeight: CGFloat = 0
+  /// Le contenu du bloc des destinations est-il monté ?
+  ///
+  /// Le BLOC, lui, l'est toujours — c'est ce qui donne la fusion progressive du verre (cf.
+  /// `destinationPane`). Mais son contenu se reconstruisait donc à CHAQUE rendu de la capsule,
+  /// chaque rangée y lisant `list.progress()`, qui retraverse les tâches de sa liste. Mesuré :
+  /// **19 ms sur les 28 que coûtait encore l'ouverture**, pour une liste que personne ne regarde.
+  @State private var showsDestinations = false
+  /// Invalide un démontage en attente quand le bloc se rouvre pendant sa fermeture (même jeton que
+  /// `TaskRow.editSession`).
+  @State private var destinationSession = 0
   @State private var hovered: PersistentIdentifier?
-  @State private var appeared = false
+  /// Sortie demandée. Il ferme la porte derrière lui : Échap martelé, un ⌘↩ qui arrive après le
+  /// dernier ↩, et la capsule sortirait deux fois — ou enregistrerait deux tâches.
+  @State private var closing = false
   @AppStorage(TextShortcut.storageKey) private var shortcutData = Data()
   @FocusState private var focus: Field?
   @Namespace private var morph
 
   private var shortcuts: [TextShortcut] { TextShortcut.decode(shortcutData) }
+
+  /// La fournée de tâches, chargée une fois par ouverture. Appelée depuis `onChange` et `begin`,
+  /// donc DANS la transaction qui change le titre ou l'étape : le body qui suit voit déjà la
+  /// fournée, il n'y a pas d'image intermédiaire sans tâches.
+  ///
+  /// Elle ne suit pas les écritures faites ailleurs pendant que la capsule est ouverte — une
+  /// tâche ajoutée depuis la fenêtre principale n'apparaîtra qu'à la prochaine ouverture. La
+  /// capsule est un panneau de passage, la question ne se pose pas dans son usage.
+  private func loadAllTasks() {
+    guard !allTasksLoaded else { return }
+    allTasks = (try? modelContext.fetch(FetchDescriptor<TaskItem>())) ?? []
+    allTasksLoaded = true
+  }
 
   private enum Field: Hashable {
     case title
@@ -357,19 +495,12 @@ private struct QuickEntryView: View {
     let palette = currentPalette
     return glassStack(palette)
       .frame(width: QuickEntryWindow.capsuleWidth)
-      // L'ancrage haut fait grandir la capsule depuis sa propre ligne : ancrée au centre, elle
-      // remonterait pendant le ressort parce que le bloc s'allonge vers le bas quand les sous-tâches
-      // s'ouvrent.
-      .scaleEffect(appeared ? 1 : 0.88, anchor: .top)
-      .opacity(appeared ? 1 : 0)
-      // 56, pas 32 : le halo de `paneShadow` (rayon 40) déborde d'environ radius − y = 22pt
-      // au-dessus de la capsule, et sa traîne, elle, va plus loin encore (un flou n'a pas de bord
-      // net). 32pt le coupait au ras de la fenêtre — un aplat au lieu d'un fondu.
-      .padding(.top, 56)
+      // L'entrée et la sortie de la capsule ne sont PAS ici : `QuickEntryWindow` les joue sur le
+      // calque, en CoreAnimation. Un `.scaleEffect` animé fait re-rendre tout cet arbre à chaque
+      // image (mesuré : la moitié du CPU de l'ouverture). Ce qui reste dans SwiftUI, ce sont les
+      // mouvements INTERNES — un pan qui s'ouvre, la fournée qui grandit.
+      .padding(.top, QuickEntryWindow.capsuleTopInset)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      .onAppear {
-        withAnimation(Self.motion) { appeared = true }
-      }
       .onChange(of: channel.isRequested) { _, requested in
         guard requested else { return }
         // Échap referme d'abord ce qui est ouvert PAR-DESSUS la capsule, comme un menu système :
@@ -411,6 +542,20 @@ private struct QuickEntryView: View {
       }
       // Raccourci clavier frappé alors que la capsule est déjà ouverte : le jeton rejoint la tâche
       // en cours d'écriture.
+      // Le contenu des destinations suit l'ouverture du bloc, avec un temps de retard à la
+      // fermeture pour ne pas se vider avant d'avoir fini de se replier.
+      .onChange(of: picking) { _, open in
+        destinationSession += 1
+        guard !open else {
+          showsDestinations = true
+          return
+        }
+        let token = destinationSession
+        // Un poil au-delà du ressort qui referme le bloc (`.bouncy(duration: 0.4)`).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+          if token == destinationSession { showsDestinations = false }
+        }
+      }
       .onChange(of: channel.token) { _, token in
         guard let token else { return }
         applyToken(token)
@@ -579,6 +724,10 @@ private struct QuickEntryView: View {
   /// `title` est vidé : la frappe qui a servi à TROUVER l'endroit n'est pas le titre de ce qu'on
   /// va y écrire. C'est la confusion que le découpage en deux temps existe pour éviter.
   private func begin(_ next: Step, landingOn target: QuickPalette.TaskTarget?) {
+    // La seconde étape liste ce que le contenant porte déjà : « Aujourd'hui » se construit à
+    // partir de la fournée, qui peut ne pas encore avoir été chargée si l'on est arrivé ici sans
+    // taper une lettre (un prefill, un brouillon repris).
+    loadAllTasks()
     if let target {
       let resolved = target.resolve(in: reachable)
       targetID = resolved.list?.persistentModelID
@@ -667,18 +816,29 @@ private struct QuickEntryView: View {
       // La hauteur cible se mesure sur une copie INVISIBLE, laissée à sa taille idéale. Mesurer
       // la vraie ferait un nœud : repliée à zéro, elle se mesure à zéro, et le bloc ne pourrait
       // plus jamais s'ouvrir.
+      //
+      // Bornée DEUX fois. À l'étape qui COMPOSE une tâche, parce que c'est la seule où le chip
+      // existe, donc la seule où `picking` peut passer à vrai : la rendre en recherche revenait à
+      // mesurer un bloc que rien ne peut ouvrir (8 ms sur chaque ouverture de la capsule, payés
+      // avant que la fenêtre paraisse). Et tant que la hauteur n'est pas connue : une fois mesurée
+      // elle est en `@State` pour la session, la copie n'a plus rien à apprendre — sans quoi elle
+      // se reconstruirait à chaque frappe du titre.
       .background(alignment: .top) {
-        destinationList
-          .frame(width: 290)
-          .fixedSize(horizontal: false, vertical: true)
-          .hidden()
-          .background {
-            GeometryReader { proxy in
-              Color.clear.preference(key: DestinationHeightKey.self, value: proxy.size.height)
+        if step.composesTask, destinationHeight == 0 {
+          destinationList
+            .frame(width: 290)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .background {
+              GeometryReader { proxy in
+                Color.clear.preference(key: DestinationHeightKey.self, value: proxy.size.height)
+              }
             }
-          }
+        }
       }
-      .onPreferenceChange(DestinationHeightKey.self) { destinationHeight = $0 }
+      // Zéro n'est jamais une mesure, c'est le défaut de la clé — celui que la copie publie en
+      // partant. Le retenir la ferait remonter aussitôt, et les deux se relanceraient sans fin.
+      .onPreferenceChange(DestinationHeightKey.self) { if $0 > 0 { destinationHeight = $0 } }
       Spacer(minLength: 0)
     }
     .padding(.leading, 14)
@@ -786,6 +946,9 @@ private struct QuickEntryView: View {
         // panneau ne les analysait qu'à l'enregistrement : rien ne confirmait « @demain » sous les
         // doigts — et un raccourci texte n'aurait rien eu à montrer non plus.
         .onChange(of: title) { _, new in
+          // La première frappe est le moment où la palette a besoin des tâches — et le premier où
+          // elle en a besoin tout court (cf. `allTasks`).
+          if !new.isEmpty { loadAllTasks() }
           // Les jetons n'ont de sens que sur une tâche en train de s'écrire : dans une recherche,
           // « @demain » est un texte cherché, pas une date à ranger.
           if step.composesTask {
@@ -1024,11 +1187,16 @@ private struct QuickEntryView: View {
   /// est celui du système, impossible à accorder à celui de la capsule (ni à faire participer au
   /// morphing du `GlassEffectContainer`). Le prix est la coche et le survol à écrire à la main.
   private var destinationBox: some View {
-    ScrollView { destinationList }
-      // Les listes sans projet sont volontairement absentes : la sidebar n'en montre aucune (elle
-      // ne rend que l'inbox et les listes DANS un projet), les proposer ici revenait à offrir
-      // comme destination des listes héritées que rien d'autre dans l'app ne sait rouvrir.
-      .scrollBounceBehavior(.basedOnSize)
+    // Monté sur `showsDestinations` et non sur `picking` : le contenu survit à la fermeture, le
+    // temps que la hauteur retombe à zéro. Démonté d'un coup, le bloc se viderait sous les yeux
+    // avant d'avoir fini de se replier — même motif que `TaskRow.showEditor`.
+    ScrollView {
+      if showsDestinations { destinationList.transition(.identity) }
+    }
+    // Les listes sans projet sont volontairement absentes : la sidebar n'en montre aucune (elle
+    // ne rend que l'inbox et les listes DANS un projet), les proposer ici revenait à offrir
+    // comme destination des listes héritées que rien d'autre dans l'app ne sait rouvrir.
+    .scrollBounceBehavior(.basedOnSize)
   }
 
   private var destinationList: some View {
@@ -1238,9 +1406,9 @@ private struct QuickEntryView: View {
   }
 
   private func save() {
-    // Entrée maintenue pendant la sortie : une tâche, pas deux. `dismiss()` a déjà remis `appeared`
-    // à false quand il repasse ici.
-    guard appeared else { return }
+    // Entrée maintenue pendant la sortie : une tâche, pas deux. `dismiss()` a déjà posé `closing`
+    // quand il repasse ici.
+    guard !closing else { return }
     // ↩ ne veut pas dire la même chose aux deux temps, et c'est TOUT le principe. Le branchement
     // est posé ICI, au point de passage unique de toutes les validations (Entrée, le bouton
     // d'envoi, la dernière sous-tâche) plutôt que sur chacune — trois copies auraient divergé.
@@ -1314,17 +1482,16 @@ private struct QuickEntryView: View {
     modelContext.insertAndSave(task)
   }
 
-  /// La sortie : le ressort d'ouverture rejoué à l'envers, puis seulement le démontage de la
-  /// fenêtre. Échap, le raccourci global et la fin de l'accusé de réception y passent tous — un
-  /// panneau qui s'évanouit d'un coup après être entré en rebondissant se lit comme un plantage.
+  /// La sortie. Échap, le raccourci global et la fin de l'accusé de réception y passent tous ; le
+  /// ressort de sortie et le démontage appartiennent à `QuickEntryWindow.close`.
+  ///
+  /// Le focus est rendu AVANT : un champ encore premier répondeur pendant que sa fenêtre s'escamote
+  /// est le chemin exact des plantages ViewBridge d'août 2026 (→ `PIEGES.md` § Fenêtres).
   private func dismiss() {
-    guard appeared else { return }  // sortie déjà en cours (Échap martelé)
+    guard !closing else { return }  // sortie déjà en cours (Échap martelé)
+    closing = true
     focus = nil
-    withAnimation(Self.motion) { appeared = false }
-    Task { @MainActor in
-      try? await Task.sleep(for: Self.motionDuration)
-      onClose()
-    }
+    onClose()
   }
 
   /// Sort du texte les jetons validés par un espace (cf. `QuickEntry.consuming`) et les range dans

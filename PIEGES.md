@@ -134,12 +134,34 @@ c'est asynchrone, donc la notification postée juste après ne pouvait viser que
 n'est PAS encore démontée et écrit la sélection dans un `@State` que plus personne ne rendra. La
 neuve démarre alors sur sa valeur par défaut.
 
-D'où `AppCommand.deliver` : la notification n'est postée QUE si `activate` a trouvé une fenêtre
-vivante. Sinon la destination reste posée dans `pendingSelection` et c'est l'`onAppear` de la
-`ContentView` neuve qui la lit — le chemin qui existait déjà, et qui suffit.
+D'où, premier temps : la notification n'est postée QUE si `activate` a trouvé une fenêtre vivante.
+Sinon la destination reste posée dans `pendingSelection` et c'est l'`onAppear` de la `ContentView`
+neuve qui la lit.
+
+**Ça n'a corrigé que la moitié.** Une fois la fenêtre rouverte, le geste marchait une fois puis plus
+jamais : la deuxième destination ramenait l'app sur la page ouverte par la PREMIÈRE. La même trace,
+instances numérotées, le dit sans détour :
+
+```
+[25A9] onDisappear                   ← la 1re ContentView quitte l'écran, mais reste abonnée
+[EEF5] onAppear                      ← la 2e affiche la destination demandée
+=== 2e destination ===
+[25A9] reçoit … CONSOMME             ← la MORTE est servie EN PREMIER et prend tout
+[EEF5] onScreen=true, pending=nil    ← la vivante n'a plus rien
+```
+
+`NotificationCenter` sert dans l'ordre d'INSCRIPTION : la plus ancienne gagne toujours, et elle est
+justement celle qu'on ne voit pas. Un jeton à consommer une fois, diffusé à N abonnés, va au
+mauvais — par construction, pas par malchance.
+
+D'où, second temps : **la destination VOYAGE avec la notification** (`object:`), et chaque
+`ContentView` l'applique à son propre `selection`. Les invisibles écrivent dans le vide, celle à
+l'écran montre la bonne page. `pendingSelection` ne sert plus QU'au cas « aucune fenêtre » — là où
+il n'y a, par définition, personne pour se la disputer.
 
 **La leçon, plus large que ce bug :** une vue dont la fenêtre est fermée n'est pas une vue morte.
-Tout état « à consommer une fois » traversé par notification doit se demander QUI le consomme.
+Un état « à consommer une fois » ne se diffuse pas ; ou bien on l'adresse, ou bien on transporte la
+valeur et chacun s'en sert.
 
 ### Reconstruire le bundle sous les pieds d'une instance vivante
 
@@ -626,6 +648,151 @@ même résultat SANS ce piège. Deux formes en service : un `Binding` maison don
 `withAnimation` (`TodayPageView.undatedExpansion`), et — quand l'état doit
 survivre au relancement — un `@State` qui pilote le rendu doublé d'un enregistrement écrit juste
 après lui (`TaskRow` + `SubtaskExpansion`, pour le repli des sous-tâches).
+
+### L'entrée d'une FENÊTRE entière ne s'anime pas en SwiftUI
+
+(22 août 2026, capsule de saisie rapide.) Elle s'ouvrait par un `.scaleEffect(appeared ? 1 : 0.88)`
+sous `withAnimation` — la forme recommandée partout ailleurs dans ce fichier, et la bonne dès qu'il
+s'agit d'un pan qui s'ouvre ou d'une rangée qui entre. Sur la capsule ENTIÈRE, elle coûtait la
+fluidité.
+
+Mesuré, en release, en alternant les variantes dans le MÊME process (entre deux lancements la
+variance atteint ±12 ms, plus que l'effet cherché) :
+
+| | CPU de l'app, par cycle ouverture + fermeture |
+| --- | --- |
+| tel quel | **543 ms** |
+| sans le `.scaleEffect` | **259 ms** |
+| sans les deux ombres de `paneShadow` | 516 ms |
+
+Soit ~9 ms d'app par image sur un budget de 16,7 (8,3 sur un écran 120 Hz), auxquels s'ajoute le
+serveur de rendu, mesuré à ~625 ms par cycle pour composer le verre. Dès qu'autre chose tourne —
+une vidéo derrière la capsule, un build — on rate un vsync sur deux et l'ouverture tombe à 30 Hz.
+Fenêtre au premier plan sur un fond statique, la même ouverture tient un 60 Hz propre : c'est ce qui
+rend le défaut intermittent, donc difficile à croire.
+
+La raison : une échelle animée oblige SwiftUI à RE-RENDRE tout le sous-arbre à chaque image (le
+texte est retracé à chaque facteur, il ne peut pas être simplement transformé). Confiée à
+CoreAnimation, la même échelle s'applique à une texture rendue UNE fois.
+
+`.compositingGroup()` et `.drawingGroup()` ont été essayés d'abord, pour rester en SwiftUI :
+614 → 578 et 528 ms/cycle, dans le bruit. Ils ne rachètent pas le rendu.
+
+L'entrée et la sortie sont donc jouées par `QuickEntryWindow.animate(_:to:)` : une
+`CASpringAnimation(perceptualDuration: 0.34, bounce: 0.38)` — les mêmes nombres que le ressort
+SwiftUI remplacé, `bounce` valant `1 − dampingFraction` — sur le `transform` et l'`opacity` du
+calque. **Résultat : 543 → 202 ms/cycle sur une manche, 102 sur une autre**, et **89** une fois le
+reste du chantier du jour en place (cf. plus bas). L'écart entre les manches vient des conditions
+(écran de rendu, second moniteur branché) et non du code ; le plancher, lui, est franc : l'app ne
+fait plus rien pendant l'animation.
+
+Vérifié à l'image près, les deux thèmes et les deux sens : la capsule grandit depuis son bord HAUT,
+sans image parasite à taille pleine avant l'entrée, et la sortie est symétrique. 26 bascules
+d'affilée sans plantage.
+
+Ce qui NE change pas : tout ce qui bouge À L'INTÉRIEUR de la capsule (un pan qui s'ouvre, la
+fournée qui grandit, la pastille de date) reste en SwiftUI, sous `withAnimation`. La frontière est
+la FENÊTRE : ce qui la fait entrer ou sortir appartient au calque, ce qui remue dedans appartient à
+SwiftUI.
+
+Deux pièges rencontrés en le faisant :
+
+- le pivot. Le `transform` d'un calque s'applique autour de son `anchorPoint`, et le déplacer fait
+  bouger le calque (AppKit le repositionne ensuite). On encadre donc l'échelle de deux translations
+  vers le haut de la capsule (`shrunk(in:)`) ;
+- la sortie dure ~400 ms pendant lesquelles la fenêtre est ENCORE visible. Sans `isClosing`, le
+  raccourci global frappé dans cet intervalle voyait une capsule « ouverte » et redemandait une
+  fermeture déjà en cours — donc ne faisait rien. Un compteur de génération invalide le démontage
+  différé quand une réouverture le double.
+
+### Ce qu'une capsule paie AVANT de paraître
+
+Même journée, même panneau. `panel.contentView = hosting` bloque le fil principal, et la fenêtre
+n'est ordonnée à l'écran qu'après. Mesuré : **51 à 68 ms** pour l'ensemble de `show()`, contre
+**1,4 ms** avec un contenu vide en témoin — tout vient donc de notre arbre de vues, pas d'AppKit.
+
+Décomposé, toujours en alternant dans le même process :
+
+| | coût |
+| --- | --- |
+| matérialisation des `@Query` (dont la table entière des tâches) | ~7 ms |
+| copie INVISIBLE de `destinationList`, rendue pour mesurer une hauteur | ~8 ms (36,1 → 28,2) |
+| Liquid Glass au premier rendu | ~0 ms (36,1 contre 35,0 — dans le bruit) |
+
+Deux surprises. Le verre, qu'on soupçonnait, ne coûte rien à la construction (il coûte au serveur
+de rendu, pas à l'app). Et une vue `.hidden()` coûte plein tarif : elle est rendue, elle n'est
+qu'invisible. Celle-ci mesurait un bloc que rien ne pouvait ouvrir à ce moment-là — elle est
+désormais bornée à l'étape où le chip de destination existe, ET à tant que la hauteur n'est pas
+connue (une fois mesurée elle est en `@State` pour la session).
+
+Le fetch complet d'une table, mesuré en release : **2,4 ms à 136 tâches, 8,7 à 500, 35 à 2 000.**
+D'où le `@Query` de la capsule remplacé par un chargement à la première frappe : la capsule s'ouvre
+sur une barre vide, qui n'a besoin d'aucune tâche.
+
+#### Le plus gros était la copie VISIBLE, pas la cachée
+
+Une fois la copie cachée bornée, il restait 28 ms. Dix-neuf d'entre eux venaient de la VRAIE liste
+des destinations. Le bloc qui la contient est délibérément TOUJOURS monté — c'est ce qui donne la
+fusion progressive du verre (cf. `destinationPane`) — et il est simplement replié à hauteur nulle.
+Mais **une hauteur nulle ne dispense pas de construire le contenu** : les douze rangées étaient
+bâties à chaque rendu de la capsule, chacune lisant `list.progress()`, qui retraverse les tâches de
+sa liste.
+
+Mesuré en alternance dans le même process : **27,6 ms contre 8,8** avec le contenu vidé. Le bloc
+reste monté ; son CONTENU ne l'est que quand il sert (`showsDestinations`), avec le décalage à la
+fermeture qu'utilise déjà `TaskRow.showEditor` — démonté d'un coup, le bloc se viderait sous les
+yeux avant d'avoir fini de se replier.
+
+**Total sur le chemin d'ouverture : `setContentView` passe de 36 à 9,6 ms de médiane.**
+
+#### Et la même copie cachée faisait tourner le body sept fois par frappe
+
+Diagnostic à la `Self._printChanges()` (lancé depuis le binaire du bundle, sortie capturée par un
+fichier plat — `print` vers un fichier redirigé est bufferisé et perdu au `kill`).
+
+La `GeometryReader` de la copie de mesure publiait sa préférence à chaque passe de layout, ce qui
+réécrivait `destinationHeight`, ce qui réinvalidait le body, qui relayoutait. Chaque frappe dans la
+barre déclenchait **sept à huit évaluations du body**, chacune reconstruisant toute la palette. En
+bornant la copie, on tombe à **une** (deux sur la première frappe, le temps de charger les tâches).
+
+D'où la garde `if $0 > 0` sur `onPreferenceChange` : zéro n'est pas une mesure, c'est le défaut de
+la clé — celui que la copie publie en partant. Le retenir la ferait remonter aussitôt, et les deux
+se relanceraient sans fin.
+
+### Une rangée qui relit cinq fois la même relation
+
+(22 août 2026.) `TaskRow` lisait `task.subtasks` **cinq fois par rendu** : `orderedSubtasks` pour
+savoir s'il y en a (donc un tri, pour un booléen), `isEmpty` pour décider du résumé, `count` puis
+`filter` pour le remplir, `count` encore pour la courbe. Les pages se construisent EN ENTIER — pas
+de `LazyVStack`, c'est acquis — donc chaque rangée payait à chaque rendu.
+
+Mesuré en release :
+
+| | 136 tâches | 2 000 |
+| --- | --- | --- |
+| cinq accès par rangée | 0,73 ms | 10,8 ms |
+| une passe (`SubtaskTally`) | **0,18 ms** | **3,05 ms** |
+| pour comparaison, une propriété STOCKÉE (`title`) | 0,07 ms | 1,0 ms |
+
+Dix fois le prix d'une lecture mémoire. Le correctif est celui du projet — construire une fois,
+distribuer — mais posé en tête du body de la RANGÉE plutôt que de la page : cinq accès deviennent
+un, sans toucher à la signature de `TaskRow` ni aux cinq pages. Descendre à zéro demanderait à la
+page de charger toutes les sous-tâches en une requête et de les grouper ; c'est un autre chantier,
+et il n'a pas lieu d'être à cette taille de base.
+
+### Le tableau d'un projet recomptait ce qu'il venait de compter
+
+`ProjectBoard` existe précisément pour ne parcourir les tâches d'une liste qu'UNE fois par carte —
+son en-tête le dit. Et `ListCardView` appelait quand même `card.list.progress()` pour son anneau,
+soit un second parcours complet par carte, à chaque rendu de la page. L'anneau est désormais
+calculé dans la même passe (`Card.progress`), avec la même règle que `TodoList.progress` et
+`SidebarCounts` (`countsTowardProgress`, en-têtes exclues) — déplacée, pas réécrite. Quatre tests
+la tiennent.
+
+Même motif dans les deux palettes de destinations (`SidebarMenu`, `QuickFindPanel`) : elles
+affichent TOUTES les listes quand le champ est vide, et chaque rangée lisait `list.progress()`.
+Elles avaient déjà toutes les tâches sous la main — un `SidebarCounts` en tête de leur carte, et
+les rangées ne lisent plus rien.
 
 ---
 

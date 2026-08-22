@@ -1820,7 +1820,7 @@ private struct ListCardView: View {
 
   private var title: some View {
     HStack(spacing: 8) {
-      ProgressRing(progress: card.list.progress(), size: 18)
+      ProgressRing(progress: card.progress, size: 18)
         .tint(card.list.project?.color?.color)
       Text(card.list.title.isEmpty ? "Sans titre" : card.list.title)
         .font(.app(.headline))

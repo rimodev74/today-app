@@ -91,7 +91,14 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
   rangées, sinon la ligne en édition disparaît. → `PIEGES.md` § Layout.
 - **Une propriété calculée d'un `@Model` ne se lit JAMAIS depuis une rangée** — `progress`,
   `remainingCount`, `orderedTasks`… Chaque lecture traverse SwiftData. Elle se calcule UNE fois en
-  tête du `body` qui rend la collection, puis se distribue (cf. `SidebarCounts`, `TodayPage.build`).
+  tête du `body` qui rend la collection, puis se distribue (cf. `SidebarCounts`, `TodayPage.build`,
+  `ProjectBoard.Card`, `SubtaskTally`). Vaut aussi pour une RELATION relue plusieurs fois dans la
+  même rangée : mesuré 0,73 ms par rendu de page contre 0,18 une fois lue en une passe.
+- **Une vue invisible coûte plein tarif.** `.hidden()` est rendu ; un bloc replié à hauteur nulle
+  construit tout son contenu. Mesuré sur la capsule : 8 ms pour une copie cachée servant à mesurer
+  une hauteur, 19 ms pour une liste repliée que personne ne regardait — sur 36 ms d'ouverture.
+  Une `GeometryReader` posée dans une telle copie coûte en plus : sa préférence réécrit un `@State`
+  à chaque passe de layout, et le body se rejouait **sept fois par frappe**. → `PIEGES.md`.
 - **Le corps d'une vue qui porte un `@Query` se rejoue bien plus souvent qu'on ne le croit** :
   SwiftData l'invalide sans qu'AUCUNE écriture n'ait lieu. Il doit être **bon marché**, pas rare.
 - **Tout nouveau tri sur un `@Model` passe par `sortedByKey`**, jamais par `.sorted { }` — une
@@ -121,6 +128,11 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
   changer change TOUTES les pages. Besoin local ⇒ courbe nommée, pas un ajustement en douce.
 - **Tout dépliant : `disclosureFlow` sur la MUTATION + un fondu EXPLICITE sur le contenu.** Jamais un
   `@AppStorage` comme état — son écriture échappe à la transaction animée. → `PIEGES.md` § Animations.
+- **L'entrée et la sortie d'une FENÊTRE se jouent sur le CALQUE, pas en SwiftUI.** Une échelle animée
+  fait re-rendre tout le sous-arbre à chaque image — mesuré sur la capsule : 543 ms de CPU par cycle
+  contre 89 une fois confiée à une `CASpringAnimation` (`QuickEntryWindow.animate`). La frontière
+  est la fenêtre : ce qui la fait paraître appartient au calque, ce qui remue dedans reste en
+  SwiftUI. → `PIEGES.md` § Animations.
 
 ### 4. Les fenêtres
 

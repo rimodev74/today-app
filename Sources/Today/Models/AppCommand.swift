@@ -96,12 +96,16 @@ enum AppCommand: String, CaseIterable, Identifiable {
   /// AppKit, hors de l'arbre de vues, et n'a aucun autre moyen d'atteindre cet état.
   static let selectionNotification = Notification.Name("app.today.selectSmartList")
 
-  /// Le relais pour la fenêtre qui n'existe pas encore. `activate` peut RECRÉER la fenêtre
-  /// principale (elle avait été fermée au bouton rouge) : la notification part alors avant que la
-  /// `ContentView` neuve ne se soit abonnée, et se perdrait. Elle la lit à son apparition.
+  /// Le relais pour la fenêtre qui n'existe pas ENCORE, et pour elle seule. `activate` peut
+  /// RECRÉER la fenêtre principale (elle avait été fermée au bouton rouge) : aucune notification ne
+  /// peut atteindre une vue qui n'est pas née, la destination est donc déposée ici et la
+  /// `ContentView` neuve la lit à son apparition.
+  ///
+  /// Fenêtre vivante, la destination passe par la notification et ne transite JAMAIS par ce dépôt —
+  /// un jeton à consommer une fois, servi à plusieurs abonnés, va au mauvais (cf. `deliver`).
   ///
   /// Une `SidebarSelection` et plus seulement une `SmartList` : la palette de la capsule sait
-  /// désormais ouvrir l'app sur un DOSSIER ou une LISTE (⌘↩), pas seulement sur une vue.
+  /// ouvrir l'app sur un DOSSIER ou une LISTE (⌘↩), pas seulement sur une vue.
   @MainActor static var pendingSelection: SidebarSelection?
 
   @MainActor func run() {
@@ -118,15 +122,23 @@ enum AppCommand: String, CaseIterable, Identifiable {
     deliver(selection, toLiveWindow: show.activate())
   }
 
-  /// Pose la destination, et ne réveille par notification que la fenêtre DÉJÀ vivante.
+  /// Achemine la destination — par notification s'il y a une fenêtre, par dépôt sinon.
   ///
-  /// Fenêtre recréée, la notification est pire qu'inutile : la `ContentView` sortante est encore
-  /// abonnée, elle consomme la sélection sans jamais la montrer, et la neuve démarre alors sur sa
-  /// valeur par défaut — « Aujourd'hui ». C'est à elle de la lire, à son apparition.
+  /// La destination VOYAGE avec la notification, elle n'est pas posée quelque part où le premier
+  /// abonné venu la prendrait. Une `ContentView` dont la fenêtre est fermée n'est PAS démontée :
+  /// elle reste abonnée, et `NotificationCenter` sert dans l'ordre d'inscription — donc la plus
+  /// ANCIENNE, invisible, consommait la destination et celle à l'écran n'avait plus rien. Mesuré le
+  /// 13 août 2026 : ⌘↩ cassé jusqu'au redémarrage dès la première fenêtre fermée puis rouverte.
+  /// Portée par la notification, la destination est lue par toutes — celle à l'écran comprise.
+  ///
+  /// Le dépôt ne sert plus qu'au cas où il n'y a AUCUNE fenêtre : `activate` vient d'en demander
+  /// une, elle la lira à son apparition (cf. `ContentView.applyPendingSelection`).
   @MainActor private static func deliver(_ selection: SidebarSelection, toLiveWindow live: Bool) {
-    pendingSelection = selection
-    guard live else { return }
-    NotificationCenter.default.post(name: selectionNotification, object: nil)
+    guard live else {
+      pendingSelection = selection
+      return
+    }
+    NotificationCenter.default.post(name: selectionNotification, object: selection)
   }
 
   /// Le minuteur, piloté au clavier. `PomodoroTimer.shared` et pas l'instance de l'environnement :
