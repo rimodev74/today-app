@@ -29,6 +29,20 @@ final class QuickEntryWindow {
   /// de la capsule, et sa traîne va plus loin encore (un flou n'a pas de bord net). 32pt le coupait
   /// au ras de la fenêtre — un aplat au lieu d'un fondu.
   static let capsuleTopInset: CGFloat = 56
+  /// La hauteur de la barre repliée — le seul bloc TOUJOURS visible de la capsule. C'est elle qu'on
+  /// centre, pas la fenêtre : celle-ci descend 500pt plus bas pour loger les résultats.
+  /// ponytail: mesurée sur le rendu (champ en `.app(20)` + 15pt de retrait haut et bas) plutôt que
+  /// relevée à l'exécution — la position est calculée avant que le contenu existe.
+  static let capsuleBarHeight: CGFloat = 56
+
+  /// Où la barre se pose DANS l'écran, en FRACTIONS de la zone utile — 0,5 / 0,5, le centre, tant
+  /// qu'on ne l'a pas déplacée. Une fraction et pas des points : la capsule paraît sur l'écran où
+  /// l'on travaille, et deux écrans n'ont ni la même taille ni la même origine.
+  ///
+  /// Surtout pas l'autosave d'AppKit (`setFrameAutosaveName`) : il enregistre le CADRE avec la
+  /// configuration d'écrans du moment, puis remet la fenêtre « à l'échelle » dès qu'elle change.
+  /// C'est par là que la capsule dérivait. → `PIEGES.md` § Fenêtres.
+  private static let barCenterKey = "quickEntry.barCenter"
 
   /// Le panneau, créé UNE fois et GARDÉ pour la vie du process. Le jeter à chaque fermeture coûtait
   /// un plantage : le champ de texte de la capsule fait créer la liste de complétion d'AppKit, qui
@@ -73,6 +87,13 @@ final class QuickEntryWindow {
   func show(container: ModelContainer, prefill: String = "") {
     let panel = self.panel ?? makePanel()
     self.panel = panel
+    // Un glissement interrompu par une fermeture ne voit JAMAIS son `onEnded` : le contenu SwiftUI,
+    // et le geste avec lui, viennent d'être remplacés. Sans cette remise à zéro, l'ancre périmée
+    // ferait sauter la capsule au premier mouvement du glissement suivant.
+    dragAnchor = nil
+    // Replacée à CHAQUE ouverture : la capsule doit paraître là où l'on travaille, pas là où on l'a
+    // laissée la fois d'avant — sur un autre écran, ou sur un écran débranché depuis.
+    position(panel)
 
     let channel = QuickEntryChannel()
     self.channel = channel
@@ -228,16 +249,10 @@ final class QuickEntryWindow {
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false  // l'ombre vient du verre, à la forme de la capsule
-    panel.isMovableByWindowBackground = true
-    panel.setFrameAutosaveName("QuickEntryPanel")
-    // La POSITION survit aux lancements : `setFrameUsingName` relit celle où on a laissé la capsule
-    // (AppKit l'écrit dans les défauts à chaque déplacement, grâce à l'autosave ci-dessus). Faux au
-    // tout premier lancement, et seulement là, on retombe sur le tiers haut.
-    if !panel.setFrameUsingName(panel.frameAutosaveName) { position(panel) }
-    // L'autosave garde le CADRE entier, taille comprise : un cadre enregistré par une version plus
-    // étroite imposerait son ancienne largeur, et la barre resterait serrée pour qui a déjà déplacé
-    // la capsule une fois. On ne reprend donc de lui que l'ENDROIT.
-    panel.setContentSize(Self.panelSize)
+    // PAS `isMovableByWindowBackground` : AppKit ne le consulte que sur une vue qui laisse passer le
+    // clic, et tout le contenu ici est du SwiftUI qui le consomme — le glissement ne prenait que sur
+    // la marge transparente, invisible, et rien n'enregistrait ce qu'il posait. La barre s'attrape
+    // explicitement (`QuickEntryView.windowDrag`).
     panel.isFloatingPanel = true
     panel.becomesKeyOnlyIfNeeded = false
     panel.hidesOnDeactivate = false
@@ -250,17 +265,112 @@ final class QuickEntryWindow {
     return panel
   }
 
-  /// Au tiers supérieur, pas au centre : c'est là que Spotlight se pose, et l'œil y va sans chercher.
+  /// Toute l'arithmétique du placement, testée à part (`QuickEntryPlacementTests`).
+  private static let placement = QuickEntryPlacement(
+    panelSize: panelSize, barWidth: capsuleWidth, barHeight: capsuleBarHeight,
+    topInset: capsuleTopInset)
+
+  /// La barre, posée à sa fraction d'écran sur l'écran ACTIF.
   private func position(_ panel: NSPanel) {
-    guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else {
-      panel.center()
+    guard let visible = Self.activeScreen?.visibleFrame else { return }
+    let fraction = Self.savedBarCenter ?? CGPoint(x: 0.5, y: 0.5)
+    panel.setFrameOrigin(
+      Self.placement.panelOrigin(
+        barCenter: Self.placement.barCenter(fraction: fraction, in: visible)))
+  }
+
+  /// Une valeur trafiquée dans les défauts arrive telle quelle : c'est `QuickEntryPlacement` qui la
+  /// rend inoffensive, seul endroit par lequel elle passe.
+  private static var savedBarCenter: CGPoint? {
+    UserDefaults.standard.string(forKey: barCenterKey).map(NSPointFromString)
+  }
+
+  /// L'écran où l'utilisateur travaille : celui de la fenêtre au premier plan. Pas la souris — la
+  /// capsule s'ouvre au CLAVIER depuis n'importe quelle app, et le pointeur peut être resté sur un
+  /// autre écran. Pas `NSScreen.main` non plus : sur une app qui n'est pas au premier plan,
+  /// « principal » suit la fenêtre clé, celle d'une AUTRE app. La souris ne sert que de repli, quand
+  /// l'app de devant n'a aucune fenêtre ordinaire (le Finder sur le bureau).
+  private static var activeScreen: NSScreen? {
+    screen(containing: frontWindowCenter() ?? NSEvent.mouseLocation) ?? NSScreen.main
+  }
+
+  private static func screen(containing point: CGPoint) -> NSScreen? {
+    NSScreen.screens.first { $0.frame.contains(point) }
+  }
+
+  /// Le centre de la fenêtre de devant de l'app active, en coordonnées Cocoa.
+  ///
+  /// `CGWindowListCopyWindowInfo` et pas l'API d'accessibilité : celle-ci demande une autorisation
+  /// que l'app n'a aucune raison de réclamer pour ça. La liste vient de l'avant vers l'arrière, et
+  /// `layer 0` écarte panneaux flottants et menus, qui ne disent rien de l'endroit où l'on travaille.
+  /// Mesuré le 22 août 2026 : 0,52 ms en moyenne (14 fenêtres à l'écran), une fois par ouverture.
+  private static func frontWindowCenter() -> CGPoint? {
+    guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+      let windows = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+      // L'origine de Quartz est en HAUT à gauche de l'écran principal, celle de Cocoa en bas.
+      let flip = NSScreen.screens.first?.frame.maxY
+    else { return nil }
+    for window in windows
+    where window[kCGWindowOwnerPID as String] as? pid_t == pid
+      && window[kCGWindowLayer as String] as? Int == 0
+    {
+      guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
+        let x = bounds["X"], let y = bounds["Y"],
+        let width = bounds["Width"], let height = bounds["Height"]
+      else { continue }
+      return CGPoint(x: x + width / 2, y: flip - (y + height / 2))
+    }
+    return nil
+  }
+
+  // MARK: Déplacement
+
+  /// L'ancre du glissement en cours : où était le panneau, où était le pointeur.
+  ///
+  /// Les deltas se prennent sur `NSEvent.mouseLocation` et pas sur la translation du geste SwiftUI :
+  /// la fenêtre bouge SOUS le curseur, donc une translation mesurée dans la vue se réinjecterait
+  /// dans elle-même à chaque image et la capsule s'emballerait.
+  private var dragAnchor: (origin: NSPoint, mouse: NSPoint)?
+
+  /// La distance à laquelle l'aimant de ⌘ prend. 60pt : assez pour se sentir sans qu'on ait à viser,
+  /// assez peu pour qu'on puisse encore poser la barre à 100pt du centre si on le veut.
+  private static let snapDistance: CGFloat = 60
+
+  func dragMoved() {
+    guard let panel else { return }
+    let anchor = dragAnchor ?? (panel.frame.origin, NSEvent.mouseLocation)
+    dragAnchor = anchor
+    let mouse = NSEvent.mouseLocation
+    let free = NSPoint(
+      x: anchor.origin.x + mouse.x - anchor.mouse.x,
+      y: anchor.origin.y + mouse.y - anchor.mouse.y)
+    // `NSEvent.modifierFlags` lit l'état COURANT du clavier : la touche peut être prise ou lâchée en
+    // plein glissement, l'aimant suit sans qu'on ait à suivre des frappes.
+    let center = Self.placement.barCenter(ofPanel: NSRect(origin: free, size: panel.frame.size))
+    guard NSEvent.modifierFlags.contains(.command),
+      let visible = (Self.screen(containing: center) ?? panel.screen)?.visibleFrame
+    else {
+      panel.setFrameOrigin(free)
       return
     }
-    let size = panel.frame.size
     panel.setFrameOrigin(
-      NSPoint(
-        x: visible.midX - size.width / 2,
-        y: visible.maxY - visible.height * 0.20 - size.height))
+      Self.placement.panelOrigin(
+        barCenter: Self.placement.snappedToCenter(
+          barCenter: center, in: visible, within: Self.snapDistance)))
+  }
+
+  /// La position n'est écrite qu'ICI : une fois, à la fin du geste, en fraction de l'écran où on
+  /// vient de poser la barre — c'est ce qui la fera revenir au même endroit RELATIF sur l'écran où
+  /// l'on travaillera la prochaine fois.
+  func dragEnded() {
+    guard let panel, dragAnchor != nil else { return }
+    dragAnchor = nil
+    let center = Self.placement.barCenter(ofPanel: panel.frame)
+    guard let visible = (Self.screen(containing: center) ?? panel.screen)?.visibleFrame,
+      let fraction = Self.placement.fraction(barCenter: center, in: visible)
+    else { return }
+    UserDefaults.standard.set(NSStringFromPoint(fraction), forKey: Self.barCenterKey)
   }
 }
 
@@ -597,6 +707,7 @@ private struct QuickEntryView: View {
   private func stack(_ palette: QuickPalette) -> some View {
     VStack(spacing: 0) {
       pane(.bar, shape: Capsule()) { bar(palette) }
+        .gesture(windowDrag)
       destinationPane
       if expanded {
         pane(.details, shape: RoundedRectangle(cornerRadius: 22, style: .continuous)) {
@@ -620,6 +731,18 @@ private struct QuickEntryView: View {
         .padding(.horizontal, 14)
       }
     }
+  }
+
+  /// La barre s'attrape comme une barre de titre : c'est le seul moyen de déplacer une fenêtre sans
+  /// chrome. Le geste ne sert qu'à dire « le bouton est enfoncé et ça bouge » — le calcul est chez
+  /// `QuickEntryWindow`, seul à savoir où en est le panneau.
+  ///
+  /// Parti du champ de texte, un glissement SÉLECTIONNE : AppKit y traite l'événement avant SwiftUI,
+  /// et c'est exactement ce que fait Spotlight. On attrape la barre par ses bords.
+  private var windowDrag: some Gesture {
+    DragGesture(minimumDistance: 3)
+      .onChanged { _ in QuickEntryWindow.shared.dragMoved() }
+      .onEnded { _ in QuickEntryWindow.shared.dragEnded() }
   }
 
   // MARK: Palette

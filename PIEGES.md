@@ -163,6 +163,65 @@ il n'y a, par définition, personne pour se la disputer.
 Un état « à consommer une fois » ne se diffuse pas ; ou bien on l'adresse, ou bien on transporte la
 valeur et chacun s'en sert.
 
+### L'autosave de cadre d'AppKit fait DÉRIVER la capsule
+
+`setFrameAutosaveName` enregistrait le cadre de la capsule avec la configuration d'écrans du moment
+(`"1076 228 770 620 0 0 2056 1290"`) et remettait la fenêtre « à l'échelle » dès que cette
+configuration changeait. Sur deux écrans branchés et débranchés au fil des jours, la barre finissait
+n'importe où — d'où « une position totalement aléatoire », le 22 août 2026.
+
+Remplacé par une position à nous (`quickEntry.barCenter`), en **fractions de la zone utile de
+l'écran** — 0,5 / 0,5 tant qu'on ne l'a pas déplacée. Une fraction et pas des points : la capsule doit
+paraître sur l'écran où l'on TRAVAILLE, et deux écrans n'ont ni la même taille ni la même origine.
+Relue à chaque ouverture, bornée pour que la barre tienne en entier dans l'écran visé.
+
+Trois choses à ne pas confondre :
+
+- **On centre la BARRE, pas la fenêtre.** Le panneau fait 620pt de haut pour loger les résultats, la
+  barre en occupe ~56 tout en haut : centrer le cadre poserait la barre très au-dessus du milieu.
+- **L'écran actif, c'est celui de la FENÊTRE AU PREMIER PLAN — pas celui de la souris.** La capsule
+  s'ouvre au clavier depuis n'importe quelle app ; le pointeur, lui, peut être resté sur l'autre
+  écran. Vérifié le 22 août 2026 : souris sur le 5K, Warp au premier plan sur l'écran interne — la
+  capsule paraît sur l'interne. `CGWindowListCopyWindowInfo` suffit (`layer 0`, l'avant de la liste)
+  et ne demande AUCUNE autorisation, là où l'API d'accessibilité en réclamerait une. Mesuré 0,52 ms
+  en moyenne sur 14 fenêtres, une fois par ouverture. La souris ne sert que de repli.
+- **`NSScreen.main` est faux ici** : sur une app qui n'est pas au premier plan, « principal » suit la
+  fenêtre clé, qui appartient à une AUTRE app.
+
+### `isMovableByWindowBackground` ne déplace pas une fenêtre remplie de SwiftUI
+
+AppKit ne consulte ce réglage que sur la vue que le test de survol lui rend, et seulement si elle
+laisse passer le clic. Tout le contenu de la capsule est du SwiftUI qui le consomme : le glissement
+ne prenait que sur la marge transparente autour du verre — invisible, donc introuvable — et rien
+n'enregistrait ce qu'il posait. D'où « quand je tente de la drag, il ne se passe rien ».
+
+La barre s'attrape maintenant explicitement (`QuickEntryView.windowDrag`), comme une barre de titre.
+Deux points qui ont l'air d'un détail et n'en sont pas :
+
+- **Les deltas viennent de `NSEvent.mouseLocation`, pas de la translation du geste.** La fenêtre bouge
+  SOUS le curseur : une translation mesurée dans la vue se réinjecte dans elle-même à chaque image et
+  la capsule s'emballe. L'ancre (origine du panneau + pointeur) est prise au premier `onChanged`, et
+  chaque image repart d'elle — aucune accumulation.
+- **Parti du champ de texte, le glissement SÉLECTIONNE** : AppKit traite l'événement avant SwiftUI.
+  C'est exactement ce que fait Spotlight ; on attrape la barre par ses bords.
+
+Vérifié le 22 août 2026 avec un banc jetable (`CGWarpMouseCursorPosition` + `NSApp.postEvent`, aucune
+autorisation d'accessibilité nécessaire) : le panneau se déplace, et la fraction écrite correspond au
+centre de barre posé.
+
+**L'aimant de ⌘** colle chaque axe au centre de l'écran quand la barre en passe à moins de 60pt, les
+deux INDÉPENDAMMENT — c'est ce qui en fait une aide au placement et pas un bouton « au centre ».
+L'état de la touche se lit sur `NSEvent.modifierFlags`, l'état COURANT du clavier : on peut la
+prendre et la lâcher en plein glissement. `DragGesture().modifiers(.command)` ne convenait pas — il
+faudrait DEUX gestes, et basculer de l'un à l'autre au milieu d'un glissement ne marche pas.
+
+**Toute cette arithmétique est sortie dans `Models/QuickEntryPlacement.swift`** (`QuickEntryPlacementTests`,
+12 cas). Elle faisait cinq calculs de rectangles mêlés à `NSPanel` et `NSScreen`, vérifiables
+seulement à l'œil, alors qu'une erreur de signe entre le repère de Cocoa et le décalage de la fenêtre
+au-dessus de sa barre s'y voit très mal. Le test le plus utile est celui de l'écran secondaire, à
+coordonnées négatives : il fige le couple mesuré en vrai (zone utile `(-479, 1329, 2560, 1410)` →
+centre de barre `(801, 2034)`).
+
 ### Reconstruire le bundle sous les pieds d'une instance vivante
 
 `Scripts/make-app.sh` REFUSE de tourner si une instance de Today est en cours : reconstruire sous
