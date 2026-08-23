@@ -56,6 +56,16 @@ struct QuickPalette {
     }
   }
 
+  /// L'état du minuteur, vu par la palette. Un instantané de VALEURS et pas `PomodoroTimer` : ce
+  /// type se vérifie sans fenêtre ni singleton, et c'est tout son intérêt (cf. l'en-tête).
+  struct PomodoroSnapshot: Equatable {
+    let phaseLabel: String
+    let remaining: String
+    /// Une phase ATTEND qu'on la lance : engagée, arrêtée. C'est le seul état où la reprise a un
+    /// sens — sinon « Lancer un pomodoro » (rien n'a commencé) ou « Mettre en pause » (ça tourne).
+    let isWaiting: Bool
+  }
+
   enum Action {
     /// Demande un titre : la capsule passe à sa seconde étape.
     case addTask(TaskTarget)
@@ -65,6 +75,10 @@ struct QuickPalette {
     case complete(TaskItem)
     /// Immédiat.
     case run(AppCommand)
+    /// Immédiat : lance la phase qui ATTEND. Aucune commande ne sait le faire — `pomodoroStart`
+    /// rouvre un travail, les deux autres ouvrent une pause neuve ; après une fin d'étape sans
+    /// enchaînement, ce qui attend est une pause déjà prête, qu'il ne faut ni rouvrir ni passer.
+    case startPomodoro
 
     /// Ce que la ligne annonce à droite. C'est la promesse de ↩, écrite noir sur blanc — sans elle,
     /// le principe « la ligne porte l'action » ne se devine qu'à l'usage.
@@ -73,7 +87,7 @@ struct QuickPalette {
       case .addTask: return "Ajouter une tâche"
       case .createList: return "Créer une liste"
       case .complete: return "Valider"
-      case .run: return "Lancer"
+      case .run, .startPomodoro: return "Lancer"
       }
     }
   }
@@ -132,8 +146,11 @@ struct QuickPalette {
   /// « À venir » et « Archives » ne sont jamais proposés comme endroits, et c'est un choix : on
   /// n'y AJOUTE rien (l'une est définie par une date future, l'autre par la complétion). Elles
   /// restent atteignables par les commandes « Afficher À venir » / « Afficher Archives ».
+  /// `pomodoro` vaut `nil` quand il n'y a rien à en dire — c'est le défaut, et c'est le cas de la
+  /// plupart des appels : un minuteur au repos ne propose rien de plus que ses commandes.
   static func search(
-    _ query: String, lists: [TodoList], projects: [Project], tasks: [TaskItem]
+    _ query: String, lists: [TodoList], projects: [Project], tasks: [TaskItem],
+    pomodoro: PomodoroSnapshot? = nil
   ) -> QuickPalette {
     let needle = fold(query)
     guard !needle.isEmpty else { return QuickPalette(rows: []) }
@@ -188,12 +205,23 @@ struct QuickPalette {
       .prefix(commandLimit)
       .map { pair in { commandRow(pair.0) } }
 
+    // La reprise passe DEVANT les cinq commandes : c'est la seule qui sache ce qui attend, les
+    // autres proposent d'ouvrir autre chose. Elle se cherche aussi par le nom de sa phase — après
+    // un travail, on tape « pause » aussi souvent que « pomodoro ».
+    var commandMakers = commands
+    if let pomodoro, pomodoro.isWaiting,
+      ["reprendre", "pomodoro", "minuteur", pomodoro.phaseLabel]
+        .compactMap({ quality(of: fold($0), for: needle) }).min() != nil
+    {
+      commandMakers.insert({ resumeRow(pomodoro) }, at: 0)
+    }
+
     // Elles se glissent AVANT les tâches et après les endroits : ce sont des actions, elles se
     // rangent avec ce qui emmène quelque part, pas avec le contenu. Le POIDS suffit à trouver la
     // frontière — inutile de construire une ligne pour lire sa nature.
     var makers = places.map(\.make)
     makers.insert(
-      contentsOf: commands, at: places.firstIndex { $0.weight == taskWeight } ?? places.count)
+      contentsOf: commandMakers, at: places.firstIndex { $0.weight == taskWeight } ?? places.count)
     return QuickPalette(rows: makers.prefix(limit).map { $0() })
   }
 
@@ -258,6 +286,16 @@ struct QuickPalette {
       detail: task.when?.formatted(.dateTime.day().month(.abbreviated)),
       isCompleted: task.isCompleted, action: .complete(task),
       destination: task.list.map { .list($0) })
+  }
+
+  /// La ligne qui lance ce qui attend. Son titre porte la PHASE, pas un verbe seul : « Reprendre »
+  /// sans dire quoi obligerait à se souvenir d'où l'on en était, ce que la capsule existe pour
+  /// éviter. Le temps restant va à droite, comme la date d'une tâche.
+  private static func resumeRow(_ pomodoro: PomodoroSnapshot) -> Row {
+    Row(
+      id: AnyHashable("pomodoro-resume"), title: "Reprendre : " + pomodoro.phaseLabel,
+      kind: "Pomodoro", systemImage: "play.fill", detail: pomodoro.remaining, isCompleted: false,
+      action: .startPomodoro, destination: nil)
   }
 
   private static func commandRow(_ command: AppCommand) -> Row {

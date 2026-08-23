@@ -282,6 +282,15 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   Musique, cf. `Services/MusicPlayer.swift`), fondu jusqu'au silence avant l'alarme, playlists dans
   les défauts. La règle qui porte tout est `PomodoroTimer.syncMusic` : _elle joue si et seulement si
   un travail est en cours._
+  La fin d'étape s'annonce selon `PomodoroAlertStyle` (Réglages ▸ Pomodoro ▸ Fin d'étape) : rien, la
+  pastille, ou un écran plein (`PomodoroAlertWindow`). L'écran plein ne sert qu'après un TRAVAIL, et
+  il PREND LA MAIN — `takesOver(after:)` suspend l'enchaînement automatique, c'est son bouton qui
+  ouvre la pause. Sans réponse, il s'efface seul au bout de 30 s, comme un « Fermer » : la phase
+  suivante n'est PAS lancée. Son niveau de fenêtre est `.statusBar`, jamais `.screenSaver`
+  (→ `PIEGES.md`).
+  Quand une phase attend, la capsule ajoute « Reprendre : <phase> » en tête de son bloc Pomodoro
+  (`QuickPalette.PomodoroSnapshot`) : c'est la seule ligne qui lance CE qui attend — les cinq
+  commandes, elles, ouvrent autre chose.
 - **Rappels / Calendrier Apple** — lecture, report de complétion, et pont bidirectionnel optionnel
   (`RemindersSync`) : une liste Rappels désignée dans les Réglages, les tâches datées y partent, ses
   rappels datés en reviennent. `needsPush` empêche la boucle. Vérifié à la main le 6 août 2026 dans

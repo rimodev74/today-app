@@ -40,6 +40,17 @@ final class HUDWindow {
     shared.present(message, systemImage: systemImage, tint: tint)
   }
 
+  /// La pastille d'une phase qui S'OUVRE — même texte, même icône, même couleur d'où qu'elle
+  /// vienne : une fin d'étape (`PomodoroAlertWindow.announce`) ou une reprise depuis la capsule.
+  /// Deux endroits l'écrivaient à la main, ils auraient divergé au premier ajustement.
+  static func showPomodoro(_ phase: PomodoroPhase, duration: String) {
+    let isWork = phase == .work
+    show(
+      phase.label + " · " + duration,
+      systemImage: isWork ? "play.fill" : "cup.and.saucer.fill",
+      tint: isWork ? .red : .blue)
+  }
+
   private func present(_ message: String, systemImage: String, tint: Color?) {
     let panel = self.panel ?? makePanel()
     self.panel = panel

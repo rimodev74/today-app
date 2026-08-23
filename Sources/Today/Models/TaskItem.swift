@@ -53,8 +53,9 @@ final class TaskItem {
   /// ne doit pas déplacer son heure. Le remplaçant de `hasTime`, retiré au schéma 2.0.0 faute de
   /// sélecteur — il revient AVEC le sien, comme annoncé.
   var whenMinutes: Int?
-  /// Échéance (deadline) — distincte de `when` (jour planifié). Affichée à droite de la ligne
-  /// avec un drapeau, en rouge une fois atteinte ou dépassée.
+  /// Échéance (deadline) — distincte de `when` (jour planifié). PLUS AUCUNE INTERFACE ne la pose ni
+  /// ne l'affiche depuis le retrait du panneau « Échéance » : le champ ne survit que pour ne pas
+  /// jeter ce que les anciennes versions ont écrit. Rien à lire ici tant qu'il n'est pas rebranché.
   var deadline: Date?
   var priorityRaw: Int = 0
   /// Durée estimée en minutes, 0 = non estimée (cf. `Estimate`). C'est elle que la page

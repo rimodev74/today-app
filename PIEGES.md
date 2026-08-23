@@ -30,7 +30,7 @@ ferme passe 12 fois sur 12. C'est la présentation depuis le layout qui casse.
 
 Conséquence : **une palette, un sélecteur, un panneau ne prennent pas de fenêtre** — ils se révèlent
 DANS la fenêtre (cf. `PalettePicker`, et `QuickFindPanel` avant lui). Les popovers qui restent
-(`WhenPicker`, `DeadlinePicker`, la date d'une liste) sont sous la même menace ; celui de `TaskRow`
+(`WhenPicker`, la date d'une liste) sont sous la même menace ; celui de `TaskRow`
 se referme avant d'écrire, ce qui traite le symptôme, pas la cause.
 
 ### Donner le premier répondeur dans une fenêtre JAMAIS affichée arme un plantage différé
@@ -113,8 +113,8 @@ hébergé un champ focalisé », vue depuis un panneau qu'on croyait inoffensif 
 « qu'un sélecteur ».
 
 Remplacé par deux menus déroulants (heure, minutes au pas de 5) : un `NSPopUpButton` ne prend jamais
-le premier répondeur texte. **Ça ne rend pas les popovers sûrs** — `WhenPicker`, `DeadlinePicker`, la
-date d'une liste et la feuille `SchedulePlannerView` (qui, elle, a encore un champ Titre ET deux
+le premier répondeur texte. **Ça ne rend pas les popovers sûrs** — `WhenPicker`, la date d'une liste
+et la feuille `SchedulePlannerView` (qui, elle, a encore un champ Titre ET deux
 champs d'heure) restent des fenêtres présentées depuis le layout. Le correctif de fond reste le même
 qu'ailleurs : se révéler DANS la fenêtre.
 
@@ -266,6 +266,39 @@ bundle : c'est l'adresse de retour d'`objc_exception_throw` résolue au symbole 
 proche, pas un appel réel. Ce fichier a bâti sur lui le diagnostic du « plantage fantôme » —
 l'explication reste plausible pour le cas de `make-app.sh`, mais **cette frame n'en est pas la
 preuve**.
+
+### Une fenêtre au niveau `.screenSaver` est INVISIBLE à `screencapture`
+
+L'écran plein de fin d'étape du Pomodoro (`PomodoroAlertWindow`) a d'abord été posé au niveau
+`.screenSaver`, pour couvrir la barre de menus. Résultat : quatre captures d'écran de suite ne
+montraient RIEN, sur les deux écrans, alors que la fenêtre était bien là — tracé depuis le process,
+`visible=true key=true alpha=1.0 occlusion=.visible`, au cadre exact de l'écran. Au-delà du niveau
+bouclier, le serveur de fenêtres sort la fenêtre des captures, exactement comme il le fait de
+l'économiseur d'écran et de la fenêtre d'ouverture de session.
+
+`.statusBar` (25) suffit : il passe déjà au-dessus de la barre de menus (`.mainMenu`, 24) et du Dock,
+et c'est le niveau que la pastille utilise depuis toujours. Une fenêtre qu'on ne peut pas capturer
+est une fenêtre qu'on ne peut pas vérifier.
+
+**Corollaire de méthode** : quand une capture est vide, tracer l'état de la fenêtre AVANT de
+soupçonner le contenu. Le grand rectangle flou au milieu du premier rendu correct n'était pas non
+plus un défaut — c'était la fenêtre principale de Today, derrière, vue à travers le flou.
+
+### Le fondu d'entrée d'une fenêtre : ni `alphaValue`, ni le calque d'un `NSVisualEffectView`
+
+Deux façons de faire paraître cet écran en fondu n'ont RIEN joué — l'écran apparaissait d'un coup :
+
+1. `panel.animator().alphaValue = 1` posé dans le même tour de boucle que `makeKeyAndOrderFront` ;
+2. une `CABasicAnimation` d'opacité ajoutée au calque du `NSVisualEffectView` lui-même : il gère son
+   propre arbre de calques et l'écrase.
+
+Mesuré en échantillonnant `layer.presentation()?.opacity` toutes les 60 ms depuis le process : `1.00`
+dès le premier échantillon dans les deux cas. La façon qui marche est celle de la capsule — un
+conteneur NEUTRE (`NSView` + `wantsLayer`) qui porte le flou ET le contenu, et dont on anime
+l'opacité : `0.20 0.41 0.59 0.74 0.87 0.96 1.00`, et le flou fond avec.
+
+**La sonde vaut mieux que la capture** : `screencapture` prend ~250 ms, il rate un fondu de 450 ms
+une fois sur deux. Échantillonner le calque depuis le process dit en une ligne si l'animation joue.
 
 ### Le journal système ne remonte rien de ce process
 
@@ -817,6 +850,23 @@ bornant la copie, on tombe à **une** (deux sur la première frappe, le temps de
 D'où la garde `if $0 > 0` sur `onPreferenceChange` : zéro n'est pas une mesure, c'est le défaut de
 la clé — celui que la copie publie en partant. Le retenir la ferait remonter aussitôt, et les deux
 se relanceraient sans fin.
+
+### Lire le minuteur dans un corps de vue l'abonne à la SECONDE
+
+(23 août 2026.) La capsule propose « Reprendre : *phase* » quand un pomodoro attend. Le premier jet
+construisait son instantané en lisant tout le minuteur — `phase`, `formattedRemaining`, `hasStarted`,
+`isRunning` — puis laissait la palette décider. `PomodoroTimer` est `@Observable` : lire
+`formattedRemaining`, c'est lire `remaining`, qui décroît d'une unité par seconde. Mesuré, capsule
+ouverte et pomodoro en marche : **7 recalculs de palette en 6 secondes**, chacun parcourant toutes
+les tâches, toutes les listes et tous les dossiers.
+
+La correction ne coûte rien : sortir AVANT de lire le temps, quand ça tourne. Ce qui reste observé
+est un booléen qui ne bouge qu'à l'arrêt — **0 recalcul en 6 secondes**, dans les deux états.
+
+C'est le même piège que celui déjà payé sur `MenuBarTimerLabel`, où lire l'heure restante dans le
+corps de la Scene invalidait l'arbre entier chaque seconde. La règle : **avec un `@Observable`, ce
+n'est pas ce que la vue AFFICHE qui compte, c'est ce qu'elle LIT** — et l'ordre des lectures fait
+partie du code.
 
 ### Une rangée qui relit cinq fois la même relation
 

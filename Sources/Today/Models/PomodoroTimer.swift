@@ -69,6 +69,43 @@ enum PomodoroSound: String {
   }
 }
 
+/// Ce que la fin d'une étape MONTRE — l'alarme sonore, elle, se règle à part
+/// (`PomodoroTimer.alertSoundStorageKey`). Repris de Desk Minder : rien, une pastille en bas de
+/// l'écran, ou un écran entier qu'il faut congédier.
+enum PomodoroAlertStyle: String, CaseIterable, Identifiable {
+  case none
+  case badge
+  case fullScreen
+
+  static let storageKey = "pomodoroPhaseEndAlert"
+
+  /// Le réglage vu du minuteur. `@AppStorage` n'existe que dans une vue — même clé, même défaut.
+  /// `.none` par défaut : le son seul, comme avant ce réglage.
+  static var current: PomodoroAlertStyle {
+    UserDefaults.standard.string(forKey: storageKey).flatMap(Self.init(rawValue:)) ?? .none
+  }
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .none: return "Rien"
+    case .badge: return "Pastille"
+    case .fullScreen: return "Plein écran"
+    }
+  }
+
+  /// L'écran plein PREND LA MAIN : il suspend l'enchaînement automatique, et c'est son bouton qui
+  /// ouvre la phase suivante — sinon ce bouton mentirait, la suite tournant déjà derrière lui.
+  ///
+  /// Seulement après un TRAVAIL : une fin de pause n'a personne à interrompre, elle se contente de
+  /// la pastille. Lue des deux côtés — le minuteur pour s'arrêter, la fenêtre pour choisir quoi
+  /// montrer — d'où une règle et pas deux conditions jumelles.
+  func takesOver(after finished: PomodoroPhase) -> Bool {
+    self == .fullScreen && finished == .work
+  }
+}
+
 @Observable
 /// Isolé au fil principal : le `Timer` est ajouté à `RunLoop.main` (cf. `start`), donc `tick()` n'a
 /// jamais lieu ailleurs, et l'objet est lu par des vues SwiftUI. L'annotation écrit cette réalité.
@@ -247,12 +284,19 @@ final class PomodoroTimer {
     let soundName =
       UserDefaults.standard.string(forKey: Self.alertSoundStorageKey) ?? Self.defaultAlertSound
     NSSound(named: soundName)?.play()
+    let finished = phase
     // `advancePhase` resynchronise la musique : avec l'enchaînement automatique, le minuteur tourne
     // toujours et personne n'appellera `start()` — c'est donc là que le travail retrouve sa musique.
     advancePhase()
-    if !UserDefaults.standard.bool(forKey: Self.autoStartStorageKey) {
+    let alert = PomodoroAlertStyle.current
+    if alert.takesOver(after: finished)
+      || !UserDefaults.standard.bool(forKey: Self.autoStartStorageKey)
+    {
       halt()  // l'alarme vient de sonner : elle EST le signal, rien à ajouter derrière
     }
+    PomodoroAlertWindow.announce(
+      alert, finished: finished, next: phase, duration: formattedRemaining,
+      onStart: { [weak self] in self?.start() })
   }
 
   private func duration(for phase: PomodoroPhase) -> TimeInterval {

@@ -47,6 +47,36 @@ final class PomodoroTimerTests: XCTestCase {
     defaults.removeObject(forKey: PomodoroTimer.autoStartStorageKey)
   }
 
+  /// L'écran plein est le point de passage : il arrête le minuteur MÊME avec l'enchaînement
+  /// automatique, sinon son bouton « Commencer la pause » n'aurait plus rien à ouvrir.
+  func testFullScreenAlertSuspendsAutoStartAfterWork() {
+    let defaults = UserDefaults.standard
+    defaults.set(true, forKey: PomodoroTimer.autoStartStorageKey)
+    defaults.set(PomodoroAlertStyle.fullScreen.rawValue, forKey: PomodoroAlertStyle.storageKey)
+
+    let timer = PomodoroTimer()
+    timer.phase = .work
+    timer.isRunning = true
+    timer.handlePhaseCompletion()
+    XCTAssertFalse(timer.isRunning, "le plein écran suspend l'enchaînement après un travail")
+
+    // Fin de PAUSE : personne à interrompre, l'enchaînement reprend ses droits.
+    timer.isRunning = true
+    timer.phase = .shortBreak
+    timer.handlePhaseCompletion()
+    XCTAssertTrue(timer.isRunning, "une fin de pause n'ouvre pas d'écran plein")
+
+    // Pastille : purement décorative, elle ne touche pas au minuteur.
+    defaults.set(PomodoroAlertStyle.badge.rawValue, forKey: PomodoroAlertStyle.storageKey)
+    timer.isRunning = true
+    timer.phase = .work
+    timer.handlePhaseCompletion()
+    XCTAssertTrue(timer.isRunning, "la pastille laisse l'enchaînement automatique intact")
+
+    defaults.removeObject(forKey: PomodoroTimer.autoStartStorageKey)
+    defaults.removeObject(forKey: PomodoroAlertStyle.storageKey)
+  }
+
   // Le label de la barre de menu ne doit jamais changer de largeur : sinon toute la barre
   // de menu se décale à chaque seconde (les status items sont alignés à droite).
   func testMenuBarTimerImage_widthIsIdenticalForEveryDigitCombination() {

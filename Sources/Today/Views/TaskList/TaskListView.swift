@@ -1343,8 +1343,8 @@ private struct ListPageView: View {
     .fixedSize()
     .popover(isPresented: $pickingListDate, arrowEdge: .bottom) {
       VStack(spacing: 10) {
-        // La MÊME grille que les panneaux « Quand » et « Échéance » : trois calendriers de trois
-        // allures pour le même geste, c'était le défaut d'avant.
+        // La MÊME grille que le panneau « Quand » : deux calendriers de deux allures pour le même
+        // geste, c'était le défaut d'avant.
         CalendarGrid(selection: list.scheduledWhen) { day in
           list.scheduledWhen = day
           pickingListDate = false

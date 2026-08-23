@@ -765,12 +765,28 @@ private struct QuickEntryView: View {
     guard !expanded, !picking, queued.isEmpty else { return QuickPalette(rows: []) }
     switch step {
     case .search:
-      return QuickPalette.search(title, lists: reachable, projects: projects, tasks: allTasks)
+      return QuickPalette.search(
+        title, lists: reachable, projects: projects, tasks: allTasks, pomodoro: pomodoroSnapshot)
     case .addTask(let target):
       return QuickPalette.inside(target, lists: reachable, tasks: allTasks)
     case .createList(let project):
       return QuickPalette.inside(project: project)
     }
+  }
+
+  /// L'état du minuteur, lu UNE fois pour la palette. `PomodoroTimer.shared` et pas l'environnement :
+  /// la capsule vit dans sa propre fenêtre AppKit, hors de l'arbre de vues.
+  ///
+  /// **L'ordre des lectures compte.** Le minuteur est `@Observable` : ce qu'on lit ici devient une
+  /// dépendance du corps de la capsule. `formattedRemaining` change CHAQUE SECONDE pendant qu'un
+  /// pomodoro tourne — mesuré 7 recalculs de palette en 6 secondes, chacun parcourant toutes les
+  /// tâches. En sortant AVANT de le lire quand ça tourne, la seule chose observée est un booléen
+  /// qui, lui, ne bouge qu'à l'arrêt. Même piège que `MenuBarTimerLabel` sur la scène entière.
+  private var pomodoroSnapshot: QuickPalette.PomodoroSnapshot? {
+    let timer = PomodoroTimer.shared
+    guard timer.hasStarted, !timer.isRunning else { return nil }
+    return QuickPalette.PomodoroSnapshot(
+      phaseLabel: timer.phase.label, remaining: timer.formattedRemaining, isWaiting: true)
   }
 
   /// ↓ descend dans la liste, ↑ y remonte.
@@ -842,7 +858,17 @@ private struct QuickEntryView: View {
     case .createList(let project): begin(.createList(project), landingOn: nil)
     case .complete(let task): toggle(task)
     case .run(let command): run(command)
+    case .startPomodoro: resumePomodoro()
     }
+  }
+
+  /// Lance la phase en attente. Comme les commandes du minuteur, ça ne ramène PAS l'app : la
+  /// pastille rend compte, on reste dans ce qu'on faisait.
+  private func resumePomodoro() {
+    dismiss()
+    let timer = PomodoroTimer.shared
+    timer.start()
+    HUDWindow.showPomodoro(timer.phase, duration: timer.formattedRemaining)
   }
 
   /// Le passage à la seconde étape. La destination choisie est posée dans l'état QUE LA CAPSULE

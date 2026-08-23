@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// La grille de jours des panneaux de date : « Quand » (`WhenPicker`), « Échéance »
-/// (`DeadlinePicker`) et la date d'une liste.
+/// La grille de jours des panneaux de date : « Quand » (`WhenPicker`) et la date d'une liste.
 ///
 /// ## Pourquoi elle n'est PAS le `DatePicker(.graphical)` natif
 ///
@@ -14,7 +13,7 @@ import SwiftUI
 /// Système collé dans l'app. C'est la clause « si l'API native ne convient pas, dire pourquoi en
 /// commentaire avant d'écrire du custom » de `CLAUDE.md` — la voici dite.
 ///
-/// Écrite UNE fois pour ses trois porteurs. Un second calendrier « juste pour l'échéance » aurait
+/// Écrite UNE fois pour ses deux porteurs. Un second calendrier « juste pour celui-ci » aurait
 /// divergé au premier réglage ajouté : c'est déjà l'argument qui a sorti `WhenPicker` de `TaskRow`.
 ///
 /// L'arithmétique — jours affichés, débordements sur les mois voisins, premier jour de la semaine —
@@ -24,7 +23,7 @@ struct CalendarGrid: View {
   /// (`TaskItem.whenMinutes`).
   let selection: Date?
   /// Reçoit un début de journée. Ce qu'on en écrit appartient à l'appelant — lui seul sait si
-  /// c'est `when`, `deadline` ou la date d'une liste.
+  /// c'est `when` ou la date d'une liste.
   var onPick: (Date) -> Void
 
   @State private var grid: MonthGrid

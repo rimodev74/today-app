@@ -90,7 +90,7 @@ struct TaskRow: View {
   @State private var activePicker: TaskDateField?
 
   enum TaskDateField: String, Identifiable {
-    case when, deadline
+    case when
     var id: String { rawValue }
   }
 
@@ -267,7 +267,6 @@ struct TaskRow: View {
     .popover(item: $activePicker, arrowEdge: .trailing) { field in
       switch field {
       case .when: WhenPicker(task: task) { activePicker = nil }
-      case .deadline: DeadlinePicker(task: task) { activePicker = nil }
       }
     }
     .sheet(isPresented: $showReminderSheet) {
@@ -585,39 +584,6 @@ struct TaskRow: View {
     .buttonStyle(.plain)
   }
 
-  // MARK: Échéance
-
-  /// Badge d'échéance à droite de la ligne (cf. Things) : un drapeau + une date relative,
-  /// rouge une fois l'échéance atteinte ou passée, gris sinon.
-  @ViewBuilder
-  private var deadlineBadge: some View {
-    if let deadline = task.deadline {
-      let overdue = daysUntil(deadline) <= 0
-      HStack(spacing: 4) {
-        Image(systemName: "flag.fill").font(.app(11))
-        Text(deadlineLabel(deadline)).font(.app(.callout))
-      }
-      .foregroundStyle(overdue ? Color.red : Color.secondary)
-    }
-  }
-
-  private func daysUntil(_ date: Date) -> Int {
-    let cal = Calendar.current
-    return cal.dateComponents(
-      [.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: date)
-    ).day ?? 0
-  }
-
-  private func deadlineLabel(_ date: Date) -> String {
-    switch daysUntil(date) {
-    case 0: return "aujourd'hui"
-    case 1: return "dans 1 jour"
-    case let d where d > 1: return "dans \(d) jours"
-    case -1: return "hier"
-    case let d: return "il y a \(-d) jours"
-    }
-  }
-
   /// L'état du dépliant : celui de cette vue s'il a été touché, sinon celui retenu du dernier
   /// lancement. Un simple appel de `Set.contains` — pas de lecture de `UserDefaults` par rangée
   /// (cf. `SubtaskExpansion`).
@@ -787,43 +753,36 @@ struct TaskRow: View {
   /// place de l'icône « note » retirée.
   private static let hoverActionsWidth: CGFloat = 54
 
-  /// Zone de droite, collée au bord. Deux régimes, et la frontière est l'INTERACTIVITÉ :
-  ///
-  /// - le résumé des sous-tâches porte un chevron, donc une cible de clic. Il est ANCRÉ : la
-  ///   colonne de survol lui garde sa place à droite, vide ou non. Le faire glisser comme le reste
-  ///   se retournait contre l'utilisateur — il voit le chevron, il y va, et le chevron s'échappe
-  ///   sous son curseur au moment précis où le survol commence. Une cible de clic ne se déplace
-  ///   jamais au survol ;
-  /// - le badge d'échéance ne se clique pas. Il reste SUPERPOSÉ aux icônes (ZStack) et glisse vers
-  ///   la gauche pour leur céder la place — comme Things, et sans réserver d'espace à sa droite.
+  /// Zone de droite, collée au bord. Le résumé des sous-tâches porte un chevron, donc une cible de
+  /// clic : il est ANCRÉ, la colonne de survol lui garde sa place à droite, vide ou non. Le faire
+  /// glisser comme le reste se retournait contre l'utilisateur — il voit le chevron, il y va, et le
+  /// chevron s'échappe sous son curseur au moment précis où le survol commence. Une cible de clic ne
+  /// se déplace jamais au survol.
   ///
   /// L'animation est bornée à `value: hovering` : elle ne se recalcule qu'au survol, pas au scroll.
   private func trailing(_ subtasks: SubtaskTally) -> some View {
     HStack(spacing: 8) {
       if !subtasks.isEmpty { subtasksSummary(subtasks) }
-      ZStack(alignment: .trailing) {
-        deadlineBadge.offset(x: hovering ? -Self.hoverActionsWidth : 0)
-        HStack(spacing: 6) {
-          dateHint
-          Menu {
-            taskMenu
-          } label: {
-            Image(systemName: "ellipsis")
-              .font(.app(14, weight: .semibold))
-              .foregroundStyle(.secondary)
-              .frame(width: 22, height: 22)
-              .contentShape(Rectangle())
-          }
-          .menuStyle(.borderlessButton)
-          .menuIndicator(.hidden)
-          .fixedSize()
+      HStack(spacing: 6) {
+        dateHint
+        Menu {
+          taskMenu
+        } label: {
+          Image(systemName: "ellipsis")
+            .font(.app(14, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
         }
-        // Largeur FIXE, pas la largeur réelle du contenu : sans elle la colonne vaudrait 54 pt sur
-        // une tâche sans notes et 26 sur une tâche qui en a, et le résumé ne serait plus aligné
-        // d'une ligne à l'autre.
-        .frame(width: Self.hoverActionsWidth, alignment: .trailing)
-        .opacity(hovering ? 1 : 0)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
       }
+      // Largeur FIXE, pas la largeur réelle du contenu : sans elle la colonne vaudrait 54 pt sur
+      // une tâche sans notes et 26 sur une tâche qui en a, et le résumé ne serait plus aligné
+      // d'une ligne à l'autre.
+      .frame(width: Self.hoverActionsWidth, alignment: .trailing)
+      .opacity(hovering ? 1 : 0)
     }
     .animation(.easeOut(duration: 0.15), value: hovering)
   }
@@ -889,11 +848,6 @@ struct TaskRow: View {
       // manquait à la page « Tâches », où tout le non-classé arrive.
       Label(
         task.project == nil ? "Assigner la tâche" : "Déplacer vers…", systemImage: "arrow.right")
-    }
-    Button {
-      openDatePicker(task, .deadline)
-    } label: {
-      Label("Échéance…", systemImage: "flag")
     }
     // Durée estimée : elle n'a d'effet visible que dans « Aujourd'hui » (la barre de capacité),
     // mais elle se pose ici, là où l'on planifie.

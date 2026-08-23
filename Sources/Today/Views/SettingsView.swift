@@ -965,6 +965,8 @@ private struct MusicPlaylistsSection: View {
 
 private struct PomodoroSettingsTab: View {
   @AppStorage(PomodoroTimer.autoStartStorageKey) private var pomodoroAutoStart = false
+  @AppStorage(PomodoroAlertStyle.storageKey) private var phaseEndAlert = PomodoroAlertStyle.none
+    .rawValue
   @AppStorage(MusicPlayer.enabledKey) private var musicEnabled = false
   @AppStorage(MusicPlayer.volumeKey) private var musicVolume = MusicPlayer.defaultVolume
   @AppStorage(MusicPlayer.fadeKey) private var musicFade = MusicPlayer.defaultFadeSeconds
@@ -979,6 +981,15 @@ private struct PomodoroSettingsTab: View {
     SettingsPane(height: 820) {
       Section("Minuteur") {
         Toggle("Enchaîner automatiquement les phases", isOn: $pomodoroAutoStart)
+
+        Picker("Fin d'étape", selection: $phaseEndAlert) {
+          ForEach(PomodoroAlertStyle.allCases) { style in
+            Text(style.label).tag(style.rawValue)
+          }
+        }
+        .help(
+          "Le plein écran n'apparaît qu'à la fin d'un travail, et c'est son bouton qui ouvre la "
+            + "pause — l'enchaînement automatique l'attend.")
       }
 
       // Les quatre événements sonores du minuteur, chacun réglable indépendamment — sans ça, un son

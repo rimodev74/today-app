@@ -210,6 +210,63 @@ final class QuickPaletteTests: XCTestCase {
     XCTAssertEqual(palette.rows.first?.kind, "Pomodoro")
   }
 
+  // MARK: La reprise du minuteur
+
+  private func waiting(_ phase: String = "Pause courte", _ remaining: String = "05:00")
+    -> QuickPalette.PomodoroSnapshot
+  {
+    QuickPalette.PomodoroSnapshot(phaseLabel: phase, remaining: remaining, isWaiting: true)
+  }
+
+  /// **Le manque que cette ligne comble** : après une fin d'étape sans enchaînement automatique,
+  /// une pause ATTEND. Aucune des cinq commandes ne sait la lancer — `pomodoroStart` rouvre un
+  /// travail, les deux autres ouvrent une pause neuve, `pomodoroSkip` la passe.
+  func testWaitingPomodoroOffersResumeFirst() {
+    let palette = QuickPalette.search(
+      "pomodoro", lists: [], projects: [], tasks: [], pomodoro: waiting())
+
+    XCTAssertEqual(palette.rows.first?.title, "Reprendre : Pause courte")
+    XCTAssertEqual(
+      palette.rows.first?.detail, "05:00", "le temps qui reste, comme la date d'une tâche")
+    guard case .startPomodoro? = palette.rows.first?.action else {
+      return XCTFail("la première ligne doit lancer la phase en attente")
+    }
+  }
+
+  /// On la cherche aussi par le nom de sa phase : après un travail, on tape « pause » aussi
+  /// souvent que « pomodoro ».
+  func testResumeIsFoundByItsPhaseName() {
+    let palette = QuickPalette.search(
+      "pause courte", lists: [], projects: [], tasks: [], pomodoro: waiting())
+
+    XCTAssertEqual(palette.rows.first?.title, "Reprendre : Pause courte")
+  }
+
+  /// Rien d'engagé, ou le minuteur tourne : la ligne n'a pas lieu d'être — « Lancer un pomodoro »
+  /// et « Mettre le pomodoro en pause » couvrent déjà ces deux états.
+  func testResumeIsAbsentWhenNothingWaits() {
+    let idle = QuickPalette.search("pomodoro", lists: [], projects: [], tasks: [])
+    let running = QuickPalette.search(
+      "pomodoro", lists: [], projects: [], tasks: [],
+      pomodoro: QuickPalette.PomodoroSnapshot(
+        phaseLabel: "Travail", remaining: "12:34", isWaiting: false))
+
+    for palette in [idle, running] {
+      XCTAssertFalse(
+        palette.rows.contains { if case .startPomodoro = $0.action { true } else { false } })
+    }
+  }
+
+  /// Une frappe qui ne parle pas du minuteur ne la fait pas surgir.
+  func testResumeStaysOutOfUnrelatedSearches() {
+    let palette = QuickPalette.search(
+      "courses", lists: [], projects: [], tasks: [task("Faire les courses")],
+      pomodoro: waiting())
+
+    XCTAssertFalse(
+      palette.rows.contains { if case .startPomodoro = $0.action { true } else { false } })
+  }
+
   /// Les commandes se rangent avec ce qui emmène quelque part, jamais après le contenu.
   func testCommandsComeBeforeTasks() {
     let palette = QuickPalette.search(
