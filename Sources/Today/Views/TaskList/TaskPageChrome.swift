@@ -594,15 +594,11 @@ struct TaskPageBase: ViewModifier {
         else { return }
         delete(abandoned)
       }
-      // ⌘N. Moniteur NSEvent et pas un bouton caché + `.keyboardShortcut` : c'est le mécanisme que
-      // `ListPageView` utilisait déjà, précisément parce que deux raccourcis sur la même lettre
-      // (⌘N et ⌘⇧N) se marchent dessus sous SwiftUI — ce moniteur compare les modificateurs à
-      // l'égalité. Il vit ici pour que les cinq pages en héritent, au lieu d'une seule.
-      .background {
-        if let newTask {
-          KeyCommandMonitor(keyCode: 45, modifiers: [.command], action: newTask)
-        }
-      }
+      // ⌘N appartient au menu *Fichier* (cf. `MainMenuCommands`), qui le porte pour les cinq pages
+      // d'un coup — c'est ce socle qui publie l'action. Un moniteur `NSEvent` vivait ici : il
+      // marchait, mais aucun menu ne disait que la touche existait, et une page sans création
+      // avalait la frappe en silence au lieu de la GRISER. `nil` se lit maintenant à l'écran.
+      .focusedSceneValue(\.newTask, newTask.map { MenuAction(id: "newTask", run: $0) })
       // Une ligne qui apparaît ou disparaît SANS que ce soit nous qui l'ayons décidé. C'est le cas
       // de ⌘Z : l'annulation part du menu *Édition*, traverse la chaîne des répondeurs et arrive
       // dans SwiftData sans passer par une seule de nos méthodes — donc sans le `withAnimation`

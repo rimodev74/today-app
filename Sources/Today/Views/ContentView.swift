@@ -32,6 +32,7 @@ struct ContentView: View {
   @AppStorage(RemindersSync.importStorageKey) private var remindersImport = false
   @AppStorage(RemindersSync.listStorageKey) private var remindersListID = ""
   @AppStorage(RemindersSync.dueHourStorageKey) private var remindersDueHour = RemindersSync.dueHour
+  @AppStorage(RemindersSync.eventCalendarStorageKey) private var remindersEventCalendarID = ""
 
   /// Les raccourcis de saisie rapide (abréviations et combinaisons globales) qui visent une LISTE
   /// portent son nom au jour où ils ont été posés (cf. `reconcileShortcuts`) — lus ici pour pouvoir
@@ -190,14 +191,13 @@ struct ContentView: View {
     }
     .animation(.easeOut(duration: 0.12), value: searchPresented)
     .animation(.easeOut(duration: 0.2), value: sidebarVisible)
-    // Cmd+B au niveau fenêtre (même astuce que le bouton Échap de la palette). Le menu Format
-    // possède déjà Cmd+B (Gras) : NSMenu.performKeyEquivalent ignore les items désactivés, donc
-    // le raccourci ne bascule la sidebar que HORS édition d'une note — dans l'éditeur, Gras gagne.
-    .background {
-      Button("", action: { sidebarVisible.toggle() })
-        .keyboardShortcut("b", modifiers: .command)
-        .hidden()
-    }
+    // Ce que la barre de menus atteint dans cette fenêtre. ⌘B passait par un bouton CACHÉ posé
+    // ici : il marchait, mais rien ne l'annonçait — un raccourci qu'on ne peut pas découvrir
+    // n'existe que pour qui l'a écrit. Même chose pour la recherche, qui n'avait que sa loupe.
+    .focusedSceneValue(\.search, MenuAction(id: "search") { searchPresented = true })
+    .focusedSceneValue(
+      \.sidebarToggle, SidebarToggle(isVisible: sidebarVisible) { sidebarVisible.toggle() }
+    )
     .onChange(of: selection) { _, new in recordRecent(new) }
     // Un ⌘↩ ou un raccourci texte (« !today ») venu de la capsule de saisie rapide : elle vit dans
     // une autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
@@ -450,7 +450,11 @@ struct ContentView: View {
         else { return }
         deleteTasksWhoseReminderIsGone()
         if remindersImport { await importReminders(from: list) }
-        if remindersPush { await pushDatedTasks(to: list) }
+        if remindersPush {
+          await pushDatedTasks(
+            to: list,
+            eventCalendar: remindersService.eventCalendar(withIdentifier: remindersEventCalendarID))
+        }
       }
       guard !Task.isCancelled else { return }
       // Deux raisons d'en repasser une : le verrou nous a refusé l'entrée, ou une absence attend sa
@@ -547,12 +551,21 @@ struct ContentView: View {
   /// La liste n'est imposée qu'à la création. Un rappel déjà existant garde la sienne : sans ça,
   /// un rappel créé à la main depuis une tâche (cf. `SchedulePlannerView`, qui laisse choisir sa
   /// destination) se ferait déménager dans la liste-pont au premier changement de date.
-  private func pushDatedTasks(to list: EKCalendar) async {
+  ///
+  /// Les tâches à DURÉE, elles, partent en événements et sont écartées d'ici — c'est
+  /// `RemindersSync.destination` qui tranche, et l'exclusivité entre les deux tient à ce qu'un seul
+  /// endroit la prononce.
+  private func pushDatedTasks(to list: EKCalendar, eventCalendar: EKCalendar?) async {
+    if let eventCalendar { await pushTimedTasks(to: eventCalendar) }
+
     let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.when != nil })
     guard let dated = try? modelContext.fetch(descriptor) else { return }
 
     var changed = false
     for task in dated {
+      guard
+        RemindersSync.destination(for: task, eventCalendarChosen: eventCalendar != nil) == .reminder
+      else { continue }
       let reminderDue = task.reminderIdentifier.flatMap(remindersService.reminderDay(for:))
       let seenAlive =
         task.reminderIdentifier.map(remindersService.reminderWasSeenAlive) ?? false
@@ -572,6 +585,92 @@ struct ContentView: View {
       changed = true
     }
     if changed { try? modelContext.save() }
+  }
+
+  /// App → Calendrier : une tâche datée QUI PORTE UNE DURÉE prend sa place dans l'agenda.
+  ///
+  /// C'est la différence de nature entre les deux objets d'Apple, et elle vient de la durée : un
+  /// rappel a une échéance et sonne, un événement occupe un créneau. Donner une durée à une tâche,
+  /// c'est dire « ça me prendra ce temps-là » — donc réserver, pas être prévenu.
+  ///
+  /// Trois gestes, dans cet ordre, et l'ordre compte :
+  /// 1. effacer les événements qui n'ont plus lieu d'être (durée retirée, date retirée) ;
+  /// 2. (ré)écrire ceux des tâches concernées ;
+  /// 3. effacer le rappel que ces tâches avaient AVANT de devenir des événements — sinon la même
+  ///    tâche existe des deux côtés, sonne dans Rappels et occupe un créneau dans Calendrier.
+  ///
+  /// EventKit n'écrit qu'APRÈS l'enregistrement SwiftData pour les SUPPRESSIONS : effacer un
+  /// élément fait poster `.EKEventStoreChanged`, qui relance cette passe, qui réenregistre ce même
+  /// contexte — au milieu de la mutation qu'on écrit (cf. `ModelContext.deleteTasksAndSave`).
+  private func pushTimedTasks(to calendar: EKCalendar) async {
+    let descriptor = FetchDescriptor<TaskItem>(
+      predicate: #Predicate<TaskItem> { $0.when != nil || $0.eventIdentifier != nil })
+    guard let candidates = try? modelContext.fetch(descriptor) else { return }
+
+    var changed = false
+
+    // 1. Retirer la durée (ou la date) DÉFAIT ce que la poser avait fait : l'événement s'en va.
+    let stale = candidates.filter(RemindersSync.shouldForgetEvent)
+    let doomedEvents = stale.compactMap(\.eventIdentifier)
+    for task in stale {
+      task.eventIdentifier = nil
+      changed = true
+    }
+
+    // 2. Ce qui doit exister dans l'agenda, et à quelle heure. L'état actuel des événements liés
+    // est relu en UNE requête, bornée aux jours concernés (cf. `linkedEventTimes`).
+    let due = candidates.filter {
+      RemindersSync.destination(for: $0, eventCalendarChosen: true) == .event
+    }
+    let days = due.compactMap(\.when)
+    let times =
+      days.isEmpty
+      ? [:]
+      : remindersService.linkedEventTimes(
+        Set(due.compactMap(\.eventIdentifier)),
+        from: Calendar.current.startOfDay(for: days.min() ?? Date()),
+        to: Calendar.current.date(
+          byAdding: .day, value: 2, to: Calendar.current.startOfDay(for: days.max() ?? Date()))
+          ?? Date(),
+        in: calendar)
+
+    var doomedReminders: [String] = []
+    for task in due {
+      // 3. Elle n'est plus un rappel : celui qu'elle avait n'a plus personne derrière lui. AVANT le
+      // test de mise à jour, et pas après : un rappel posé à la main (cf. `SchedulePlannerView`)
+      // sur une tâche dont l'événement est déjà à jour survivrait à toutes les passes suivantes.
+      if let reminder = task.reminderIdentifier {
+        doomedReminders.append(reminder)
+        task.reminderIdentifier = nil
+        changed = true
+      }
+
+      let interval = task.eventIdentifier.flatMap { times[$0] }
+      guard
+        RemindersSync.needsEventPush(
+          task, eventStart: interval?.start,
+          eventMinutes: interval.map { Int($0.duration / 60) }),
+        let when = task.when
+      else { continue }
+      // Le calendrier désigné est passé à TOUS les coups : c'est `scheduleEvent` qui sait si
+      // l'événement existe encore et garde alors le sien (déplacé à la main, il y reste).
+      guard
+        let id = await remindersService.scheduleEvent(
+          title: task.title,
+          start: RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour),
+          minutes: task.estimateMinutes,
+          calendar: calendar,
+          existingIdentifier: task.eventIdentifier)
+      else { continue }
+      if task.eventIdentifier != id {
+        task.eventIdentifier = id
+        changed = true
+      }
+    }
+
+    if changed { try? modelContext.save() }
+    remindersService.forgetEvents(doomedEvents)
+    remindersService.forgetReminders(doomedReminders)
   }
 
   /// Recopie la complétion des rappels liés sur leurs tâches (Rappels → app).

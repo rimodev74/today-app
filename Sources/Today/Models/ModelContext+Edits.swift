@@ -53,7 +53,7 @@ extension ModelContext {
   }
 
   /// LA suppression de tâches, pour les cinq pages — l'ordre correct des trois gestes, écrit UNE
-  /// fois : lire les identifiants de rappel, supprimer et enregistrer, PUIS effacer les rappels.
+  /// fois : lire les identifiants Apple, supprimer et enregistrer, PUIS effacer rappels et événements.
   ///
   /// Les cinq pages faisaient l'inverse (`remindersService.forget(task)` AVANT le `delete`), ce qui
   /// est la mécanique exacte qui faisait planter la suppression d'un projet : effacer un rappel fait
@@ -68,10 +68,10 @@ extension ModelContext {
   /// Pas de `deleteCascadeAndSave` ici, délibérément : une tâche n'emporte qu'un niveau (ses
   /// sous-tâches), ce que SwiftData encaisse sans broncher, et lui retirer l'`UndoManager` retirerait
   /// ⌘Z de la suppression d'une tâche — qui marche, et qui compte (⌫ efface pour de bon).
-  func deleteTasksAndSave(_ tasks: [TaskItem], forgetReminders: ([String]) -> Void) {
-    let doomedReminders = tasks.compactMap(\.reminderIdentifier)
+  func deleteTasksAndSave(_ tasks: [TaskItem], forget: ([String]) -> Void) {
+    let doomed = RemindersService.appleIdentifiers(of: tasks)
     for task in tasks { delete(task) }
     try? save()
-    forgetReminders(doomedReminders)
+    forget(doomed)
   }
 }

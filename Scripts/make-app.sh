@@ -21,8 +21,8 @@ BIN=".build/${CONFIG}/Today"
 
 # Source unique de vérité des versions — Scripts/release.sh les relit ici.
 # BUILD est un entier incrémental : c'est lui que Sparkle compare.
-SHORT_VERSION="0.44"
-BUILD="43"
+SHORT_VERSION="0.45"
+BUILD="44"
 
 # Reconstruire par-dessus une instance EN COURS lui retire son Info.plist sous les pieds (le
 # `rm -rf` plus bas) : la moindre lecture CFBundle ensuite — AppKit en fait une à chaque réveil de
@@ -100,6 +100,11 @@ rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources" "${APP}/Contents/Frameworks"
 cp "${BIN}" "${APP}/Contents/MacOS/${TARGET}"
 cp "Sources/App.icns" "${APP}/Contents/Resources/App.icns"
+# Les menus STANDARD (Fichier, Édition, Présentation, Fenêtre, Aide) viennent d'AppKit et suivent
+# les localisations DÉCLARÉES par le bundle. Sans `fr.lproj`, il n'y en a aucune : macOS les servait
+# en anglais — « File / Edit / View » — au milieu d'une app entièrement française. Un dossier vide
+# suffit à déclarer la langue, il n'y a rien à traduire nous-mêmes.
+mkdir -p "${APP}/Contents/Resources/fr.lproj"
 # `ditto` et PAS `cp -r` : un framework versionné n'est qu'une arborescence de liens symboliques
 # (`Sparkle` → `Versions/Current/Sparkle`, idem Autoupdate, Resources, XPCServices). `cp -r` les
 # SUIT et copie les cibles — mesuré : 3,0 Mo deviennent 8,9 Mo, chaque binaire présent deux fois,
@@ -126,6 +131,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>            <string>${TARGET}</string>
     <key>CFBundleDisplayName</key>     <string>${TARGET}</string>
     <key>CFBundleIdentifier</key>      <string>com.ryanmonnier.${TARGET}</string>
+    <key>CFBundleDevelopmentRegion</key> <string>fr</string>
     <key>CFBundleExecutable</key>      <string>${TARGET}</string>
     <key>CFBundleIconFile</key>        <string>App</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
@@ -137,7 +143,7 @@ ${SPARKLE_KEYS}
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSRemindersFullAccessUsageDescription</key> <string>Today crée des rappels dans l'app Rappels lorsque vous planifiez une tâche.</string>
-    <key>NSCalendarsFullAccessUsageDescription</key> <string>Today affiche les événements de votre calendrier sur la page Aujourd'hui.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key> <string>Today affiche les événements de votre calendrier sur la page Aujourd'hui, et y place les tâches auxquelles vous donnez une durée.</string>
     <key>NSAppleEventsUsageDescription</key> <string>Today met votre musique en marche pendant un pomodoro et la fait descendre avant la fin de la phase.</string>
 </dict>
 </plist>

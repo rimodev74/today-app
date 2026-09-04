@@ -69,6 +69,10 @@ struct WindowConfigurator: NSViewRepresentable {
     window.titleVisibility = .hidden
     window.title = ""
     window.toolbarStyle = .unified
+    // Une seule fenêtre, donc AUCUN onglet : sans ça macOS garde *Présentation ▸ Afficher la
+    // barre d'onglets* et les cinq entrées d'onglets du menu *Fenêtre*, toutes sans objet. C'est
+    // ce regroupement en onglets qui faisait ouvrir un onglet sur ⌘N (cf. `MainMenuCommands`).
+    window.tabbingMode = .disallowed
     // Fenêtre laissée OPAQUE → macOS dessine coins + ombre natifs.
     // Pas d'inset manuel des feux tricolores : la position native est celle voulue
     // (un décalage manuel se fait défaire par le relayout AppKit au premier clic).

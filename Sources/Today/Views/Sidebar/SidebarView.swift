@@ -156,6 +156,12 @@ struct SidebarView: View {
       }
     }
     .safeAreaInset(edge: .bottom) { bottomBar }
+    // Ce que le menu *Fichier* atteint ici. Les deux créations n'existaient qu'en bas de la
+    // sidebar et au clic droit : rien ne les annonçait, et aucune n'avait de raccourci.
+    .focusedSceneValue(\.newProject, MenuAction(id: "newProject", run: addProject))
+    .focusedSceneValue(
+      \.newList, listTarget.map { project in MenuAction(id: "newList") { addList(to: project) } }
+    )
     // Suppression uniquement via le clic droit → « Supprimer » (cf. `contextMenu` de `projectRow`/
     // `listRow`) : pas de raccourci clavier (⌫) sur la sélection de la sidebar.
     // Confirmation seulement si l'élément n'est pas vide ; sinon la suppression est immédiate
@@ -823,6 +829,17 @@ struct SidebarView: View {
     startRename(project.persistentModelID)
   }
 
+  /// Le projet qu'une nouvelle to-do list rejoindrait : celui qu'on regarde, ou celui de la liste
+  /// qu'on regarde. Ailleurs — une vue intelligente, le Pomodoro — il n'y a rien à quoi
+  /// l'attacher, et le menu le dit en grisant l'item plutôt qu'en inventant une destination.
+  private var listTarget: Project? {
+    switch selection {
+    case .project(let project): return project
+    case .list(let list): return list.project
+    default: return nil
+    }
+  }
+
   private func addList(to project: Project) {
     let list = project.appendList(titled: "Nouvelle liste", in: modelContext)
     project.isCollapsed = false
@@ -850,7 +867,7 @@ struct SidebarView: View {
     //
     // On ne retient que les IDENTIFIANTS des rappels, pas les tâches : de simples chaînes, qui
     // survivent à ce que la cascade efface. Lues ici, tant que tout est debout.
-    let doomedReminders = RemindersService.reminderIdentifiers(of: project.lists.flatMap(\.tasks))
+    let doomedItems = RemindersService.appleIdentifiers(of: project.lists.flatMap(\.tasks))
 
     let hitsSelection: Bool =
       switch selection {
@@ -869,12 +886,12 @@ struct SidebarView: View {
     // faisait planter l'app le 6 août 2026. Cette piste-là a été suivie et corrigée d'abord, et le
     // crash est resté identique, à la ligne près. La vraie cause était l'annulation, cf.
     // `deleteCascadeAndSave`.
-    remindersService.forgetReminders(doomedReminders)
+    remindersService.forgetAppleItems(doomedItems)
   }
 
   private func delete(_ list: TodoList) {
     list.delete(
-      from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
+      from: $selection, in: modelContext, forget: remindersService.forgetAppleItems)
   }
 
   /// Suppression directe si l'élément est vide (liste sans tâche, projet sans liste), sinon

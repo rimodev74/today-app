@@ -26,7 +26,7 @@ import SwiftData
 /// Tant que ce test est vert, l'estampille 1.0.0 est légitime. Rouge = elle ment, ne pas lancer
 /// l'app avant d'avoir suivi la marche ci-dessous.
 enum CurrentSchema: VersionedSchema {
-  static let versionIdentifier = Schema.Version(5, 0, 0)
+  static let versionIdentifier = Schema.Version(6, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
@@ -335,9 +335,86 @@ enum SchemaV4: VersionedSchema {
   }
 }
 
+/// **Forme 5.0.0, FIGÉE — ne se modifie plus jamais.** La 4.0.0 plus `TaskItem.whenMinutes`
+/// (l'heure d'une tâche datée). C'est ce que contiennent les bases écrites entre le 5 août 2026 et
+/// le 4 septembre 2026.
+///
+/// Elle ne diffère de la forme courante que par `TaskItem.eventIdentifier` (l'événement Calendrier
+/// d'une tâche à durée), un ajout PUR — et pourtant elle existe, pour la raison mesurée le 3 août :
+/// un ajout sans montée de version fait ÉCHOUER l'ouverture (cf. `SchemaV2`).
+enum SchemaV5: VersionedSchema {
+  static let versionIdentifier = Schema.Version(5, 0, 0)
+
+  static var models: [any PersistentModel.Type] {
+    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+
+  @Model final class Project {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var isCollapsed: Bool = false
+    var colorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
+
+    init() {}
+  }
+
+  @Model final class TodoList {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var scheduledWhen: Date?
+    var priorityRaw: Int = 0
+    var project: Project?
+    var isInbox: Bool = false
+    @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
+
+    init() {}
+  }
+
+  @Model final class TaskItem {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var notes: Data = Data()
+    var isCompleted: Bool = false
+    var isHeader: Bool = false
+    var completedAt: Date?
+    var sortIndex: Int = 0
+    var smartOrder: Int = 0
+    var when: Date?
+    var whenMinutes: Int?
+    var deadline: Date?
+    var priorityRaw: Int = 0
+    var estimateMinutes: Int = 0
+    var createdAt: Date = Date()
+    var reminderIdentifier: String?
+    var list: TodoList?
+    var headerColorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
+
+    init() {}
+  }
+
+  @Model final class Subtask {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var isDone: Bool = false
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var task: TaskItem?
+
+    init() {}
+  }
+}
+
 /// Chaîne de migration de l'app : les formes PASSÉES, dans l'ordre, puis la forme courante.
 ///
-/// Deux formes passées à ce jour (1.0.0, 2.0.0). La marche ci-dessous vaut pour TOUT changement de
+/// Cinq formes passées à ce jour (1.0.0 à 5.0.0). La marche ci-dessous vaut pour TOUT changement de
 /// forme, pas seulement pour un changement cassant : c'est la leçon du 3 août 2026, où un ajout
 /// optionnel sans montée de version a fait échouer l'ouverture et mettre la vraie base en
 /// quarantaine (cf. `SchemaV2`).
@@ -366,7 +443,7 @@ enum SchemaV4: VersionedSchema {
 /// s'ouvre par `TodayApp.openStore`. C'est ce qui rend l'ajout d'une version mécanique.
 enum TodayMigrationPlan: SchemaMigrationPlan {
   static var schemas: [any VersionedSchema.Type] {
-    [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self, CurrentSchema.self]
+    [SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self, SchemaV5.self, CurrentSchema.self]
   }
 
   /// Les deux premières étapes sont `.lightweight` : rien n'y voyage d'un champ vers un autre. La
@@ -396,7 +473,10 @@ enum TodayMigrationPlan: SchemaMigrationPlan {
       ),
       // 4→5 : ajout de `TaskItem.whenMinutes` (l'heure d'une tâche datée), optionnel donc nil sur
       // toutes les bases existantes — une tâche d'avant n'avait pas d'heure, et n'en a toujours pas.
-      .lightweight(fromVersion: SchemaV4.self, toVersion: CurrentSchema.self),
+      .lightweight(fromVersion: SchemaV4.self, toVersion: SchemaV5.self),
+      // 5→6 : ajout de `TaskItem.eventIdentifier` (l'événement Calendrier d'une tâche à durée),
+      // optionnel donc nil partout — aucune base d'avant n'a jamais écrit d'événement.
+      .lightweight(fromVersion: SchemaV5.self, toVersion: CurrentSchema.self),
     ]
   }
 

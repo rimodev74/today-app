@@ -295,6 +295,13 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   (`RemindersSync`) : une liste Rappels désignée dans les Réglages, les tâches datées y partent, ses
   rappels datés en reviennent. `needsPush` empêche la boucle. Vérifié à la main le 6 août 2026 dans
   les deux sens, suppression comprise.
+  **La DURÉE change la nature de ce qui part** : une tâche datée à laquelle on donne une durée
+  (clic droit ▸ Durée…) cesse d'être un rappel et devient un ÉVÉNEMENT, dans le calendrier désigné
+  aux Réglages — un rappel a une échéance et sonne, un événement occupe un créneau.
+  `RemindersSync.destination` est le SEUL endroit qui tranche entre les deux, et c'est ce qui
+  garantit qu'une tâche n'existe jamais des deux côtés. Retirer la durée (ou la date) efface
+  l'événement et rend la tâche à Rappels ; la cocher ne l'efface PAS. Sans calendrier désigné, la
+  fonction est inerte : tout part en rappel, comme avant.
 - **`HUDWindow`** ne parle QUE des gestes dont le résultat n'est pas à l'écran — une tâche déposée par
   la capsule depuis une autre app, un pomodoro piloté au clavier (`!pomodoro…` d'`AppCommand`, qui
   n'active délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux, l'y ajouter en

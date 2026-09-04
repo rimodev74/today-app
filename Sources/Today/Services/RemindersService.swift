@@ -42,6 +42,21 @@ final class RemindersService {
     store.defaultCalendarForNewReminders()
   }
 
+  /// Calendriers d'ÉVÉNEMENTS où l'écriture est permise — la destination des tâches à durée.
+  /// Vide tant que l'accès au Calendrier n'a pas été accordé (autorisation distincte de celle des
+  /// rappels, cf. `requestEventAccess`).
+  var writableEventCalendars: [EKCalendar] {
+    store.calendars(for: .event).filter(\.allowsContentModifications)
+  }
+
+  /// Le calendrier désigné dans les Réglages, s'il existe ENCORE — même précaution que
+  /// `list(withIdentifier:)` : un calendrier supprimé laisse derrière lui un identifiant qui ne
+  /// pointe plus sur rien, et rien ne prévient.
+  func eventCalendar(withIdentifier identifier: String?) -> EKCalendar? {
+    guard let identifier, !identifier.isEmpty else { return nil }
+    return writableEventCalendars.first { $0.calendarIdentifier == identifier }
+  }
+
   /// Demande l'accès complet. Full (et non write-only) est nécessaire pour relire un rappel
   /// par son identifiant afin de le modifier plus tard (bonus + socle de la synchro).
   /// Lève `RemindersError.accessDenied` en cas de refus.
@@ -101,6 +116,86 @@ final class RemindersService {
       throw RemindersError.saveFailed(underlying: error)
     }
     return reminder.calendarItemIdentifier
+  }
+
+  // MARK: Écriture — les tâches à DURÉE, qui partent en événements et non en rappels
+
+  /// Crée le bloc d'agenda de cette tâche — ou déplace celui qui existe déjà si `existingIdentifier`
+  /// pointe encore sur un événement. Retourne l'`eventIdentifier` à conserver côté tâche, `nil` si
+  /// l'accès est refusé ou l'enregistrement impossible.
+  ///
+  /// Muet, contrairement à `schedule(…)` qui lève : le seul appelant est la passe de synchro, qui
+  /// n'a personne à qui montrer une erreur (elle tourne toute seule, réveillée par une notification).
+  /// Une erreur laisse simplement la tâche sans son événement, et la passe suivante réessaie.
+  ///
+  /// `.thisEvent` et pas `.futureEvents` : nos événements ne sont jamais récurrents. Sur un
+  /// événement qui le serait devenu (l'utilisateur peut l'éditer dans Calendrier), c'est aussi le
+  /// span le plus prudent — on ne touche que l'occurrence qu'on a créée.
+  @discardableResult
+  func scheduleEvent(
+    title: String,
+    start: Date,
+    minutes: Int,
+    calendar: EKCalendar?,
+    existingIdentifier: String? = nil
+  ) async -> String? {
+    guard await requestEventAccess() else { return nil }
+
+    // `existing` est distinct de `event` parce que c'est LUI qui dit où écrire : un événement
+    // retrouvé garde son calendrier (déplacé à la main, il y reste), un événement neuf prend celui
+    // des Réglages. L'appelant passe donc toujours le calendrier désigné — sans cette distinction,
+    // un événement supprimé côté Calendrier se recréait dans le calendrier PAR DÉFAUT du système
+    // au lieu de celui qu'on avait choisi.
+    let existing = existingIdentifier.flatMap { store.event(withIdentifier: $0) }
+    let event = existing ?? EKEvent(eventStore: store)
+    guard let destination = existing?.calendar ?? calendar ?? store.defaultCalendarForNewEvents
+    else { return nil }
+
+    event.title = title
+    event.calendar = destination
+    event.startDate = start
+    event.endDate = start.addingTimeInterval(TimeInterval(minutes) * 60)
+
+    guard (try? store.save(event, span: .thisEvent, commit: true)) != nil else { return nil }
+    return event.eventIdentifier
+  }
+
+  /// Ce que portent les événements liés, relus en UNE requête sur la fenêtre qui les contient.
+  ///
+  /// **Un `event(withIdentifier:)` par tâche est exactement le défaut mesuré côté Rappels** (cf.
+  /// `passSnapshot` : 97 échantillons de fil principal gelés dans un aller-retour XPC synchrone,
+  /// app AU REPOS), et il se rejouerait ici à chaque `.EKEventStoreChanged` comme à chaque
+  /// `ModelContext.didSave`. Une requête bornée à UN calendrier et aux jours des tâches concernées
+  /// coûte le même aller-retour, une fois.
+  ///
+  /// Un événement déplacé HORS de la fenêtre n'est pas retrouvé : il est alors lu comme absent,
+  /// donc réécrit — et le réécrire, c'est le ramener au jour de sa tâche, jamais en créer un
+  /// second (`scheduleEvent` réutilise l'identifiant). C'est la règle assumée : la tâche fait foi
+  /// pour le JOUR.
+  func linkedEventTimes(
+    _ identifiers: Set<String>, from start: Date, to end: Date, in calendar: EKCalendar
+  ) -> [String: DateInterval] {
+    guard eventAuthorizationStatus == .fullAccess, !identifiers.isEmpty, start < end else {
+      return [:]
+    }
+    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: [calendar])
+    return store.events(matching: predicate).reduce(into: [:]) { times, event in
+      guard let id = event.eventIdentifier, identifiers.contains(id),
+        let from = event.startDate, let to = event.endDate, from <= to
+      else { return }
+      times[id] = DateInterval(start: from, end: to)
+    }
+  }
+
+  /// Efface les événements dont la tâche n'a plus de durée (ou plus de date), et ceux des tâches
+  /// qu'on supprime. Même contrat que `forgetReminders` : synchrone, muet, par IDENTIFIANT — donc
+  /// utilisable APRÈS que SwiftData a effacé les objets (cf. sa doc, et le plantage du 6 août 2026).
+  func forgetEvents(_ identifiers: [String]) {
+    guard eventAuthorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
+    for identifier in identifiers {
+      guard let event = store.event(withIdentifier: identifier) else { continue }
+      try? store.remove(event, span: .thisEvent, commit: true)
+    }
   }
 
   /// Relit l'état de complétion des rappels liés (Rappels → app). Renvoie `identifiant: isCompleted`
@@ -420,10 +515,19 @@ final class RemindersService {
     }
   }
 
-  /// Les identifiants de rappel de ces tâches — à lire AVANT de les supprimer, et à passer ensuite
-  /// à `forgetReminders(_:)`.
-  nonisolated static func reminderIdentifiers(of tasks: [TaskItem]) -> [String] {
-    tasks.compactMap(\.reminderIdentifier)
+  /// Les identifiants Apple de ces tâches — rappels ET événements — à lire AVANT de les supprimer,
+  /// et à passer ensuite à `forgetAppleItems(_:)`. Les deux dans une seule liste : les chemins de
+  /// suppression n'ont pas à savoir lequel des deux champs était rempli.
+  nonisolated static func appleIdentifiers(of tasks: [TaskItem]) -> [String] {
+    tasks.compactMap(\.reminderIdentifier) + tasks.compactMap(\.eventIdentifier)
+  }
+
+  /// Efface ce qu'une tâche supprimée laisse derrière elle, quelle que soit sa forme côté Apple.
+  /// Chacune des deux passes ignore ce qui n'est pas de son type : les identifiants de rappel et
+  /// d'événement ne vivent pas dans le même espace de noms, aucun ne peut être pris pour l'autre.
+  func forgetAppleItems(_ identifiers: [String]) {
+    forgetReminders(identifiers)
+    forgetEvents(identifiers)
   }
 
   /// Rappels non complétés et DATÉS de `list`, titre non vide — la source de l'import.

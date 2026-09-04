@@ -2,7 +2,11 @@ import AppKit
 import SwiftUI
 
 /// Les ponts vers AppKit que SwiftUI ne fournit pas : curseur en zone précise, clic droit, clic
-/// hors zone, touches de sélection (⌫, ↑/↓) et raccourcis clavier au niveau fenêtre.
+/// hors zone et touches de sélection (⌫, ↑/↓).
+///
+/// Un `KeyCommandMonitor` vivait ici, pour ⌘N et ⌘⇧N. Il est parti avec eux : ces deux raccourcis
+/// appartiennent maintenant au menu *Fichier* (cf. `MainMenuCommands`), et AppKit distingue leurs
+/// modificateurs sans qu'on ait à le faire à sa place.
 ///
 /// AUCUN ne connaît la moindre notion de tâche ou de liste — ce sont des primitives d'interaction,
 /// réutilisables telles quelles par n'importe quelle vue (cf. `WindowConfigurator`, qui se sert
@@ -214,8 +218,8 @@ struct TaskKeyMonitor: NSViewRepresentable {
       self.onMove = onMove
     }
 
-    /// La vue qui porte ce moniteur — sa fenêtre est la SEULE dans laquelle il doit agir. Même
-    /// raison que dans `KeyCommandMonitor` : un moniteur local écoute toute l'APPLICATION. Ce
+    /// La vue qui porte ce moniteur — sa fenêtre est la SEULE dans laquelle il doit agir : un
+    /// moniteur local écoute toute l'APPLICATION, Réglages et capsule de saisie rapide compris. Ce
     /// moniteur-ci s'en tirait par un effet de bord (son test « un champ texte a le focus ? »
     /// écarte la capsule de saisie rapide et les Réglages, où l'on tape toujours dans un champ),
     /// mais rien ne le garantissait — une fenêtre auxiliaire sans champ texte aurait vu ⌫
@@ -240,75 +244,6 @@ struct TaskKeyMonitor: NSViewRepresentable {
         default: return event
         }
         return handled ? nil : event  // rendue intacte si elle n'a rien fait
-      }
-    }
-
-    func uninstall() {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
-    }
-  }
-}
-
-/// Raccourci clavier sur `keyCode` + un jeu EXACT de modificateurs, câblé en direct sur NSEvent
-/// (même mécanisme que `TaskKeyMonitor` ci-dessus) — pour ⌘N/⌘⇧N : deux `.keyboardShortcut` sur
-/// la même lettre avec des modificateurs différents se marchent dessus sous SwiftUI (⌘⇧N avalé
-/// par le gestionnaire ⌘N), ce moniteur compare les modificateurs à l'égalité et évite le conflit.
-struct KeyCommandMonitor: NSViewRepresentable {
-  var keyCode: UInt16
-  var modifiers: NSEvent.ModifierFlags
-  var action: () -> Void
-
-  func makeCoordinator() -> Coordinator { Coordinator(modifiers: modifiers, action: action) }
-
-  func makeNSView(context: Context) -> NSView {
-    let host = NSView(frame: .zero)
-    context.coordinator.host = host
-    context.coordinator.install(keyCode: keyCode)
-    return host
-  }
-
-  func updateNSView(_ nsView: NSView, context: Context) {
-    context.coordinator.modifiers = modifiers
-    context.coordinator.action = action
-  }
-
-  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-    coordinator.uninstall()
-  }
-
-  /// Isolé au fil principal comme le reste d'AppKit : ses rappels ne partent que de la boucle
-  /// d'événements. L'annotation écrit une contrainte déjà vraie, elle n'en ajoute aucune.
-  @MainActor
-  final class Coordinator {
-    var modifiers: NSEvent.ModifierFlags
-    var action: () -> Void
-    private var monitor: Any?
-
-    init(modifiers: NSEvent.ModifierFlags, action: @escaping () -> Void) {
-      self.modifiers = modifiers
-      self.action = action
-    }
-
-    /// La vue qui porte ce moniteur — sa fenêtre est la SEULE dans laquelle il doit agir.
-    ///
-    /// `addLocalMonitorForEvents` écoute toute l'APPLICATION, pas une fenêtre. Sans cette garde,
-    /// ⌘N frappé dans les Réglages ou dans la capsule de saisie rapide créait une tâche dans la
-    /// fenêtre principale, derrière — une tâche apparue là où l'on ne regardait même pas.
-    /// (`TaskKeyMonitor` échappait au même défaut par accident : son test « un champ texte a le
-    /// focus ? » écarte la capsule, mais rien ne l'écartait par principe.)
-    weak var host: NSView?
-
-    func install(keyCode: UInt16) {
-      guard monitor == nil else { return }
-      let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-        guard let self, event.keyCode == keyCode,
-          event.modifierFlags.intersection(relevantMods) == self.modifiers,
-          let window = self.host?.window, event.window === window
-        else { return event }
-        self.action()
-        return nil
       }
     }
 

@@ -279,4 +279,140 @@ final class RemindersSyncTests: XCTestCase {
     let after = await service.withSyncLock {}
     XCTAssertTrue(after, "le verrou est rendu à la sortie")
   }
+
+  // MARK: Rappel ou événement — l'exclusivité, et ce qui la déclenche
+
+  /// La règle du chantier : une durée, et la tâche cesse d'être une sonnerie pour devenir un
+  /// créneau. Sans cette exclusivité, la même tâche existerait des DEUX côtés d'Apple.
+  func testUneDureeEnvoieLaTacheDansLeCalendrier() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: true), .event)
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: false), .reminder)
+  }
+
+  /// Le réglage est ce qui allume la fonction : sans calendrier désigné, une durée ne change rien
+  /// — les tâches à durée qui partaient en rappel continuent d'y partir.
+  func testSansCalendrierDesigneToutResteUnRappel() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 30
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: false), .reminder)
+  }
+
+  /// **Une durée SANS date ne va nulle part.** C'est l'ordre dans lequel on travaille : on estime
+  /// souvent avant de planifier, et une estimation n'est pas un rendez-vous. Tant qu'aucun jour
+  /// n'est posé, il n'y a tout simplement pas d'heure à réserver — la tâche reste dans l'app, et
+  /// le calendrier n'en sait rien. L'événement n'apparaît qu'au moment où la date arrive.
+  func testUneDureeSansDateNeVaPasDansLeCalendrier() {
+    let task = dated(on: nil)
+    task.estimateMinutes = 60
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: true), .none)
+    XCTAssertFalse(
+      RemindersSync.needsEventPush(
+        task, eventStart: nil, eventMinutes: nil, calendar: calendar))
+  }
+
+  /// Le même fait vu de l'autre bout : la date arrive APRÈS la durée, et c'est elle qui déclenche
+  /// l'écriture. Sans ce test, inverser une condition dans `destination` passerait inaperçu.
+  func testLaDatePoseeApresLaDureeDeclencheLEvenement() {
+    let task = dated(on: nil)
+    task.estimateMinutes = 60
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: true), .none)
+    task.when = day(2026, 9, 10)
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: true), .event)
+  }
+
+  func testUneTacheSansDureeResteUnRappel() {
+    let task = dated(on: day(2026, 9, 10))
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: true), .reminder)
+  }
+
+  func testUneTacheCocheeNeVaNullePart() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    task.isCompleted = true
+    XCTAssertEqual(RemindersSync.destination(for: task, eventCalendarChosen: true), .none)
+  }
+
+  // MARK: L'arrêt, côté événements
+
+  func testTacheADureeSansEvenementDoitEtrePoussee() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    XCTAssertTrue(
+      RemindersSync.needsEventPush(
+        task, eventStart: nil, eventMinutes: nil, calendar: calendar))
+  }
+
+  func testEvenementDejaConformeNestPasReecrit() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    task.whenMinutes = 14 * 60 + 30
+    let start = calendar.date(bySettingHour: 14, minute: 30, second: 0, of: day(2026, 9, 10))!
+    XCTAssertFalse(
+      RemindersSync.needsEventPush(
+        task, eventStart: start, eventMinutes: 60, calendar: calendar))
+  }
+
+  func testDureeChangeeDeclencheUneReecriture() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 120
+    task.whenMinutes = 14 * 60
+    let start = calendar.date(bySettingHour: 14, minute: 0, second: 0, of: day(2026, 9, 10))!
+    XCTAssertTrue(
+      RemindersSync.needsEventPush(
+        task, eventStart: start, eventMinutes: 60, calendar: calendar))
+  }
+
+  /// Le pendant exact de `testMemeJourAUneHeureDifferenteNestPasReecrit` : sans heure à elle, la
+  /// tâche ne réclame qu'un JOUR — un événement déplacé à la main dans Calendrier garde son heure.
+  func testEvenementDeplaceDansLaJourneeResteOuIlEstSiLaTacheNaPasDHeure() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    let start = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: day(2026, 9, 10))!
+    XCTAssertFalse(
+      RemindersSync.needsEventPush(
+        task, eventStart: start, eventMinutes: 60, calendar: calendar))
+  }
+
+  /// Avec une heure, la tâche fait foi : sans cette branche, le sélecteur d'heure n'aurait aucun
+  /// effet visible sur le créneau.
+  func testHeureDeLaTacheFaitFoiQuandElleEnAUne() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    task.whenMinutes = 9 * 60
+    let start = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: day(2026, 9, 10))!
+    XCTAssertTrue(
+      RemindersSync.needsEventPush(
+        task, eventStart: start, eventMinutes: 60, calendar: calendar))
+  }
+
+  // MARK: Le retour arrière — retirer la durée défait ce que la poser avait fait
+
+  func testRetirerLaDureeEffaceLEvenement() {
+    let task = dated(on: day(2026, 9, 10))
+    task.eventIdentifier = "event-1"
+    XCTAssertTrue(RemindersSync.shouldForgetEvent(task))
+  }
+
+  func testRetirerLaDateEffaceLEvenement() {
+    let task = dated(on: nil)
+    task.estimateMinutes = 60
+    task.eventIdentifier = "event-1"
+    XCTAssertTrue(RemindersSync.shouldForgetEvent(task))
+  }
+
+  /// Cocher une tâche n'efface PAS son bloc d'agenda : un événement passé raconte ce qu'on a fait
+  /// de sa journée.
+  func testCocherUneTacheNeSupprimePasSonEvenement() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    task.eventIdentifier = "event-1"
+    task.isCompleted = true
+    XCTAssertFalse(RemindersSync.shouldForgetEvent(task))
+  }
+
+  func testUneTacheSansEvenementNaRienAOublier() {
+    XCTAssertFalse(RemindersSync.shouldForgetEvent(dated(on: nil)))
+  }
 }

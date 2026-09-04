@@ -65,6 +65,15 @@ final class TaskItem {
   /// Identifiant du rappel Apple Rappels associé, s'il existe.
   /// Permet de re-modifier le rappel au lieu d'en recréer un.
   var reminderIdentifier: String?
+  /// Identifiant de l'ÉVÉNEMENT Apple Calendrier associé, s'il existe. Une tâche datée qui porte
+  /// une durée cesse d'être un rappel pour devenir un bloc dans l'agenda (cf. `RemindersSync`).
+  ///
+  /// Un champ à part et pas un `reminderIdentifier` polyvalent, et ce n'est pas de la cosmétique :
+  /// la passe de synchro relit ses rappels dans un instantané qui ne contient QUE des rappels
+  /// (cf. `RemindersService.passSnapshot`). Un identifiant d'événement rangé là serait introuvable
+  /// à chaque passe, donc lu comme « jamais poussé » par `RemindersSync.needsPush` — qui recréerait
+  /// un rappel toutes les secondes, indéfiniment. Deux champs, au plus un rempli à la fois.
+  var eventIdentifier: String?
   var list: TodoList?
   /// Couleur de l'en-tête (uniquement significatif si `isHeader`). `nil` = style par défaut.
   /// Stocke `PaletteColor.rawValue` — voir `headerColor` ci-dessous, même pattern que `priority`.
@@ -138,6 +147,7 @@ final class TaskItem {
       && priorityRaw == 0
       && estimateMinutes == 0
       && reminderIdentifier == nil
+      && eventIdentifier == nil
       && !isCompleted
   }
 
@@ -190,8 +200,9 @@ final class TaskItem {
   /// `TaskItem` se recopie désormais ici, ou nulle part.
   ///
   /// Volontairement NON copiés : la complétion (`isCompleted`/`completedAt` — une copie est une
-  /// tâche à faire) et `reminderIdentifier` (un rappel Apple appartient à une seule tâche ; le
-  /// partager ferait que cocher la copie cocherait l'originale).
+  /// tâche à faire), `reminderIdentifier` (un rappel Apple appartient à une seule tâche ; le
+  /// partager ferait que cocher la copie cocherait l'originale) et `eventIdentifier`, pour la même
+  /// raison — la copie se fera son propre événement à la passe suivante.
   func copy(into list: TodoList?) -> TaskItem {
     let clone = TaskItem(title: title, notes: notes, when: when, isHeader: isHeader, list: list)
     clone.whenMinutes = whenMinutes

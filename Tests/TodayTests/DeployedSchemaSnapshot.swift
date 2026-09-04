@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 2.0.0, 2 août 2026.** Ne se modifie que
+/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 6.0.0, 4 septembre 2026.** Ne se modifie que
 /// quand la forme déployée change, et alors dans le même geste que les modèles vivants — jamais
 /// pour faire taire un test.
 ///
@@ -23,6 +23,8 @@ import SwiftData
 ///   identités existantes doivent être TIRÉES une par une (cf. `TodayMigrationPlan`).
 /// - `TaskItem.whenMinutes`, 5 août 2026 — l'heure d'une tâche datée, ajout PUR (optionnel), étape
 ///   `.lightweight`. Une tâche d'avant n'avait pas d'heure et n'en a toujours pas : `nil` partout.
+/// - `TaskItem.eventIdentifier`, 4 septembre 2026 — l'événement Calendrier d'une tâche à durée,
+///   ajout PUR (optionnel), étape `.lightweight`. Aucune base d'avant n'a écrit d'événement.
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -38,7 +40,7 @@ import SwiftData
 /// ces classes relisent sans perte un fichier écrit par les modèles de premier niveau, relations
 /// comprises.
 enum DeployedSchemaSnapshot: VersionedSchema {
-  static let versionIdentifier = Schema.Version(5, 0, 0)
+  static let versionIdentifier = Schema.Version(6, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
@@ -88,6 +90,7 @@ enum DeployedSchemaSnapshot: VersionedSchema {
     var estimateMinutes: Int = 0
     var createdAt: Date = Date()
     var reminderIdentifier: String?
+    var eventIdentifier: String?
     var list: TodoList?
     var headerColorRaw: String?
     @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []

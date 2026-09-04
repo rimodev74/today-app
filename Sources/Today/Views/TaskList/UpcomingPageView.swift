@@ -23,18 +23,18 @@ struct UpcomingPageView: View {
   /// page est un aperçu par date, on y coche et on y supprime — renommer se fait dans la liste.
   @State private var focus = TaskFocus()
 
-  private var linkedReminderIdentifiers: Set<String> {
-    Set(allTasks.compactMap(\.reminderIdentifier))
-  }
-
   /// Rappels/événements Apple — mis en cache dans `remindersService` (même raison que
   /// `TodayPageView`) : cette page est recréée à chaque réouverture de l'onglet, une `@State`
   /// locale rechargeait donc visiblement tout à chaque fois.
-  private var events: [EKEvent] { remindersService.upcomingEvents }
-  private var reminders: [EKReminder] { remindersService.upcomingReminders }
-
-  private var unlinkedReminders: [EKReminder] {
-    reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
+  /// Ce que la page montre du côté Apple : ni un rappel ni un ÉVÉNEMENT déjà rattaché à une tâche
+  /// — l'un comme l'autre sont déjà à l'écran sous forme de ligne. Une fonction appelée en tête du
+  /// `body`, pour la raison expliquée dans `TodayPageView.appleItems`.
+  private func appleItems() -> (events: [EKEvent], reminders: [EKReminder]) {
+    let linked = Set(RemindersService.appleIdentifiers(of: allTasks))
+    return (
+      remindersService.upcomingEvents.filter { !linked.contains($0.eventIdentifier ?? "") },
+      remindersService.upcomingReminders.filter { !linked.contains($0.calendarItemIdentifier) }
+    )
   }
 
   private var tomorrow: Date { DayBounds().startOfTomorrow }
@@ -42,8 +42,10 @@ struct UpcomingPageView: View {
   var body: some View {
     // Construit UNE fois par rendu, puis distribué — le calcul lui-même vit dans `UpcomingPage`,
     // avec ses tests (cf. la règle « une vue orchestre et anime ; elle ne calcule pas »).
+    // Calculé une fois puis distribué, comme `agenda` (cf. `appleItems`).
+    let apple = appleItems()
     let agenda = UpcomingPage(
-      tasks: allTasks, events: events, reminders: unlinkedReminders)
+      tasks: allTasks, events: apple.events, reminders: apple.reminders)
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
@@ -112,7 +114,7 @@ struct UpcomingPageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
+      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 

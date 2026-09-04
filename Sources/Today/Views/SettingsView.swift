@@ -625,6 +625,7 @@ private struct RemindersSyncSection: View {
   @AppStorage(RemindersSync.importStorageKey) private var importReminders = false
   @AppStorage(RemindersSync.listStorageKey) private var listID = ""
   @AppStorage(RemindersSync.dueHourStorageKey) private var dueHour = RemindersSync.dueHour
+  @AppStorage(RemindersSync.eventCalendarStorageKey) private var eventCalendarID = ""
   @State private var accessDenied = false
 
   var body: some View {
@@ -665,6 +666,22 @@ private struct RemindersSyncSection: View {
               + "seuls les prochains suivent ce réglage."
           )
           .font(.app(.caption)).foregroundStyle(.secondary)
+
+          // La durée est ce qui sépare une sonnerie d'un créneau : une tâche qui dit combien de
+          // temps elle prend demande de la PLACE dans la journée. Aucun calendrier désigné et la
+          // durée ne change rien — tout part en rappel, comme avant.
+          Picker("Calendrier des tâches avec durée", selection: $eventCalendarID) {
+            Text("Aucun").tag("")
+            ForEach(remindersService.writableEventCalendars, id: \.calendarIdentifier) { calendar in
+              Text(calendar.title).tag(calendar.calendarIdentifier)
+            }
+          }
+          Text(
+            "Une tâche datée à laquelle on donne une durée (clic droit ▸ Durée…) part comme "
+              + "ÉVÉNEMENT dans ce calendrier, au lieu d'un rappel. Retirer la durée efface "
+              + "l'événement et rend la tâche à Rappels."
+          )
+          .font(.app(.caption)).foregroundStyle(.secondary)
         }
 
         if listID.isEmpty && (push || importReminders) {
@@ -685,8 +702,12 @@ private struct RemindersSyncSection: View {
     }
     // L'accès est demandé à l'ouverture de l'onglet, pas au premier basculement : `writableLists`
     // est VIDE tant qu'il n'est pas accordé, et le Picker n'aurait affiché que « Aucune » — soit
-    // un réglage qui a l'air cassé plutôt qu'un réglage qui demande la permission.
-    .task { accessDenied = ((try? await remindersService.requestAccess()) == nil) }
+    // un réglage qui a l'air cassé plutôt qu'un réglage qui demande la permission. Celui du
+    // CALENDRIER est une autorisation distincte, et son Picker a le même besoin.
+    .task {
+      accessDenied = ((try? await remindersService.requestAccess()) == nil)
+      await remindersService.requestEventAccess()
+    }
   }
 }
 

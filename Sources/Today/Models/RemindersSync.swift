@@ -23,6 +23,11 @@ enum RemindersSync {
   static let pushStorageKey = "remindersSyncPushEnabled"
   static let importStorageKey = "remindersSyncImportEnabled"
 
+  /// Identifiant du CALENDRIER où partent les tâches à durée, sous forme d'événements. Vide = la
+  /// fonction n'existe pas : tout part en rappel, comme avant. Un réglage global et pas un choix
+  /// par tâche — même raison que la liste-pont : une destination qu'on désigne une fois.
+  static let eventCalendarStorageKey = "remindersSyncEventCalendarIdentifier"
+
   /// Heure d'échéance posée sur un rappel créé depuis une tâche, quand rien n'est réglé. L'app ne
   /// pose que des JOURS (cf. `TaskItem.when`), donc il en faut une : une échéance à 00:00 fait
   /// sonner l'alarme la veille au soir pour l'utilisateur, ce qu'aucune tâche « pour demain » ne
@@ -41,6 +46,66 @@ enum RemindersSync {
   static func isPushable(_ task: TaskItem) -> Bool {
     !task.isHeader && !task.isCompleted && task.when != nil
       && !task.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  /// Ce qu'une tâche datée doit devenir du côté Apple — et l'exclusivité entre les deux, écrite UNE
+  /// fois. Sans arbitre unique, une tâche à durée finirait avec un rappel ET un événement : deux
+  /// entrées pour la même chose, chacune poussée par sa propre boucle.
+  ///
+  /// La DURÉE est ce qui départage, et c'est la seule chose qui manque à un rappel pour être un
+  /// bloc d'agenda : un rappel a une échéance, un événement a un début et une fin. Une tâche à
+  /// laquelle on donne une durée demande de la place dans la journée, pas une sonnerie.
+  enum Destination {
+    case none
+    case reminder
+    case event
+  }
+
+  /// `eventCalendarChosen` est le réglage : aucun calendrier désigné, et la durée ne change rien —
+  /// tout continue de partir en rappel. C'est ce qui rend la fonction inerte tant qu'on ne l'a pas
+  /// demandée, plutôt que de faire disparaître des rappels de tâches à durée déjà existantes.
+  static func destination(for task: TaskItem, eventCalendarChosen: Bool) -> Destination {
+    guard isPushable(task) else { return .none }
+    return eventCalendarChosen && task.estimateMinutes > 0 ? .event : .reminder
+  }
+
+  /// Faut-il (ré)écrire l'événement de cette tâche ? `eventStart`/`eventMinutes` décrivent
+  /// l'événement lié tel qu'il est en ce moment — `nil` s'il n'existe pas encore, ou s'il a été
+  /// supprimé côté Calendrier (auquel cas on le recrée : c'est le même choix que pour un
+  /// identifiant de rappel périmé, et supprimer une TÂCHE parce qu'un événement a disparu n'est
+  /// demandé nulle part).
+  ///
+  /// Mêmes deux comparaisons que `needsPush`, et pour la même raison : sans heure à elle, la tâche
+  /// ne réclame qu'un JOUR, donc un événement déplacé à la main dans Calendrier garde l'heure qu'on
+  /// lui a donnée. Avec heure, la tâche fait foi. La durée, elle, se compare toujours — c'est le
+  /// champ que le menu « Durée… » vient de poser.
+  ///
+  /// ponytail: le TITRE n'est pas comparé, exactement comme côté rappels — renommer une tâche ne
+  /// renomme pas son événement tant qu'aucune date ni durée ne bouge. L'ajouter demanderait de le
+  /// faire des deux côtés d'un coup, sans quoi les deux ponts se mettraient à diverger.
+  static func needsEventPush(
+    _ task: TaskItem, eventStart: Date?, eventMinutes: Int?, calendar: Calendar = .current
+  ) -> Bool {
+    guard isPushable(task), task.estimateMinutes > 0, let when = task.when else { return false }
+    guard let eventStart, let eventMinutes else { return true }
+    guard eventMinutes == task.estimateMinutes else { return true }
+    guard let minutes = task.whenMinutes else {
+      return !calendar.isDate(eventStart, inSameDayAs: when)
+    }
+    return !calendar.isDate(
+      eventStart, equalTo: due(for: when, minutes: minutes, calendar: calendar),
+      toGranularity: .minute)
+  }
+
+  /// L'événement lié n'a plus lieu d'être : la tâche a perdu sa durée ou sa date. Il est alors
+  /// EFFACÉ du calendrier et la tâche repart en rappel à la passe suivante — retirer la durée
+  /// défait exactement ce que la poser avait fait.
+  ///
+  /// Volontairement muet sur la COMPLÉTION : cocher une tâche n'efface pas son bloc d'agenda. Un
+  /// événement passé raconte ce qu'on a fait de sa journée, et le supprimer effacerait cette
+  /// trace — là où un rappel coché, lui, reste coché de son côté.
+  static func shouldForgetEvent(_ task: TaskItem) -> Bool {
+    task.eventIdentifier != nil && !(task.estimateMinutes > 0 && task.when != nil)
   }
 
   /// Faut-il (ré)écrire le rappel de cette tâche ? `reminderDue` est l'échéance que porte le rappel

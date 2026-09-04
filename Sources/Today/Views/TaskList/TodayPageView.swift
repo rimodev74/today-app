@@ -58,26 +58,33 @@ struct TodayPageView: View {
   /// rafraîchit : une fenêtre laissée ouverte toute la nuit date bien du bon jour au matin.
   private var startOfToday: Date { Calendar.current.startOfDay(for: now) }
 
-  /// Rappels Apple déjà rattachés à une tâche de l'app : à exclure de la section « Rappels »
-  /// pour ne pas les montrer deux fois (une fois comme tâche, une fois comme rappel brut).
-  private var linkedReminderIdentifiers: Set<String> {
-    Set(allTasks.compactMap(\.reminderIdentifier))
-  }
-
-  /// Rappels/événements Apple du jour — mis en cache dans `remindersService` (cf. son
-  /// commentaire), pas ici : une `@State` locale repartirait de zéro à chaque réouverture de
-  /// l'onglet, ce qui rechargeait visiblement la page à chaque fois.
-  private var events: [EKEvent] { remindersService.todayEvents }
-  private var reminders: [EKReminder] { remindersService.todayReminders }
-
-  private var unlinkedReminders: [EKReminder] {
-    reminders.filter { !linkedReminderIdentifiers.contains($0.calendarItemIdentifier) }
+  /// Ce que les sections Apple montrent : tout SAUF ce qui est déjà à l'écran sous forme de tâche.
+  /// Un rappel lié y était déjà exclu ; un ÉVÉNEMENT créé par l'app (une tâche à durée) l'est
+  /// désormais pour la même raison — sinon la même chose apparaît deux fois sur la page.
+  ///
+  /// Rappels et événements dans UN seul ensemble d'identifiants : ils ne vivent pas dans le même
+  /// espace de noms, aucun ne peut être pris pour l'autre, et la table des tâches n'est traversée
+  /// qu'une fois. Une FONCTION appelée en tête du `body`, pas des propriétés calculées : chaque
+  /// section lit sa liste DEUX fois (`isEmpty`, puis le `ForEach`), ce qui refaisait le balayage
+  /// quatre fois par rendu.
+  ///
+  /// Les listes elles-mêmes sont en cache dans `remindersService` (cf. son commentaire), pas ici :
+  /// une `@State` locale repartirait de zéro à chaque réouverture de l'onglet, ce qui rechargeait
+  /// visiblement la page à chaque fois.
+  private func appleItems() -> (events: [EKEvent], reminders: [EKReminder]) {
+    let linked = Set(RemindersService.appleIdentifiers(of: allTasks))
+    return (
+      remindersService.todayEvents.filter { !linked.contains($0.eventIdentifier ?? "") },
+      remindersService.todayReminders.filter { !linked.contains($0.calendarItemIdentifier) }
+    )
   }
 
   var body: some View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture de `tasks` refiltrait
     // et retriait toute la base — plusieurs fois par image.
     let page = TodayPage.build(from: allTasks)
+    // Même règle que `page` : calculé une fois, distribué ensuite (cf. `appleItems`).
+    let apple = appleItems()
     // La séquence VIVANTE, comme sur les autres pages. Elle ne bouge pas d'elle-même pendant un
     // geste (rien n'est écrit avant le relâchement), et c'est ce qui compte : rendre une séquence
     // figée puis rebasculer sur la vivante au lâcher faisait DEUX mouvements en même temps — le
@@ -102,7 +109,7 @@ struct TodayPageView: View {
           header
 
           Group {
-            eventsSection
+            eventsSection(apple.events)
 
             ForEach(rows) { task in
               taskRow(
@@ -110,7 +117,7 @@ struct TodayPageView: View {
                 rows: rows)
             }
             if showsNewTaskField { newTaskRow }
-            remindersSection
+            remindersSection(apple.reminders)
           }
         }
         .frame(width: max(geo.size.width - 2 * gutter, 1), alignment: .leading)
@@ -274,10 +281,10 @@ struct TodayPageView: View {
 
   private func delete(_ task: TaskItem) {
     focus.forget(task)
-    // Son rappel part avec elle : laissé derrière, il revient dans la section « Rappels » de
-    // cette même page (cf. `RemindersService.forgetReminders`).
+    // Son rappel — ou son événement — part avec elle : laissé derrière, il revient dans la section
+    // « Rappels » ou « Calendrier » de cette même page (cf. `RemindersService.forgetAppleItems`).
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
+      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
@@ -371,10 +378,10 @@ struct TodayPageView: View {
 
   /// Absente si vide — une page neuve ne montre pas une section sans rien dedans (même
   /// convention que `archiveSection`/`dormantSummary` de `ListPageView`).
-  @ViewBuilder private var remindersSection: some View {
-    if !unlinkedReminders.isEmpty {
+  @ViewBuilder private func remindersSection(_ unlinked: [EKReminder]) -> some View {
+    if !unlinked.isEmpty {
       AppleItemsSection(title: "Rappels", systemImage: "bell") {
-        ForEach(unlinkedReminders, id: \.calendarItemIdentifier) { reminder in
+        ForEach(unlinked, id: \.calendarItemIdentifier) { reminder in
           ReminderRow(reminder: reminder, onToggle: { completeReminder(reminder) })
         }
       }
@@ -383,7 +390,7 @@ struct TodayPageView: View {
 
   /// Pas de bandeau ni de `Divider` ici (contrairement à « Rappels ») : à la demande de Ryan,
   /// les événements s'affichent seuls, tout en haut de la page.
-  @ViewBuilder private var eventsSection: some View {
+  @ViewBuilder private func eventsSection(_ events: [EKEvent]) -> some View {
     if !events.isEmpty {
       VStack(alignment: .leading, spacing: 6) {
         ForEach(events, id: \.eventIdentifier) { EventRow(event: $0) }

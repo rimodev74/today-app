@@ -57,7 +57,7 @@ extension TodoList {
   /// `forget` reçoit les tâches que la cascade va emporter, AVANT qu'elles ne disparaissent : c'est
   /// la seule fenêtre où leurs rappels Apple sont encore lisibles. Sans lui, les rappels restaient
   /// derrière, orphelins, et réapparaissaient dans les sections « Rappels » de l'app (cf.
-  /// `RemindersService.forgetReminders(_:)`).
+  /// `RemindersService.forgetAppleItems(_:)`).
   ///
   /// **Sans valeur par défaut, délibérément.** Ce code vit dans `Models/`, qui ne connaît pas le
   /// service ; le brancher revient donc à ne pas l'oublier sur CHACUN des quatre appelants. Un
@@ -65,11 +65,11 @@ extension TodoList {
   /// `TaskPageBase.reorder` et `newTask` documentent, et qui s'est déjà produit deux fois ici.
   func delete(
     from selection: Binding<SidebarSelection?>, in context: ModelContext,
-    forgetReminders: ([String]) -> Void
+    forget: ([String]) -> Void
   ) {
     // Des IDENTIFIANTS, pas des tâches : de simples chaînes, qui survivent à ce que la cascade
     // efface. Lues ici, tant que tout est debout.
-    let doomedReminders = tasks.compactMap(\.reminderIdentifier)
+    let doomed = RemindersService.appleIdentifiers(of: tasks)
     if selection.wrappedValue == .list(self) {
       selection.wrappedValue = project.map(SidebarSelection.project) ?? .smartList(.all)
     }
@@ -81,7 +81,7 @@ extension TodoList {
     // notification de changement, qui relance la synchro, qui réenregistre CE contexte. Écrire dans
     // un contexte pendant qu'on l'enregistre n'a rien à faire là — mais ce n'est PAS ce qui faisait
     // planter l'app le 6 août 2026 : la vraie cause était l'annulation, cf. `deleteCascadeAndSave`.
-    forgetReminders(doomedReminders)
+    forget(doomed)
   }
 }
 

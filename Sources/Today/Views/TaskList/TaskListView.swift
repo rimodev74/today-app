@@ -260,17 +260,12 @@ private struct ListPageView: View {
           .hidden()
       }
     }
-    // ⌘⇧N : PAS de bouton caché + `.keyboardShortcut` (essayé d'abord) — deux raccourcis sur la
-    // même lettre avec des modificateurs différents se marchent dessus sous SwiftUI, ⌘⇧N étant
-    // avalé par le gestionnaire ⌘N. Ce moniteur compare les modificateurs à l'égalité.
-    //
-    // ⌘N n'est PLUS ici : il était posé sur cette page et sur elle seule, ce qui laissait les
-    // quatre autres à découvert — la touche y retombait sur le *Nouvelle fenêtre* de `WindowGroup`
-    // et ouvrait un onglet. Il vit maintenant dans le socle (`TaskPageBase.newTask`). Les en-têtes
-    // de section, elles, n'existent que sur cette page : ⌘⇧N reste donc à sa charge.
-    .background {
-      KeyCommandMonitor(keyCode: 45, modifiers: [.command, .shift], action: insertHeader)
-    }
+    // ⌘⇧N, dans le menu *Fichier* comme ⌘N (cf. `MainMenuCommands`). Les en-têtes de section
+    // n'existent que sur cette page : elle est la seule à publier l'action, l'item se grise
+    // ailleurs. Un moniteur `NSEvent` la portait, parce que deux `.keyboardShortcut` sur la même
+    // lettre se marchent dessus sous SwiftUI — un MENU, lui, distingue ⌘N de ⌘⇧N sans effort :
+    // c'est AppKit qui compare les modificateurs, comme dans toutes les apps du système.
+    .focusedSceneValue(\.newHeader, MenuAction(id: "newHeader", run: insertHeader))
     // Le socle commun des pages de tâches : ⌫ sur la sélection, ↑/↓ pour la déplacer. Un seul pan,
     // toujours visible : cette page n'a pas de section repliable, mais elle passe par les mêmes
     // `TaskPageBlock` que les autres — une page ne choisit pas sa façon de déclarer ses lignes.
@@ -1465,13 +1460,13 @@ private struct ListPageView: View {
 
   private func deleteList() {
     list.delete(
-      from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
+      from: $selection, in: modelContext, forget: remindersService.forgetAppleItems)
   }
 
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
+      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
@@ -1668,7 +1663,7 @@ private struct ProjectPageView: View {
       Button("Supprimer", role: .destructive) {
         withAnimation(boardFlow) {
           list.delete(
-            from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
+            from: $selection, in: modelContext, forget: remindersService.forgetAppleItems)
         }
         deletionCandidate = nil
       }
@@ -1763,7 +1758,7 @@ private struct ProjectPageView: View {
     } else {
       withAnimation(boardFlow) {
         list.delete(
-          from: $selection, in: modelContext, forgetReminders: remindersService.forgetReminders)
+          from: $selection, in: modelContext, forget: remindersService.forgetAppleItems)
       }
     }
   }

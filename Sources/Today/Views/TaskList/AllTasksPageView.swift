@@ -211,7 +211,7 @@ struct AllTasksPageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forgetReminders: remindersService.forgetReminders)
+      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
