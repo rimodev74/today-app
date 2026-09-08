@@ -415,4 +415,183 @@ final class RemindersSyncTests: XCTestCase {
   func testUneTacheSansEvenementNaRienAOublier() {
     XCTAssertFalse(RemindersSync.shouldForgetEvent(dated(on: nil)))
   }
+
+  // MARK: L'autre sens — l'événement supprimé dans le Calendrier
+
+  /// Le miroir : effacer le créneau retire la durée, et la tâche redevient un rappel. Sans ça,
+  /// l'événement renaissait à la passe suivante et supprimer n'avait aucun effet visible.
+  func testEvenementSupprimeRetireLaDuree() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    task.eventIdentifier = "event-1"
+    XCTAssertTrue(RemindersSync.shouldDropDuration(task, vanished: true))
+  }
+
+  /// **Le garde-fou du 5 août 2026.** Une absence non confirmée ne retire RIEN : `vanished` doit
+  /// être une affirmation prouvée (vu vivant, puis absent deux passes), jamais un simple
+  /// « EventKit ne le trouve pas » — c'est cette confusion qui avait effacé trois tâches.
+  func testUneAbsenceNonConfirmeeNeRetireRien() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    task.eventIdentifier = "event-1"
+    XCTAssertFalse(RemindersSync.shouldDropDuration(task, vanished: false))
+  }
+
+  /// Une tâche jamais partie dans l'agenda n'a pas de durée à perdre — sans quoi un verdict égaré
+  /// viderait l'estimation d'une tâche qui n'a jamais eu d'événement.
+  func testSansEvenementLieLaDureeNeTombePas() {
+    let task = dated(on: day(2026, 9, 10))
+    task.estimateMinutes = 60
+    XCTAssertFalse(RemindersSync.shouldDropDuration(task, vanished: true))
+  }
+
+  // MARK: Qui fait foi — la fusion à trois
+
+  /// Le créneau, tel qu'on l'écrit et tel qu'on le relit.
+  private func slot(_ start: Date, _ minutes: Int) -> DateInterval {
+    DateInterval(start: start, duration: TimeInterval(minutes) * 60)
+  }
+
+  private func at(_ hour: Int, _ minute: Int = 0, on day: Date) -> Date {
+    calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)!
+  }
+
+  private func timed(on when: Date, minutes: Int, at hour: Int? = nil) -> TaskItem {
+    let task = dated(on: when)
+    task.estimateMinutes = minutes
+    task.whenMinutes = hour.map { $0 * 60 }
+    task.eventIdentifier = "event-1"
+    return task
+  }
+
+  /// **Le défaut que tout ceci corrige.** L'événement ne porte plus ce qu'on y avait laissé : il a
+  /// été déplacé dans Calendrier, et c'est LUI qui fait foi. Avant, la comparaison seule concluait
+  /// « la tâche et l'événement diffèrent, donc réécrire » — le créneau revenait à sa place.
+  func testEvenementDeplaceDansCalendrierRemonteDansLaTache() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60, at: 9)
+    let accord = slot(at(9, on: day(2026, 9, 10)), 60)
+    let deplace = slot(at(9, on: day(2026, 9, 12)), 60)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: deplace, lastSeen: accord, calendar: calendar), .pull)
+  }
+
+  /// Même règle pour la DURÉE rallongée à la main — le cas nommé par l'utilisateur.
+  func testDureeAllongeeDansCalendrierRemonteDansLaTache() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60, at: 9)
+    let accord = slot(at(9, on: day(2026, 9, 10)), 60)
+    let rallonge = slot(at(9, on: day(2026, 9, 10)), 90)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: rallonge, lastSeen: accord, calendar: calendar),
+      .pull)
+  }
+
+  /// Et l'HEURE seule, y compris sur une tâche qui n'en portait pas : l'accord mémorisé rend
+  /// l'écart visible là où la comparaison par jour, elle, ne voyait rien.
+  func testHeureChangeeDansCalendrierRemonteMemeSansHeureSurLaTache() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60)
+    let accord = slot(at(9, on: day(2026, 9, 10)), 60)
+    let repousse = slot(at(14, 30, on: day(2026, 9, 10)), 60)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: repousse, lastSeen: accord, calendar: calendar),
+      .pull)
+  }
+
+  /// L'autre sens, et c'est le MÊME écart : l'événement est tel qu'on l'avait laissé, donc c'est
+  /// la tâche qui a bougé. Sans le troisième terme, rien ne distingue ce cas du précédent.
+  func testTacheModifieeDansLAppPousseVersLeCalendrier() {
+    let task = timed(on: day(2026, 9, 10), minutes: 120, at: 9)
+    let accord = slot(at(9, on: day(2026, 9, 10)), 60)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: accord, lastSeen: accord, calendar: calendar), .push)
+  }
+
+  /// La condition d'arrêt : après une reprise, la tâche porte ce que porte l'événement, donc la
+  /// passe suivante ne trouve plus rien à faire. Sans ce test, une reprise pourrait relancer un
+  /// push, qui relancerait une reprise — la boucle exacte que ce fichier existe pour écarter.
+  func testUneRepriseEteintLaChaine() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60, at: 9)
+    let deplace = slot(at(14, 30, on: day(2026, 9, 12)), 90)
+    RemindersSync.adopt(
+      deplace.start, minutes: Int(deplace.duration / 60), on: task, calendar: calendar)
+    XCTAssertEqual(task.when, day(2026, 9, 12))
+    XCTAssertEqual(task.whenMinutes, 14 * 60 + 30)
+    XCTAssertEqual(task.estimateMinutes, 90)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: deplace, lastSeen: deplace, calendar: calendar),
+      .agreed)
+  }
+
+  /// Au lancement il n'y a aucune mémoire, et l'app ne peut pas avoir modifié une tâche pendant
+  /// qu'elle était fermée : l'écart vient forcément du Calendrier.
+  func testAuLancementLeCalendrierFaitFoi() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60, at: 9)
+    let deplace = slot(at(9, on: day(2026, 9, 12)), 60)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: deplace, lastSeen: nil, calendar: calendar), .pull)
+  }
+
+  /// **Le garde-fou du lancement.** Une tâche SANS heure ne réclame qu'un jour : l'heure par
+  /// défaut posée sur son événement n'est pas un écart. Sans cette tolérance, chaque lancement
+  /// ferait adopter 09:00 à toutes les tâches datées — une heure que personne n'a choisie.
+  func testAuLancementLHeurePardefautNestPasUnChangement() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60)
+    let neuf = slot(at(9, on: day(2026, 9, 10)), 60)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: neuf, lastSeen: nil, calendar: calendar), .agreed)
+  }
+
+  /// Rien à lire, rien à reprendre : un identifiant périmé (base restaurée) se réécrit, sinon une
+  /// sauvegarde remontée perdrait son agenda au lieu de le retrouver.
+  func testSansEvenementLisibleOnEcrit() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60, at: 9)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(task, event: nil, lastSeen: nil, calendar: calendar), .push)
+  }
+
+  /// Une tâche cochée ne se fait plus rien dicter : son créneau passé raconte sa journée, et le
+  /// modifier dans Calendrier ne doit pas rouvrir sa date.
+  func testUneTacheCocheeNeReprendRien() {
+    let task = timed(on: day(2026, 9, 10), minutes: 60, at: 9)
+    task.isCompleted = true
+    let deplace = slot(at(9, on: day(2026, 9, 12)), 60)
+    XCTAssertEqual(
+      RemindersSync.eventVerdict(
+        task, event: deplace, lastSeen: slot(at(9, on: day(2026, 9, 10)), 60), calendar: calendar),
+      .agreed)
+  }
+
+  // MARK: Qui fait foi — côté rappels, la même règle
+
+  func testEchanceChangeeDansRappelsRemonteDansLaTache() {
+    let task = dated(on: day(2026, 8, 10))
+    task.reminderIdentifier = "reminder-1"
+    XCTAssertEqual(
+      RemindersSync.reminderVerdict(
+        task, due: at(9, on: day(2026, 8, 12)), lastSeen: at(9, on: day(2026, 8, 10)),
+        wasSeenAlive: true, calendar: calendar), .pull)
+  }
+
+  func testTacheModifieeDansLAppPousseVersRappels() {
+    let task = dated(on: day(2026, 8, 10))
+    task.whenMinutes = 11 * 60
+    task.reminderIdentifier = "reminder-1"
+    let accord = at(9, on: day(2026, 8, 10))
+    XCTAssertEqual(
+      RemindersSync.reminderVerdict(
+        task, due: accord, lastSeen: accord, wasSeenAlive: true, calendar: calendar), .push)
+  }
+
+  /// Un rappel introuvable ne se REPREND pas : il se recrée ou se laisse mort, selon qu'on l'ait
+  /// vu vivant (cf. `needsPush`). C'est ce qui protège la preuve qu'attend `shouldDelete`.
+  func testUnRappelIntrouvableNeSeReprendPas() {
+    let task = dated(on: day(2026, 8, 10))
+    task.reminderIdentifier = "reminder-1"
+    XCTAssertEqual(
+      RemindersSync.reminderVerdict(
+        task, due: nil, lastSeen: at(9, on: day(2026, 8, 10)), wasSeenAlive: true,
+        calendar: calendar), .agreed)
+    XCTAssertEqual(
+      RemindersSync.reminderVerdict(
+        task, due: nil, lastSeen: nil, wasSeenAlive: false, calendar: calendar), .push)
+  }
 }

@@ -55,6 +55,23 @@ struct TaskRow: View {
 
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.modelContext) private var modelContext
+  @Environment(\.openSettings) private var openSettings
+
+  /// Aucun calendrier d'événements désigné — donc une durée posée ici ne créera rien dans l'agenda.
+  ///
+  /// Lu dans `UserDefaults` SANS `@AppStorage` : un réglage qui change une fois dans la vie de
+  /// l'app n'a pas à abonner les deux cents rangées d'une page à ses notifications. Le menu se
+  /// construit à l'ouverture, la valeur est donc fraîche au seul moment où elle est regardée.
+  private var eventCalendarMissing: Bool {
+    (UserDefaults.standard.string(forKey: RemindersSync.eventCalendarStorageKey) ?? "").isEmpty
+  }
+
+  /// Le nom du calendrier désigné, retenu par les Réglages (cf.
+  /// `RemindersSync.eventCalendarNameStorageKey`). Vide tant qu'ils n'ont pas été ouverts depuis
+  /// cette version — d'où la formule de repli, qui dit la même chose sans nommer.
+  private var eventCalendarName: String {
+    UserDefaults.standard.string(forKey: RemindersSync.eventCalendarNameStorageKey) ?? ""
+  }
   /// Focus de la sous-tâche en cours d'édition (clé = uuid stable, pas `persistentModelID` qui
   /// mute à l'autosave), pour poser le focus sur celle qu'on vient de créer.
   /// uuid de la sous-tâche à focaliser (clé de focus stable, cf. `SubtaskRowView`).
@@ -851,13 +868,39 @@ struct TaskRow: View {
     }
     // Durée estimée : elle n'a d'effet visible que dans « Aujourd'hui » (la barre de capacité),
     // mais elle se pose ici, là où l'on planifie.
+    // DEUX sections nommées, parce que ce menu porte deux idées différentes et que les empiler
+    // sans les nommer ne marchait pas : une durée est d'abord une ESTIMATION (c'est elle que la
+    // barre de capacité d'« Aujourd'hui » additionne), l'agenda n'est qu'une DESTINATION possible.
+    // Une ligne « choisir le calendrier » posée en bas de la liste des durées se lisait comme une
+    // durée de plus, et arrivait après que le choix soit fait — trop tard pour informer.
     Menu {
-      ForEach(Estimate.presets, id: \.self) { minutes in
-        Button(Estimate.label(minutes) ?? "") { task.estimateMinutes = minutes }
+      // L'agenda EN TÊTE, et dans les deux états. La question « est-ce que poser 1 h va réserver
+      // une heure dans mon agenda ? » se pose en ouvrant ce menu — elle doit trouver sa réponse
+      // avant les chiffres, pas après le choix. Le réglage manquant se propose donc ici aussi :
+      // personne ne peut deviner qu'un calendrier se désigne dans les Réglages.
+      Section("Agenda") {
+        if eventCalendarMissing {
+          Button("Synchroniser les durées avec un calendrier…") {
+            SettingsTab.select(.tasks)
+            openSettings()
+          }
+        } else {
+          // La coche est DANS le texte, pas un `systemImage` : macOS n'affiche pas les icônes des
+          // items de ces menus (le `star.fill` d'« Aujourd'hui » ne se voit nulle part). Elle est
+          // là pour se lire d'un coup d'œil, sans lire la phrase.
+          Text(
+            eventCalendarName.isEmpty
+              ? "✓ Synchronisé avec votre calendrier"
+              : "✓ Synchronisé avec « \(eventCalendarName) »")
+        }
       }
-      if task.estimateMinutes > 0 {
-        Divider()
-        Button("Retirer la durée") { task.estimateMinutes = 0 }
+      Section("Estimation") {
+        ForEach(Estimate.presets, id: \.self) { minutes in
+          Button(Estimate.label(minutes) ?? "") { task.estimateMinutes = minutes }
+        }
+        if task.estimateMinutes > 0 {
+          Button("Retirer la durée") { task.estimateMinutes = 0 }
+        }
       }
     } label: {
       Label("Durée…", systemImage: "timer")

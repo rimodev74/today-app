@@ -15,6 +15,11 @@ import Foundation
 /// tâche qui ne retient que le jour (`TaskItem.when` est un jour, jamais une heure) ; réécrire ce
 /// rappel derrière l'import lui reposerait `dueHour` et écraserait l'heure choisie par
 /// l'utilisateur. Comparer les JOURS, et seulement eux, laisse l'heure tranquille.
+///
+/// **`needsPush` et `needsEventPush` disent seulement si les deux côtés DIFFÈRENT — pas qui a
+/// raison.** C'est `Verdict` qui répond à ça, et il lui faut un troisième terme : ce que portait
+/// l'élément Apple au dernier accord. Sans lui, l'app gagnait toujours, et une modification faite
+/// dans Calendrier ou dans Rappels était défaite dans la seconde.
 enum RemindersSync {
   /// Identifiant de la liste Rappels qui sert de pont. Une seule, et la même dans les deux sens :
   /// c'est ce qui garde l'import borné à ce que l'utilisateur a désigné, au lieu d'aspirer tout ce
@@ -27,6 +32,13 @@ enum RemindersSync {
   /// fonction n'existe pas : tout part en rappel, comme avant. Un réglage global et pas un choix
   /// par tâche — même raison que la liste-pont : une destination qu'on désigne une fois.
   static let eventCalendarStorageKey = "remindersSyncEventCalendarIdentifier"
+
+  /// Le NOM du calendrier choisi, gardé à côté de son identifiant. Redondant en apparence, et
+  /// pourtant nécessaire : le menu « Durée… » d'une tâche l'AFFICHE, et le lire depuis EventKit
+  /// serait un appel synchrone à un service système depuis une rangée — ce que ce projet ne fait
+  /// pas (cf. `CLAUDE.md` § Le fil principal). Réécrit à chaque ouverture des Réglages, il ne peut
+  /// pas mentir plus d'une visite.
+  static let eventCalendarNameStorageKey = "remindersSyncEventCalendarName"
 
   /// Heure d'échéance posée sur un rappel créé depuis une tâche, quand rien n'est réglé. L'app ne
   /// pose que des JOURS (cf. `TaskItem.when`), donc il en faut une : une échéance à 00:00 fait
@@ -70,15 +82,19 @@ enum RemindersSync {
   }
 
   /// Faut-il (ré)écrire l'événement de cette tâche ? `eventStart`/`eventMinutes` décrivent
-  /// l'événement lié tel qu'il est en ce moment — `nil` s'il n'existe pas encore, ou s'il a été
-  /// supprimé côté Calendrier (auquel cas on le recrée : c'est le même choix que pour un
-  /// identifiant de rappel périmé, et supprimer une TÂCHE parce qu'un événement a disparu n'est
-  /// demandé nulle part).
+  /// l'événement lié tel qu'il est en ce moment — `nil` s'il n'existe pas encore, ou si son
+  /// identifiant est PÉRIMÉ (base restaurée : cf. `RemindersService.EventPresence`). Un événement
+  /// que l'utilisateur vient de supprimer, lui, ne passe jamais par ici : c'est
+  /// `shouldDropDuration` qui répond, et la durée tombe au lieu que l'événement renaisse.
   ///
   /// Mêmes deux comparaisons que `needsPush`, et pour la même raison : sans heure à elle, la tâche
-  /// ne réclame qu'un JOUR, donc un événement déplacé à la main dans Calendrier garde l'heure qu'on
-  /// lui a donnée. Avec heure, la tâche fait foi. La durée, elle, se compare toujours — c'est le
-  /// champ que le menu « Durée… » vient de poser.
+  /// ne réclame qu'un JOUR. La durée, elle, se compare toujours — c'est le champ que le menu
+  /// « Durée… » vient de poser.
+  ///
+  /// **Répond « ils diffèrent », jamais « la tâche a raison ».** L'appelant passe par
+  /// `eventVerdict`, qui sait lequel des deux a bougé ; cette fonction-là ne sert qu'à mesurer
+  /// l'écart, et sa tolérance au JOUR est aussi ce qui empêche l'heure par défaut d'être prise
+  /// pour un changement au lancement.
   ///
   /// ponytail: le TITRE n'est pas comparé, exactement comme côté rappels — renommer une tâche ne
   /// renomme pas son événement tant qu'aucune date ni durée ne bouge. L'ajouter demanderait de le
@@ -106,6 +122,24 @@ enum RemindersSync {
   /// trace — là où un rappel coché, lui, reste coché de son côté.
   static func shouldForgetEvent(_ task: TaskItem) -> Bool {
     task.eventIdentifier != nil && !(task.estimateMinutes > 0 && task.when != nil)
+  }
+
+  /// La DURÉE doit-elle tomber parce que son événement a été supprimé dans le Calendrier ?
+  ///
+  /// Le miroir exact de `shouldForgetEvent` : retirer la durée efface l'événement, effacer
+  /// l'événement retire la durée. C'est la seule réponse qui garde vraie la règle « durée + date +
+  /// calendrier ⇒ un événement » ; laisser la durée sans son événement mettrait l'app dans un état
+  /// qu'aucune de ses fonctions ne sait décrire.
+  ///
+  /// La TÂCHE, elle, reste — contrairement à ce que fait `shouldDelete` pour un rappel supprimé.
+  /// Un créneau qu'on efface d'un ⌫ dans le Calendrier ne dit rien de la tâche, de ses notes ni de
+  /// ses sous-tâches ; il dit seulement qu'on ne veut plus de ce bloc-là.
+  ///
+  /// `vanished` est une affirmation FORTE, pas une absence : elle vient de
+  /// `RemindersService.eventPresence`, qui exige d'avoir vu l'événement VIVANT dans cette session
+  /// puis absent deux passes de suite.
+  static func shouldDropDuration(_ task: TaskItem, vanished: Bool) -> Bool {
+    vanished && task.eventIdentifier != nil && task.estimateMinutes > 0
   }
 
   /// Faut-il (ré)écrire le rappel de cette tâche ? `reminderDue` est l'échéance que porte le rappel
@@ -170,6 +204,95 @@ enum RemindersSync {
   /// place dans les archives, une tâche dont on a retiré la date garde son lien mort.
   static func shouldDelete(_ task: TaskItem, vanished: Bool) -> Bool {
     vanished && isPushable(task) && task.reminderIdentifier != nil
+  }
+
+  // MARK: Qui fait foi — la fusion à trois, sans laquelle un seul côté peut gagner
+
+  /// Qui fait foi, quand la tâche et son élément Apple ne disent plus la même chose.
+  ///
+  /// **Les comparer ne suffit pas à répondre.** « La tâche a changé » et « l'élément a changé »
+  /// produisent exactement le même écart. Sans troisième terme il fallait donc désigner un
+  /// vainqueur d'avance, et c'était la tâche : un événement déplacé à la main dans le Calendrier
+  /// revenait à sa place dans la seconde, une durée rallongée était rabotée. L'app ne
+  /// synchronisait pas, elle imposait.
+  ///
+  /// Le troisième terme est la MÉMOIRE de ce que portait l'élément la dernière fois que les deux
+  /// étaient d'accord (cf. `RemindersService.lastSeenEvent` / `lastSeenReminderDue`). Un élément
+  /// ne bouge pas tout seul : s'il ne porte plus ce qu'on y avait laissé, c'est l'utilisateur qui
+  /// l'a modifié dans l'app d'Apple, et c'est LUI qui fait foi. S'il le porte encore, l'écart ne
+  /// peut venir que d'ici, et on pousse.
+  ///
+  /// **Première rencontre — aucune mémoire : Apple fait foi**, à condition qu'il y ait quelque
+  /// chose à lire. La mémoire ne survit pas au lancement, et l'app ne peut pas avoir modifié une
+  /// tâche pendant qu'elle était fermée : l'écart trouvé au réveil vient forcément de l'autre côté.
+  /// C'est ce cas-là qui rend une soirée passée à réorganiser son agenda dans Calendrier.
+  ///
+  /// La condition d'arrêt ne change pas : après un `.pull`, la tâche porte ce que porte l'élément,
+  /// donc la passe suivante répond `.agreed` et la chaîne s'éteint — exactement comme après un
+  /// `.push` (cf. l'en-tête de ce fichier).
+  ///
+  /// ponytail: les deux modifiés depuis le dernier accord, Apple gagne. Trancher autrement
+  /// demanderait une date de modification de chaque côté, donc un champ de plus au schéma.
+  enum Verdict {
+    /// Les deux disent la même chose : ne rien écrire.
+    case agreed
+    /// L'app fait foi : (ré)écrire l'élément Apple.
+    case push
+    /// Apple fait foi : recopier sur la tâche ce que porte l'élément (cf. `adopt`).
+    case pull
+  }
+
+  /// Le verdict pour une tâche à durée et son événement. `event` est le créneau que porte
+  /// l'événement lié EN CE MOMENT (`nil` s'il n'est pas lisible), `lastSeen` celui du dernier
+  /// accord.
+  ///
+  /// Rien à lire ⇒ rien à reprendre : un identifiant périmé se réécrit (c'est ce qui rend son
+  /// agenda à une base restaurée), et une tâche sans événement en obtient un. Un événement
+  /// SUPPRIMÉ, lui, ne passe jamais par ici — c'est `shouldDropDuration` qui répond.
+  static func eventVerdict(
+    _ task: TaskItem, event: DateInterval?, lastSeen: DateInterval?, calendar: Calendar = .current
+  ) -> Verdict {
+    guard isPushable(task) else { return .agreed }
+    let wantsPush = needsEventPush(
+      task, eventStart: event?.start, eventMinutes: event.map { Int($0.duration / 60) },
+      calendar: calendar)
+    guard let event else { return wantsPush ? .push : .agreed }
+    // Sans mémoire, c'est `needsEventPush` qui sert de test d'écart — et sa tolérance est ce qui
+    // évite la fausse reprise du lancement : une tâche SANS heure ne réclame qu'un jour, donc
+    // l'heure par défaut posée sur son événement n'est pas un écart, et elle ne remonte pas.
+    if lastSeen.map({ $0 != event }) ?? wantsPush { return .pull }
+    return wantsPush ? .push : .agreed
+  }
+
+  /// Le même verdict côté rappels. `due` est l'échéance que porte le rappel lié en ce moment,
+  /// `lastSeen` celle du dernier accord.
+  ///
+  /// `wasSeenAlive` continue de départager les deux façons d'être introuvable (cf. `needsPush`) :
+  /// un rappel absent ne se reprend pas, il se recrée ou se laisse mort.
+  static func reminderVerdict(
+    _ task: TaskItem, due: Date?, lastSeen: Date?, wasSeenAlive: Bool, calendar: Calendar = .current
+  ) -> Verdict {
+    guard isPushable(task) else { return .agreed }
+    let wantsPush = needsPush(
+      task, reminderDue: due, wasSeenAlive: wasSeenAlive, calendar: calendar)
+    guard let due else { return wantsPush ? .push : .agreed }
+    if lastSeen.map({ $0 != due }) ?? wantsPush { return .pull }
+    return wantsPush ? .push : .agreed
+  }
+
+  /// Recopie sur la tâche ce que porte l'élément Apple — le geste du verdict `.pull`, et celui de
+  /// l'import d'un rappel, qui est le même fait vu à sa première passe.
+  ///
+  /// Le jour et l'heure ne se mêlent jamais : `TaskItem.when` est un jour, `whenMinutes` la minute
+  /// dans ce jour (cf. `TaskItem`). `minutes` est la durée de l'événement — `nil` pour un rappel,
+  /// qui n'en a pas, et la durée de la tâche reste alors telle quelle.
+  static func adopt(
+    _ start: Date, minutes: Int?, on task: TaskItem, calendar: Calendar = .current
+  ) {
+    task.when = calendar.startOfDay(for: start)
+    let time = calendar.dateComponents([.hour, .minute], from: start)
+    task.whenMinutes = (time.hour ?? 0) * 60 + (time.minute ?? 0)
+    if let minutes { task.estimateMinutes = minutes }
   }
 
   /// L'échéance à poser sur le rappel : le jour de la tâche, à SON heure (`minutes`) si elle en a

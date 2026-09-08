@@ -301,7 +301,22 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   `RemindersSync.destination` est le SEUL endroit qui tranche entre les deux, et c'est ce qui
   garantit qu'une tâche n'existe jamais des deux côtés. Retirer la durée (ou la date) efface
   l'événement et rend la tâche à Rappels ; la cocher ne l'efface PAS. Sans calendrier désigné, la
-  fonction est inerte : tout part en rappel, comme avant.
+  fonction est inerte : tout part en rappel, comme avant. **Les événements ne dépendent QUE du
+  calendrier désigné** — ni de la bascule des rappels, ni de la liste-pont : trois réglages pour un
+  geste, c'était trois façons de ne rien voir se produire.
+  **Le pont va DANS LES DEUX SENS, y compris pour les dates.** Un créneau déplacé ou rallongé dans
+  Calendrier (comme une échéance changée dans Rappels) remonte dans la tâche — jour, heure, durée.
+  Ce n'était pas le cas : l'app gagnait toujours, et le geste était défait dans la seconde. Ce qui
+  manquait n'était pas une comparaison mais un ARBITRE : `RemindersSync.Verdict` tranche à partir
+  de ce que portait l'élément Apple au dernier accord (`RemindersService.lastSeenEvent`, en mémoire
+  seule). L'élément ne bouge pas tout seul ⇒ s'il a changé, c'est l'utilisateur, et il fait foi ;
+  sinon l'écart vient d'ici, et on pousse. Au lancement, sans mémoire, Apple fait foi — l'app ne
+  peut pas avoir modifié une tâche pendant qu'elle était fermée.
+  **Et le miroir tient aussi pour la suppression** : un événement supprimé dans le Calendrier retire
+  la DURÉE de la tâche (`RemindersSync.shouldDropDuration`), qui redevient un rappel — la tâche,
+  elle, reste. Mêmes deux preuves que `shouldDelete` (`RemindersService.eventPresence` : vu vivant dans la
+  session, puis absent deux passes) : sur un simple « introuvable », on ne retire RIEN, et on ne
+  réécrit rien non plus tant que l'absence n'est pas confirmée — réécrire effacerait la preuve.
 - **`HUDWindow`** ne parle QUE des gestes dont le résultat n'est pas à l'écran — une tâche déposée par
   la capsule depuis une autre app, un pomodoro piloté au clavier (`!pomodoro…` d'`AppCommand`, qui
   n'active délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux, l'y ajouter en

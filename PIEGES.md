@@ -532,6 +532,40 @@ constater._
 rappel importé, et l'instant COMPLET quand elle en a une — sans quoi changer l'heure d'une tâche ne
 partirait jamais.
 
+### Comparer deux côtés ne dit pas lequel a bougé
+
+Un créneau déplacé dans Calendrier revenait à sa place en une seconde ; une durée rallongée était
+rabotée. Le pont était bidirectionnel pour les COMPLÉTIONS et les SUPPRESSIONS, jamais pour les
+dates : l'app imposait.
+
+La cause n'est pas une comparaison ratée, c'est une question mal posée. « La tâche a changé » et
+« l'événement a changé » produisent **exactement le même écart** entre les deux côtés. Avec deux
+termes, il n'y a pas de réponse — seulement un vainqueur désigné d'avance, et c'était la tâche.
+
+Il fallait un troisième terme : **ce que portait l'élément Apple la dernière fois que les deux
+étaient d'accord** (`RemindersService.lastAgreed`, en mémoire seule). Un élément ne bouge pas tout
+seul. S'il ne porte plus ce qu'on y avait laissé, c'est l'utilisateur qui l'a modifié chez Apple, et
+il fait foi (`.pull`) ; s'il le porte encore, l'écart ne peut venir que d'ici (`.push`). C'est une
+fusion à trois, pas une comparaison — la même forme qu'un `git merge`, et pour la même raison.
+
+Trois pièges, chacun payé une fois pendant l'écriture :
+
+- **Le lancement n'a pas de mémoire.** Sans elle, on retombe sur l'écart brut — et Apple fait foi,
+  puisque l'app ne peut pas avoir modifié une tâche pendant qu'elle était fermée. Mais la tolérance
+  de `needsEventPush` devient alors indispensable : une tâche SANS heure ne réclame qu'un jour, donc
+  l'heure par défaut (9 h) posée sur son événement n'est pas un écart. La version qui comparait
+  l'instant complet faisait adopter « 09:00 » à toutes les tâches datées au premier réveil.
+- **Ce qu'on vient d'écrire EST le nouvel accord.** L'oublier fait lire l'écriture suivante comme un
+  changement venu de Calendrier, et les deux côtés se renvoient la balle.
+- **La requête bornée ne trouve pas ce qui est parti loin.** `linkedEventTimes` ne relit que les
+  jours des tâches concernées (+2) ; un événement déplacé d'un mois en sortait, était lu comme
+  absent, donc réécrit — c'est-à-dire ramené. D'où `eventTime(_:)`, une lecture à l'unité pour cette
+  seule absence, et le résultat passé à `eventPresence(_:foundInWindow:)` qui payait déjà la même.
+
+Ce qui n'a PAS changé : la suppression garde ses deux preuves, et un événement absent ne se
+« reprend » jamais — il se recrée (identifiant périmé) ou se laisse mort. Reprendre une absence,
+ce serait effacer la durée sur un hoquet iCloud.
+
 ---
 
 ## Layout, gestes et glissement

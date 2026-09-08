@@ -3,20 +3,48 @@ import Carbon.HIToolbox
 import SwiftData
 import SwiftUI
 
+/// Les quatre onglets des Réglages, nommés pour qu'un appelant puisse en VISER un.
+///
+/// Existe parce qu'un réglage sans lequel une fonction ne marche pas doit être atteignable depuis
+/// l'endroit où l'on s'en aperçoit — le menu « Durée… » d'une tâche envoie ici quand aucun
+/// calendrier d'événements n'est choisi. Sans onglet visé, on ouvrait les Réglages sur le dernier
+/// panneau consulté, c'est-à-dire à côté de la réponse.
+enum SettingsTab: String {
+  case general
+  case shortcuts
+  case tasks
+  case pomodoro
+
+  static let storageKey = "settingsTab"
+
+  /// Ouvre les Réglages sur cet onglet. `UserDefaults` en direct et pas un `@AppStorage` chez
+  /// l'appelant : la rangée d'une tâche n'a aucune raison de s'abonner à un réglage qu'elle ne
+  /// fait qu'écrire, et elles sont deux cents par page.
+  static func select(_ tab: SettingsTab) {
+    UserDefaults.standard.set(tab.rawValue, forKey: storageKey)
+  }
+}
+
 struct SettingsView: View {
+  @AppStorage(SettingsTab.storageKey) private var tab = SettingsTab.general.rawValue
+
   var body: some View {
-    TabView {
+    TabView(selection: $tab) {
       GeneralSettingsTab()
         .tabItem { Label("Général", systemImage: "gearshape") }
+        .tag(SettingsTab.general.rawValue)
 
       ShortcutsSettingsTab()
         .tabItem { Label("Raccourcis", systemImage: "keyboard") }
+        .tag(SettingsTab.shortcuts.rawValue)
 
       TasksSettingsTab()
         .tabItem { Label("Tâches", systemImage: "checklist") }
+        .tag(SettingsTab.tasks.rawValue)
 
       PomodoroSettingsTab()
         .tabItem { Label("Pomodoro", systemImage: "timer") }
+        .tag(SettingsTab.pomodoro.rawValue)
     }
     .frame(width: 460)
     // Sans ça, `TabView` fait fondre l'ancien panneau dans le nouveau à chaque clic d'onglet.
@@ -629,7 +657,7 @@ private struct RemindersSyncSection: View {
   @State private var accessDenied = false
 
   var body: some View {
-    Section("Rappels Apple") {
+    Section("Rappels et Calendrier Apple") {
       if accessDenied {
         Text(RemindersError.accessDenied.errorDescription ?? "")
           .font(.app(.caption)).foregroundStyle(.secondary)
@@ -666,23 +694,29 @@ private struct RemindersSyncSection: View {
               + "seuls les prochains suivent ce réglage."
           )
           .font(.app(.caption)).foregroundStyle(.secondary)
-
-          // La durée est ce qui sépare une sonnerie d'un créneau : une tâche qui dit combien de
-          // temps elle prend demande de la PLACE dans la journée. Aucun calendrier désigné et la
-          // durée ne change rien — tout part en rappel, comme avant.
-          Picker("Calendrier des tâches avec durée", selection: $eventCalendarID) {
-            Text("Aucun").tag("")
-            ForEach(remindersService.writableEventCalendars, id: \.calendarIdentifier) { calendar in
-              Text(calendar.title).tag(calendar.calendarIdentifier)
-            }
-          }
-          Text(
-            "Une tâche datée à laquelle on donne une durée (clic droit ▸ Durée…) part comme "
-              + "ÉVÉNEMENT dans ce calendrier, au lieu d'un rappel. Retirer la durée efface "
-              + "l'événement et rend la tâche à Rappels."
-          )
-          .font(.app(.caption)).foregroundStyle(.secondary)
         }
+
+        // HORS du `if push`, et c'est délibéré : ce réglage-ci se suffit à lui-même. Rangé sous la
+        // bascule des rappels, il fallait TROIS réglages justes pour qu'une durée devienne un
+        // événement, et rien ne disait lequel manquait. Il n'en reste qu'un — et le menu
+        // « Durée… » d'une tâche vient le chercher ici quand il est vide.
+        //
+        // La durée est ce qui sépare une sonnerie d'un créneau : une tâche qui dit combien de
+        // temps elle prend demande de la PLACE dans la journée.
+        Picker("Calendrier des tâches avec durée", selection: $eventCalendarID) {
+          Text("Aucun").tag("")
+          ForEach(remindersService.writableEventCalendars, id: \.calendarIdentifier) { calendar in
+            Text(calendar.title).tag(calendar.calendarIdentifier)
+          }
+        }
+        Text(
+          "Une tâche DATÉE à laquelle on donne une durée (clic droit ▸ Durée…) part comme "
+            + "ÉVÉNEMENT dans ce calendrier, au lieu d'un rappel. Sans date, rien ne part : "
+            + "c'est la date qui déclenche. Le lien vaut dans les deux sens : retirer la durée "
+            + "efface l'événement, et un créneau déplacé, rallongé ou supprimé dans Calendrier "
+            + "revient dans la tâche."
+        )
+        .font(.app(.caption)).foregroundStyle(.secondary)
 
         if listID.isEmpty && (push || importReminders) {
           // Le triangle plutôt que le texte seul : une bascule allumée a l'air de marcher, et un
@@ -707,7 +741,18 @@ private struct RemindersSyncSection: View {
     .task {
       accessDenied = ((try? await remindersService.requestAccess()) == nil)
       await remindersService.requestEventAccess()
+      rememberCalendarName()
     }
+    .onChange(of: eventCalendarID) { rememberCalendarName() }
+  }
+
+  /// Recopie le nom du calendrier choisi à côté de son identifiant — cf.
+  /// `RemindersSync.eventCalendarNameStorageKey` pour la raison. À l'ouverture ET au changement :
+  /// un calendrier renommé ailleurs se rattrape à la visite suivante.
+  private func rememberCalendarName() {
+    UserDefaults.standard.set(
+      remindersService.eventCalendar(withIdentifier: eventCalendarID)?.title ?? "",
+      forKey: RemindersSync.eventCalendarNameStorageKey)
   }
 }
 

@@ -445,23 +445,30 @@ struct ContentView: View {
       guard !Task.isCancelled else { return }
       let ran = await remindersService.withSyncLock {
         await syncCompletionsFromReminders()
+        // Les événements ne dépendent QUE du calendrier désigné — ni de la liste-pont, ni de la
+        // bascule des rappels. Ils en dépendaient, et c'était un piège : poser une durée ne
+        // produisait rien tant que TROIS réglages n'étaient pas justes, sans que rien ne le dise.
+        // Un réglage qui peut s'oublier en silence est un bug en attente : il n'en reste qu'un,
+        // et le menu « Durée… » va le chercher quand il manque.
+        let eventCalendar = remindersService.eventCalendar(withIdentifier: remindersEventCalendarID)
+        if let eventCalendar { await pushTimedTasks(to: eventCalendar) }
         guard remindersPush || remindersImport,
           let list = remindersService.list(withIdentifier: remindersListID)
         else { return }
         deleteTasksWhoseReminderIsGone()
         if remindersImport { await importReminders(from: list) }
-        if remindersPush {
-          await pushDatedTasks(
-            to: list,
-            eventCalendar: remindersService.eventCalendar(withIdentifier: remindersEventCalendarID))
-        }
+        if remindersPush { await pushDatedTasks(to: list, eventCalendar: eventCalendar) }
       }
       guard !Task.isCancelled else { return }
       // Deux raisons d'en repasser une : le verrou nous a refusé l'entrée, ou une absence attend sa
       // confirmation. La seconde est ce qui rend la suppression depuis Rappels effective en ~2 s au
       // lieu de « au prochain événement, peut-être ». Les deux convergent : `hasPendingVanishVerdict`
       // retombe dès que le verdict tombe, dans un sens comme dans l'autre.
-      if !ran || remindersService.hasPendingVanishVerdict { syncWithReminders() }
+      if !ran || remindersService.hasPendingVanishVerdict
+        || remindersService.hasPendingEventVanishVerdict
+      {
+        syncWithReminders()
+      }
     }
   }
 
@@ -531,11 +538,10 @@ struct ContentView: View {
       else { continue }
       // Le jour dans `when`, l'heure dans `whenMinutes` — jamais mêlés (cf. `TaskItem.when`).
       // L'heure du rappel arrive donc DANS la tâche depuis la 5.0.0 : l'aller-retour ne perd plus
-      // rien, et la passe de push la retrouve identique, donc ne réécrit pas.
-      let task = TaskItem(
-        title: reminder.title, when: Calendar.current.startOfDay(for: due), list: inbox)
-      let time = Calendar.current.dateComponents([.hour, .minute], from: due)
-      task.whenMinutes = (time.hour ?? 0) * 60 + (time.minute ?? 0)
+      // rien, et la passe de push la retrouve identique, donc ne réécrit pas. Même geste que le
+      // retour d'une échéance modifiée dans Rappels — c'est le même fait, à sa première passe.
+      let task = TaskItem(title: reminder.title, when: nil, list: inbox)
+      RemindersSync.adopt(due, minutes: nil, on: task)
       task.reminderIdentifier = reminder.calendarItemIdentifier
       task.sortIndex = nextIndex
       nextIndex += 1
@@ -554,10 +560,9 @@ struct ContentView: View {
   ///
   /// Les tâches à DURÉE, elles, partent en événements et sont écartées d'ici — c'est
   /// `RemindersSync.destination` qui tranche, et l'exclusivité entre les deux tient à ce qu'un seul
-  /// endroit la prononce.
+  /// endroit la prononce. Leur écriture, elle, a déjà eu lieu (cf. `pushTimedTasks`, appelé en
+  /// amont) : `eventCalendar` ne sert ici qu'à savoir QUI ne doit pas partir en rappel.
   private func pushDatedTasks(to list: EKCalendar, eventCalendar: EKCalendar?) async {
-    if let eventCalendar { await pushTimedTasks(to: eventCalendar) }
-
     let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.when != nil })
     guard let dated = try? modelContext.fetch(descriptor) else { return }
 
@@ -569,19 +574,43 @@ struct ContentView: View {
       let reminderDue = task.reminderIdentifier.flatMap(remindersService.reminderDay(for:))
       let seenAlive =
         task.reminderIdentifier.map(remindersService.reminderWasSeenAlive) ?? false
-      guard
-        RemindersSync.needsPush(task, reminderDue: reminderDue, wasSeenAlive: seenAlive),
-        let when = task.when
-      else { continue }
+      switch RemindersSync.reminderVerdict(
+        task, due: reminderDue,
+        lastSeen: task.reminderIdentifier.flatMap(remindersService.lastSeenReminderDue),
+        wasSeenAlive: seenAlive)
+      {
+      case .agreed:
+        // L'accord se MÉMORISE, et c'est tout l'objet du troisième terme : sans cette ligne, la
+        // prochaine modification faite dans Rappels serait indiscernable d'une modification faite
+        // ici, et l'app la réécraserait comme avant.
+        if let id = task.reminderIdentifier {
+          remindersService.rememberReminderDue(id, reminderDue)
+        }
+        continue
+      case .pull:
+        // Rappels → app : l'échéance changée là-bas devient le jour (et l'heure) de la tâche.
+        guard let id = task.reminderIdentifier, let reminderDue else { continue }
+        RemindersSync.adopt(reminderDue, minutes: nil, on: task)
+        remindersService.rememberReminderDue(id, reminderDue)
+        changed = true
+        continue
+      case .push:
+        break
+      }
+      guard let when = task.when else { continue }
+      let due = RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour)
       guard
         let id = try? await remindersService.schedule(
           title: task.title,
           start: when,
-          due: RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour),
+          due: due,
           list: task.reminderIdentifier == nil ? list : nil,
           existingIdentifier: task.reminderIdentifier)
       else { continue }
       task.reminderIdentifier = id
+      // Ce qu'on vient d'écrire EST le nouvel accord. L'oublier ferait lire l'écriture suivante
+      // comme un changement venu de Rappels.
+      remindersService.rememberReminderDue(id, due)
       changed = true
     }
     if changed { try? modelContext.save() }
@@ -593,11 +622,14 @@ struct ContentView: View {
   /// rappel a une échéance et sonne, un événement occupe un créneau. Donner une durée à une tâche,
   /// c'est dire « ça me prendra ce temps-là » — donc réserver, pas être prévenu.
   ///
-  /// Trois gestes, dans cet ordre, et l'ordre compte :
+  /// Quatre gestes, dans cet ordre, et l'ordre compte :
   /// 1. effacer les événements qui n'ont plus lieu d'être (durée retirée, date retirée) ;
-  /// 2. (ré)écrire ceux des tâches concernées ;
-  /// 3. effacer le rappel que ces tâches avaient AVANT de devenir des événements — sinon la même
-  ///    tâche existe des deux côtés, sonne dans Rappels et occupe un créneau dans Calendrier.
+  /// 2. relire l'état des événements liés, en UNE requête ;
+  /// 3. retirer la durée des tâches dont l'événement a été SUPPRIMÉ dans le Calendrier — et ne rien
+  ///    réécrire tant qu'une absence n'est pas confirmée, sous peine d'effacer sa propre preuve ;
+  /// 4. (ré)écrire les autres, et effacer le rappel qu'elles avaient AVANT de devenir des
+  ///    événements — sinon la même tâche existe des deux côtés, sonne dans Rappels et occupe un
+  ///    créneau dans Calendrier.
   ///
   /// EventKit n'écrit qu'APRÈS l'enregistrement SwiftData pour les SUPPRESSIONS : effacer un
   /// élément fait poster `.EKEventStoreChanged`, qui relance cette passe, qui réenregistre ce même
@@ -636,7 +668,38 @@ struct ContentView: View {
 
     var doomedReminders: [String] = []
     for task in due {
-      // 3. Elle n'est plus un rappel : celui qu'elle avait n'a plus personne derrière lui. AVANT le
+      // Le créneau que porte l'événement lié EN CE MOMENT. La requête bornée l'a presque toujours ;
+      // le repli à l'unité ne sert qu'à un événement déplacé de plus de deux jours — sans lui,
+      // « absent de la fenêtre » se lisait « pas d'événement », donc « réécrire », et le geste
+      // était défait (cf. `RemindersService.eventTime`).
+      let interval = task.eventIdentifier.flatMap { times[$0] ?? remindersService.eventTime($0) }
+
+      // 3. L'événement a-t-il été SUPPRIMÉ dans le Calendrier ? La question se pose avant tout le
+      // reste, parce que ses deux autres réponses interdisent d'écrire quoi que ce soit.
+      switch task.eventIdentifier.map({
+        remindersService.eventPresence($0, foundInWindow: interval != nil)
+      }) {
+      case .vanished:
+        // Le miroir du geste inverse : l'événement effacé, la durée tombe et la tâche redevient un
+        // rappel à la passe suivante. La règle et son niveau de preuve sont dans
+        // `RemindersSync.shouldDropDuration`.
+        if RemindersSync.shouldDropDuration(task, vanished: true) {
+          task.estimateMinutes = 0
+          task.eventIdentifier = nil
+          changed = true
+        }
+        continue
+      case .missingOnce:
+        // Une absence non confirmée : on ne réécrit RIEN. Réécrire recréerait l'événement, donc
+        // effacerait la preuve qu'attend la passe suivante — et la suppression n'aurait jamais
+        // d'effet visible (c'est très exactement ce qui empêchait la suppression d'un rappel de
+        // marcher, cf. `RemindersSync.needsPush`).
+        continue
+      case .alive, .unknownIdentifier, nil:
+        break
+      }
+
+      // 4. Elle n'est plus un rappel : celui qu'elle avait n'a plus personne derrière lui. AVANT le
       // test de mise à jour, et pas après : un rappel posé à la main (cf. `SchedulePlannerView`)
       // sur une tâche dont l'événement est déjà à jour survivrait à toutes les passes suivantes.
       if let reminder = task.reminderIdentifier {
@@ -645,23 +708,42 @@ struct ContentView: View {
         changed = true
       }
 
-      let interval = task.eventIdentifier.flatMap { times[$0] }
-      guard
-        RemindersSync.needsEventPush(
-          task, eventStart: interval?.start,
-          eventMinutes: interval.map { Int($0.duration / 60) }),
-        let when = task.when
-      else { continue }
+      // 5. Qui fait foi ? Comparer la tâche et son créneau ne suffit pas à le dire — c'est la
+      // mémoire du dernier accord qui tranche (cf. `RemindersSync.Verdict`).
+      switch RemindersSync.eventVerdict(
+        task, event: interval,
+        lastSeen: task.eventIdentifier.flatMap(remindersService.lastSeenEvent))
+      {
+      case .agreed:
+        if let id = task.eventIdentifier { remindersService.rememberEvent(id, interval) }
+        continue
+      case .pull:
+        // Calendrier → app : le créneau déplacé ou rallongé à la main donne à la tâche son jour,
+        // son heure et sa durée. C'est le sens qui manquait : l'app imposait, elle synchronise.
+        guard let id = task.eventIdentifier, let interval else { continue }
+        RemindersSync.adopt(interval.start, minutes: Int(interval.duration / 60), on: task)
+        remindersService.rememberEvent(id, interval)
+        changed = true
+        continue
+      case .push:
+        break
+      }
+
+      guard let when = task.when else { continue }
+      let start = RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour)
       // Le calendrier désigné est passé à TOUS les coups : c'est `scheduleEvent` qui sait si
       // l'événement existe encore et garde alors le sien (déplacé à la main, il y reste).
       guard
         let id = await remindersService.scheduleEvent(
           title: task.title,
-          start: RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour),
+          start: start,
           minutes: task.estimateMinutes,
           calendar: calendar,
           existingIdentifier: task.eventIdentifier)
       else { continue }
+      // Ce qu'on vient d'écrire EST le nouvel accord (cf. la branche `.agreed`).
+      remindersService.rememberEvent(
+        id, DateInterval(start: start, duration: TimeInterval(task.estimateMinutes) * 60))
       if task.eventIdentifier != id {
         task.eventIdentifier = id
         changed = true

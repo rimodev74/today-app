@@ -168,10 +168,10 @@ final class RemindersService {
   /// `ModelContext.didSave`. Une requête bornée à UN calendrier et aux jours des tâches concernées
   /// coûte le même aller-retour, une fois.
   ///
-  /// Un événement déplacé HORS de la fenêtre n'est pas retrouvé : il est alors lu comme absent,
-  /// donc réécrit — et le réécrire, c'est le ramener au jour de sa tâche, jamais en créer un
-  /// second (`scheduleEvent` réutilise l'identifiant). C'est la règle assumée : la tâche fait foi
-  /// pour le JOUR.
+  /// Un événement déplacé HORS de la fenêtre n'est pas retrouvé ici — c'est `eventTime(_:)` qui
+  /// va le chercher, une lecture à l'unité pour ce seul cas. Sans elle, « absent de la fenêtre »
+  /// se lisait « pas d'événement », donc « réécrire », et déplacer un créneau de plus de deux
+  /// jours dans Calendrier le ramenait au jour de sa tâche.
   func linkedEventTimes(
     _ identifiers: Set<String>, from start: Date, to end: Date, in calendar: EKCalendar
   ) -> [String: DateInterval] {
@@ -187,12 +187,107 @@ final class RemindersService {
     }
   }
 
+  /// Ce que l'app sait de l'événement lié, et le NIVEAU DE PREUVE qui va avec.
+  ///
+  /// Quatre réponses et pas un booléen, parce que « introuvable » recouvre trois situations qui
+  /// appellent des gestes opposés — et que les confondre a déjà coûté des données réelles (cf.
+  /// `reminderVanished`, et les trois tâches effacées le 5 août 2026).
+  enum EventPresence {
+    /// Il est là.
+    case alive
+    /// Introuvable, et jamais vu vivant de la session : l'identifiant est périmé, pas orphelin.
+    /// C'est le cas d'une base restaurée. On RECRÉE — c'est ce qui rend son agenda à une sauvegarde.
+    case unknownIdentifier
+    /// Vu vivant, puis absent UNE fois. Un compte iCloud qui se resynchronise fait disparaître et
+    /// revenir des éléments : une absence isolée ne tranche rien. On ne touche à rien, et surtout
+    /// on ne RÉÉCRIT pas — réécrire effacerait la preuve qu'attend la passe suivante.
+    case missingOnce
+    /// Vu vivant, puis absent DEUX passes de suite : l'utilisateur vient de le supprimer.
+    case vanished
+  }
+
+  /// L'état de l'événement lié, avec ses preuves. `foundInWindow` vient de `linkedEventTimes` :
+  /// trouvé là, il est vivant et l'on n'interroge personne. Ce n'est QUE pour une absence qu'on
+  /// paie une lecture directe — rare par construction, et c'est ce qui évite de conclure « supprimé »
+  /// sur un événement simplement déplacé hors de la fenêtre relue.
+  func eventPresence(_ identifier: String, foundInWindow: Bool) -> EventPresence {
+    guard eventAuthorizationStatus == .fullAccess else { return .alive }
+    if foundInWindow || store.event(withIdentifier: identifier) != nil {
+      eventsSeenAlive.insert(identifier)
+      eventsMissedOnce.remove(identifier)
+      return .alive
+    }
+    guard eventsSeenAlive.contains(identifier) else { return .unknownIdentifier }
+    guard eventsMissedOnce.contains(identifier) else {
+      eventsMissedOnce.insert(identifier)
+      return .missingOnce
+    }
+    // Verdict rendu : on oublie cet événement, sinon `hasPendingEventVanishVerdict` réarmerait la
+    // synchro indéfiniment pour un dossier clos (même piège que côté rappels).
+    eventsMissedOnce.remove(identifier)
+    eventsSeenAlive.remove(identifier)
+    lastAgreed.removeValue(forKey: identifier)
+    return .vanished
+  }
+
+  /// Une absence attend sa confirmation : il manque UNE passe pour trancher. L'appelant en relance
+  /// une (cf. `ContentView.syncWithReminders`), sans quoi la durée resterait en sursis jusqu'au
+  /// prochain réveil venu d'ailleurs — c'est-à-dire peut-être jamais.
+  var hasPendingEventVanishVerdict: Bool { !eventsMissedOnce.isEmpty }
+
+  /// En mémoire seulement, comme leurs équivalents côté rappels : la question posée est
+  /// « l'utilisateur vient-il de le supprimer ? », qui n'a de sens que dans une session.
+  private var eventsSeenAlive: Set<String> = []
+  private var eventsMissedOnce: Set<String> = []
+
+  /// Le créneau de l'événement lié, relu AU COUP PAR COUP — le repli quand la requête bornée ne
+  /// l'a pas trouvé (cf. `linkedEventTimes`).
+  ///
+  /// C'est l'aller-retour XPC synchrone qu'on refuse de payer PAR TÂCHE, et il reste borné à ce
+  /// qui manque : un événement déplacé hors de la fenêtre relue, donc de plusieurs jours, ce qui
+  /// n'arrive qu'au geste de l'utilisateur et se résorbe à la passe suivante (la tâche adopte le
+  /// nouveau jour, la fenêtre le contient à nouveau). `eventPresence` payait déjà exactement cette
+  /// lecture pour la même absence : on la lui évite en lui passant le résultat (`foundInWindow:`).
+  func eventTime(_ identifier: String) -> DateInterval? {
+    guard eventAuthorizationStatus == .fullAccess,
+      let event = store.event(withIdentifier: identifier),
+      let start = event.startDate, let end = event.endDate, start <= end
+    else { return nil }
+    return DateInterval(start: start, end: end)
+  }
+
+  /// Ce que portait l'élément Apple lié la dernière fois que la tâche et lui étaient d'accord — le
+  /// troisième terme sans lequel « qui a changé ? » n'a pas de réponse (cf.
+  /// `RemindersSync.Verdict`). Un événement y range son créneau, un rappel son échéance seule
+  /// (durée nulle) : les identifiants de rappel et d'événement ne vivent pas dans le même espace
+  /// de noms, aucun ne peut être pris pour l'autre.
+  ///
+  /// En mémoire seulement, comme `eventsSeenAlive` et pour la même raison : la persister ferait
+  /// croire au lancement qu'on sait qui a bougé pendant que l'app était fermée, alors que la
+  /// réponse est toujours « pas nous ».
+  private var lastAgreed: [String: DateInterval] = [:]
+
+  func lastSeenEvent(_ identifier: String) -> DateInterval? { lastAgreed[identifier] }
+
+  /// `nil` OUBLIE l'accord (l'affectation d'un `nil` retire la clé) : c'est ce qu'on veut d'un
+  /// élément devenu illisible — au retour, on ne prétendra pas savoir ce qu'il portait avant.
+  func rememberEvent(_ identifier: String, _ interval: DateInterval?) {
+    lastAgreed[identifier] = interval
+  }
+
+  func lastSeenReminderDue(_ identifier: String) -> Date? { lastAgreed[identifier]?.start }
+
+  func rememberReminderDue(_ identifier: String, _ due: Date?) {
+    lastAgreed[identifier] = due.map { DateInterval(start: $0, duration: 0) }
+  }
+
   /// Efface les événements dont la tâche n'a plus de durée (ou plus de date), et ceux des tâches
   /// qu'on supprime. Même contrat que `forgetReminders` : synchrone, muet, par IDENTIFIANT — donc
   /// utilisable APRÈS que SwiftData a effacé les objets (cf. sa doc, et le plantage du 6 août 2026).
   func forgetEvents(_ identifiers: [String]) {
     guard eventAuthorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
     for identifier in identifiers {
+      lastAgreed.removeValue(forKey: identifier)
       guard let event = store.event(withIdentifier: identifier) else { continue }
       try? store.remove(event, span: .thisEvent, commit: true)
     }
@@ -447,6 +542,7 @@ final class RemindersService {
     // `hasPendingVanishVerdict`), et la synchro se rearmerait indéfiniment pour un dossier clos.
     missedOnce.remove(identifier)
     seenAlive.remove(identifier)
+    lastAgreed.removeValue(forKey: identifier)
     return true
   }
 
@@ -508,6 +604,7 @@ final class RemindersService {
   func forgetReminders(_ identifiers: [String]) {
     guard authorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
     for identifier in identifiers {
+      lastAgreed.removeValue(forKey: identifier)
       guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
         continue
       }
