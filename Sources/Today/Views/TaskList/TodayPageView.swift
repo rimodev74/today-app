@@ -136,7 +136,7 @@ struct TodayPageView: View {
       focus: $focus, blocks: { page.blocks }, delete: delete,
       reorder: $reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
-      newTask: createTaskInEditMode
+      newTask: MenuAction(id: "newTask.today", run: createTaskInEditMode)
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(

@@ -160,7 +160,12 @@ struct SidebarView: View {
     // sidebar et au clic droit : rien ne les annonçait, et aucune n'avait de raccourci.
     .focusedSceneValue(\.newProject, MenuAction(id: "newProject", run: addProject))
     .focusedSceneValue(
-      \.newList, listTarget.map { project in MenuAction(id: "newList") { addList(to: project) } }
+      \.newList,
+      // L'`uuid` du projet visé dans l'id : la cible change avec la sélection, et un id constant
+      // aurait figé ⌘⌥N sur le premier projet visité.
+      listTarget.map { project in
+        MenuAction(id: "newList.\(project.uuid)") { addList(to: project) }
+      }
     )
     // Suppression uniquement via le clic droit → « Supprimer » (cf. `contextMenu` de `projectRow`/
     // `listRow`) : pas de raccourci clavier (⌫) sur la sélection de la sidebar.

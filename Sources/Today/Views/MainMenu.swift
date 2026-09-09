@@ -6,7 +6,16 @@ import SwiftUI
 /// L'identité est une chaîne, pas la fermeture : `focusedSceneValue` republie sa valeur à chaque
 /// rendu de la vue qui la porte, et une fermeture est neuve à chaque passe. Sans identité stable,
 /// toute la barre de menus se réévaluerait à chaque frappe.
+///
+/// **En contrepartie, l'identité doit nommer l'action ET SA CIBLE.** `focusedSceneValue` compare
+/// avec ce `==` et n'écrit RIEN quand la valeur est égale : deux pages qui publient le même `id`
+/// laissent la fermeture de la PREMIÈRE en place, et le raccourci reste branché sur la page qu'on
+/// a quittée. Tracé le 9 septembre 2026 avec un `id` de `"newTask"` partout : arrivé sur « Tâches »,
+/// ⌘N exécutait encore la création d'« Aujourd'hui ». La tâche naissait donc hors de la page
+/// regardée, et rien n'y apparaissait. D'où les `id` suffixés par la page ou par l'`uuid` de ce
+/// qu'ils visent.
 struct MenuAction: Equatable {
+  /// Ce que l'action fait ET sur quoi. Jamais le seul nom du geste : cf. le commentaire du type.
   let id: String
   let run: () -> Void
 

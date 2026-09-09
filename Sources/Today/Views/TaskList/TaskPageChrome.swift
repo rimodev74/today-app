@@ -514,7 +514,11 @@ struct TaskPageBase: ViewModifier {
   /// `nil` ne veut pas dire « laisse passer la touche » : ⌘N ne doit RIEN faire là où il n'y a rien
   /// à créer. Ce qu'il faisait avant — ouvrir un onglet — venait du *Nouvelle fenêtre* d'office de
   /// `WindowGroup`, retiré dans `TodayApp.commands`. Une page sans création n'a donc rien à porter.
-  let newTask: (() -> Void)?
+  ///
+  /// Une `MenuAction` et pas une fermeture nue : c'est la PAGE qui doit nommer son action, le socle
+  /// ne sait pas laquelle il coiffe. Un `id` fabriqué ici serait le même pour toutes les pages, et
+  /// c'est exactement le bug que `MenuAction` documente — la première page publiée gardait ⌘N.
+  let newTask: MenuAction?
 
   /// Le repli de secours pour une page SANS glissement (« À venir », « Archives », une liste) : elle
   /// n'a pas de `TaskPageReorder` à elle, mais elle a droit au clic dans le vide.
@@ -598,7 +602,7 @@ struct TaskPageBase: ViewModifier {
       // d'un coup — c'est ce socle qui publie l'action. Un moniteur `NSEvent` vivait ici : il
       // marchait, mais aucun menu ne disait que la touche existait, et une page sans création
       // avalait la frappe en silence au lieu de la GRISER. `nil` se lit maintenant à l'écran.
-      .focusedSceneValue(\.newTask, newTask.map { MenuAction(id: "newTask", run: $0) })
+      .focusedSceneValue(\.newTask, newTask)
       // Une ligne qui apparaît ou disparaît SANS que ce soit nous qui l'ayons décidé. C'est le cas
       // de ⌘Z : l'annulation part du menu *Édition*, traverse la chaîne des répondeurs et arrive
       // dans SwiftData sans passer par une seule de nos méthodes — donc sans le `withAnimation`
@@ -645,7 +649,7 @@ extension View {
     blocks: @escaping () -> [TaskPageBlock],
     delete: @escaping (TaskItem) -> Void,
     reorder: Binding<TaskPageReorder>?,
-    newTask: (() -> Void)?
+    newTask: MenuAction?
   ) -> some View {
     modifier(
       TaskPageBase(

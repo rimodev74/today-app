@@ -309,6 +309,43 @@ sortie reste dans le tampon et on croit que rien ne s'exécute.
 
 ---
 
+## Barre de menus et valeurs focalisées
+
+### Deux pages qui publient le MÊME `id` : la PREMIÈRE garde le raccourci
+
+⌘N ne faisait rien de visible — sur « Aujourd'hui », sur une liste, dans un projet — et les tâches
+créées s'entassaient dans « Tâches ». Signalé le 9 septembre 2026. Le ⊕ de la barre du bas, lui,
+marchait : c'est la MÊME fermeture, appelée directement. Le défaut n'était donc pas dans la
+création, il était dans le chemin du MENU.
+
+Sonde sur `MainMenuCommands.inMainWindow` et sur les trois `createTaskInEditMode`. ⌘N sur
+« Aujourd'hui », navigation vers « Tâches », ⌘N :
+
+```
+MENU fired id=newTask → RUN TodayPageView.createTaskInEditMode   ← « Aujourd'hui », normal
+SELECTION -> smartList(all)
+MOUNT taskPageBase newTask=true      ← « Tâches » publie la SIENNE…
+UNMOUNT taskPageBase                 ← …et « Aujourd'hui » se démonte APRÈS
+MENU fired id=newTask → RUN TodayPageView.createTaskInEditMode   ← « Tâches », fermeture d'AVANT
+```
+
+Dès que la valeur publiée est optionnelle — c'est notre cas — `focusedSceneValue` prend l'overload
+`Equatable` (macOS 14), et celui-ci **n'écrit rien quand la nouvelle valeur est égale à l'ancienne**.
+`MenuAction ==` ne compare que l'`id`, et les cinq pages publiaient `"newTask"` : la fermeture de la
+première page montée restait en place pour toute la session. ⌘N créait donc une tâche hors de la
+page regardée — dans l'Inbox et sans date quand la fermeture figée était celle de « Tâches », ce qui
+explique la pile de tâches vides qu'on y trouvait.
+
+L'`id` n'était pas qu'une optimisation contre la réévaluation du menu : il est la seule chose que
+SwiftUI regarde. D'où **un `id` qui nomme l'action ET sa cible** — `newTask.today`, `newTask.all`,
+`newTask.<uuid de la liste>`. Deux raccourcis portaient le même défaut sans qu'on l'ait vu : ⌘⇧N
+(en-tête) figé sur la première liste ouverte, ⌘⌥N (nouvelle liste) figé sur le premier projet visité
+— `ListPageView` est RÉUTILISÉE d'une liste à l'autre, et `listTarget` change avec la sélection.
+
+Ce qui n'est PAS en cause, vérifié dans la même passe : le démontage. Une page qui ne publie rien
+(un projet) ou qui publie `nil` (« À venir », « Archives ») vide bien la valeur — l'item se grise et
+⌘N n'atteint personne.
+
 ## SwiftData
 
 ### Un `@Query` se ré-invalide SANS qu'aucune écriture n'ait lieu

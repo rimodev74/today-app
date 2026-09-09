@@ -69,7 +69,7 @@ struct AllTasksPageView: View {
       delete: delete,
       reorder: $reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
-      newTask: createTaskInEditMode
+      newTask: MenuAction(id: "newTask.all", run: createTaskInEditMode)
     )
     .onChange(of: page.tasks.count) { _, _ in
       // Une ligne qui apparaît ou disparaît sous le geste (la synchro Rappels, un ⌘Z) invaliderait

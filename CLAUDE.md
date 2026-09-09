@@ -240,6 +240,10 @@ Chiffres et détail : `PIEGES.md` § Déjà rejeté.
   `.newTask` n'ont PAS de valeur par défaut : les cinq pages se prononcent, `nil` compris. Une valeur
   par défaut se justifie quand l'omission est un CHOIX raisonnable ; pas quand elle produit une page
   à moitié branchée.
+- **L'`id` d'une `MenuAction` nomme sa CIBLE, pas seulement le geste.** `focusedSceneValue` compare
+  par `==` et garde la fermeture déjà en place quand les `id` sont égaux : deux pages qui publient
+  le même `id` laissent le raccourci branché sur celle qu'on a quittée. → `PIEGES.md` § Barre de
+  menus.
 - **Les commentaires disent _pourquoi_, jamais _quoi_.**
 - **Un nom qui ment coûte plus cher qu'un commentaire manquant.** Si la doc d'un type existe pour
   démentir son propre nom, c'est le nom qu'il faut changer.

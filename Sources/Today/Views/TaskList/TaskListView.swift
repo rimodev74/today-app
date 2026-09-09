@@ -265,7 +265,9 @@ private struct ListPageView: View {
     // ailleurs. Un moniteur `NSEvent` la portait, parce que deux `.keyboardShortcut` sur la même
     // lettre se marchent dessus sous SwiftUI — un MENU, lui, distingue ⌘N de ⌘⇧N sans effort :
     // c'est AppKit qui compare les modificateurs, comme dans toutes les apps du système.
-    .focusedSceneValue(\.newHeader, MenuAction(id: "newHeader", run: insertHeader))
+    .focusedSceneValue(
+      \.newHeader, MenuAction(id: "newHeader.\(list.uuid)", run: insertHeader)
+    )
     // Le socle commun des pages de tâches : ⌫ sur la sélection, ↑/↓ pour la déplacer. Un seul pan,
     // toujours visible : cette page n'a pas de section repliable, mais elle passe par les mêmes
     // `TaskPageBlock` que les autres — une page ne choisit pas sa façon de déclarer ses lignes.
@@ -278,7 +280,10 @@ private struct ListPageView: View {
       // Cette page a son PROPRE moteur de glissement (en-têtes, blocs, champs) : le socle n'a rien
       // à réordonner ici.
       reorder: nil,
-      newTask: createTaskInEditMode
+      // L'`uuid` de la liste dans l'id : la vue est RÉUTILISÉE d'une liste à l'autre (pas de
+      // `.id(...)`, cf. plus haut), et deux ids identiques feraient créer la tâche dans la liste
+      // précédente.
+      newTask: MenuAction(id: "newTask.\(list.uuid)", run: createTaskInEditMode)
     )
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
     // supprime directement. Les tâches, elles, ne sont PAS supprimées — l'en-tête retirée, elles
