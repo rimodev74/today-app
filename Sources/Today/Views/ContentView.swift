@@ -99,7 +99,39 @@ struct ContentView: View {
     return max(dragWidth, Self.minSidebarWidth)
   }
 
-  var body: some View {
+  /// LE verre, posé UNE fois pour toute la fenêtre — et surtout pas une fois par colonne.
+  ///
+  /// La fenêtre est non opaque (cf. `WindowConfigurator`) : tout pixel que personne ne peint
+  /// laisse voir le bureau EN CLAIR, non flouté. Avec un matériau par colonne, le `Divider` qui
+  /// les sépare n'était couvert par aucun des deux — d'où la bande de bureau nette sur toute la
+  /// hauteur de la fenêtre. Le corriger au séparateur seul aurait laissé le défaut vivant pour le
+  /// prochain élément posé entre deux fonds ; un seul calque de verre sous TOUT le contenu rend le
+  /// trou impossible, où qu'il s'ouvre.
+  ///
+  /// Un seul matériau pour les deux colonnes, donc : ce sont leurs voiles qui les distinguent, et
+  /// c'était déjà eux qui faisaient l'essentiel de l'écart.
+  private var windowGlass: some View {
+    WindowGlass(material: .underWindowBackground).ignoresSafeArea()
+  }
+
+  /// La colonne qu'on LIT : voile plus couvrant que celui de la sidebar, plus le lavis de la
+  /// destination courante. Les trois couches ont chacune leur rôle et aucune ne remplace l'autre —
+  /// le verre donne l'ambiance du bureau, le voile rend le texte lisible par-dessus, le lavis dit
+  /// sur quelle page on est.
+  ///
+  /// Sortie du `body` pour le type-checker, pas par goût : la chaîne de la fenêtre est déjà longue
+  /// et un `.overlay` de plus la faisait dépasser son budget de résolution.
+  /// ponytail: façon Réglages Système (fenêtre entièrement en matériau) plutôt que Finder/Mail,
+  /// qui gardent une zone de contenu OPAQUE — c'est un choix d'app, pas le défaut d'AppKit.
+  private var pageBackground: some View {
+    Scrim.page.overlay(PageTintWash(tint: tint)).ignoresSafeArea()
+  }
+
+  /// Les deux colonnes, et rien d'autre.
+  ///
+  /// Sortie du `body` pour le type-checker : la fenêtre porte une vingtaine de modificateurs, et
+  /// le calque de verre était celui de trop — le compilateur renonçait à résoudre l'expression.
+  private var columns: some View {
     // Layout custom (HStack) MAIS fenêtre à toolbar native → gros rayon système sans inset de sidebar.
     HStack(spacing: 0) {
       // Montée en permanence, largeur pilotée (0 = repliée) : c'est ce qui permet de la tirer
@@ -115,16 +147,10 @@ struct ContentView: View {
       .frame(width: layoutWidth, alignment: .leading)
       .frame(width: effectiveWidth, alignment: .leading)
       .clipped()
-      // Le matériau `.sidebar`, celui du Finder et des Réglages — pas une teinte inventée. En
-      // `behindWindow` (cf. `WindowGlass`) il floute LE BUREAU, pas le contenu de l'app : c'est de
-      // là que vient la couleur de la fenêtre, et c'est pour ça qu'elle change avec le fond d'écran.
-      // Le voile par-dessus est plus léger que celui de la page : la sidebar reste la colonne la
-      // plus vitrée des deux, ce qui suffit à les distinguer sans inventer de teinte.
-      .background {
-        WindowGlass(material: .sidebar)
-          .overlay(Scrim.sidebar)
-          .ignoresSafeArea()
-      }
+      // Le voile de la sidebar SEUL : le verre, lui, est posé une fois pour toute la fenêtre
+      // (cf. plus bas). Plus léger que celui de la page — la sidebar reste la colonne la plus
+      // vitrée des deux, ce qui suffit à les distinguer sans inventer de teinte.
+      .background { Scrim.sidebar.ignoresSafeArea() }
       // Survoler la sidebar suffit à faire apparaître son mors, sans aller le chercher au bord.
       .onHover { sidebarHovered = $0 }
 
@@ -137,154 +163,151 @@ struct ContentView: View {
         pendingTitleFocus: $pendingTitleFocus
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      // La colonne qu'on LIT : même verre, voile plus couvrant, plus le lavis de la destination
-      // courante. Les trois couches ont chacune leur rôle et aucune ne remplace l'autre — le verre
-      // donne l'ambiance du bureau, le voile rend le texte lisible par-dessus, le lavis dit sur
-      // quelle page on est.
-      // ponytail: façon Réglages Système (fenêtre entièrement en matériau) plutôt que Finder/Mail,
-      // qui gardent une zone de contenu OPAQUE — c'est un choix d'app, pas le défaut d'AppKit.
-      .background {
-        WindowGlass(material: .underWindowBackground)
-          .overlay(Scrim.page)
-          .overlay(PageTintWash(tint: tint))
-          .ignoresSafeArea()
-      }
+      .background { pageBackground }
     }
-    // Poignée : clic = replier/déplier, glisser = redimensionner. En overlay (pas dans le HStack)
-    // pour rester visible sidebar repliée, où il n'y a plus de séparateur auquel s'accrocher.
-    // Pas `HSplitView`, qui donnerait le redimensionnement gratuitement mais remplace le layout
-    // par un NSSplitView : exit le repli animé et le fond pleine hauteur des colonnes.
-    .overlay(alignment: .leading) { grabber }
-    .environment(\.pageTint, tint)
-    .environment(filing)
-    // Le cadre de la ligne en vol remonte de la page jusqu'ici. Une préférence et pas une écriture
-    // directe : la rangée est enfouie sous `TaskListView` puis sous sa page, et rien d'autre ne
-    // relie ces deux colonnes.
-    .onPreferenceChange(DraggedRowFrameKey.self) { filing.track($0) }
-    // Le bord où la page rogne. La fenêtre est la seule à le connaître : la sidebar se replie et se
-    // tire. `initial` parce que la largeur de repos ne change pas au lancement — sans lui, aucun
-    // glissement ne serait « en vol » tant qu'on n'aurait pas touché à la poignée.
-    .onChange(of: effectiveWidth, initial: true) { filing.sidebarEdge = effectiveWidth }
-    .overlay { taskDragGhost }
-    // La palette flotte AU-DESSUS de toute la fenêtre (centrée en haut), elle n'est pas
-    // ancrée au bouton : c'est le comportement Spotlight demandé.
-    .overlay {
-      if searchPresented {
-        QuickFindPanel(
-          recents: recents,
-          current: selection,
-          onSelect: {
-            selection = $0
-            searchPresented = false
-          },
-          onDismiss: { searchPresented = false }
-        )
-        .transition(.opacity)
-      }
-    }
-    .animation(.easeOut(duration: 0.12), value: searchPresented)
-    .animation(.easeOut(duration: 0.2), value: sidebarVisible)
-    // Ce que la barre de menus atteint dans cette fenêtre. ⌘B passait par un bouton CACHÉ posé
-    // ici : il marchait, mais rien ne l'annonçait — un raccourci qu'on ne peut pas découvrir
-    // n'existe que pour qui l'a écrit. Même chose pour la recherche, qui n'avait que sa loupe.
-    .focusedSceneValue(\.search, MenuAction(id: "search") { searchPresented = true })
-    .focusedSceneValue(
-      \.sidebarToggle, SidebarToggle(isVisible: sidebarVisible) { sidebarVisible.toggle() }
-    )
-    .onChange(of: selection) { _, new in recordRecent(new) }
-    // Un ⌘↩ ou un raccourci texte (« !today ») venu de la capsule de saisie rapide : elle vit dans
-    // une autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
-    .onReceive(NotificationCenter.default.publisher(for: AppCommand.selectionNotification)) {
-      note in
-      // La destination est PORTÉE par la notification : une `ContentView` dont la fenêtre est
-      // fermée reste abonnée, et un jeton à consommer une fois partait à celle-là (cf. `deliver`).
-      guard let wanted = note.object as? SidebarSelection else { return }
-      selection = wanted
-    }
-    // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande, et
-    // c'est le SEUL chemin dans ce cas — `AppCommand.deliver` ne poste alors AUCUNE notification,
-    // qui serait consommée par la `ContentView` sortante, encore abonnée.
-    .onAppear(perform: applyPendingSelection)
-    // La base a refusé de s'ouvrir au lancement : le dire, ICI, parce que c'est le premier moment
-    // où une fenêtre existe (la quarantaine, elle, a lieu pendant la construction du container).
-    .onAppear { quarantinedPaths = StoreQuarantine.consumeReport() }
-    .alert("Une base illisible a été mise de côté", isPresented: quarantineAlertPresented) {
-      // Le seul bouton qui fait quelque chose d'utile : montrer les fichiers. Les retrouver à la
-      // main demanderait d'aller dans un dossier que le Finder cache par défaut.
-      Button("Afficher dans le Finder") {
-        NSWorkspace.shared.activateFileViewerSelecting(
-          quarantinedPaths.map { URL(fileURLWithPath: $0) })
-      }
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(
-        "Today n'a pas pu ouvrir sa base de données et a redémarré sur une base vide. "
-          + "RIEN N'A ÉTÉ SUPPRIMÉ : l'ancienne est à côté, sous un nom horodaté.\n\n"
-          + quarantinedPaths.map { ($0 as NSString).lastPathComponent }.joined(separator: "\n")
-          + "\n\nNe ressaisis rien avant d'avoir tenté de la récupérer.")
-    }
-    // ⌘Z. Le menu *Édition ▸ Annuler* n'annule pas « ce qui vient d'être fait » dans l'absolu : il
-    // envoie `undo:` dans la chaîne des répondeurs, qui aboutit à l'`UndoManager` DE LA FENÊTRE.
-    // Poser un `UndoManager` neuf sur le contexte SwiftData — ce qui était fait au démarrage —
-    // ouvrait une SECONDE pile, correctement alimentée mais que rien ne pouvait atteindre : ⌘Z
-    // restait sans effet partout, sans erreur ni menu grisé pour le dire.
-    //
-    // C'est ce que branche `modelContainer(for:isUndoEnabled:)` quand on laisse SwiftUI fabriquer
-    // le container ; le nôtre est bâti à la main (cf. `TodayApp.openStore`, qui sauvegarde la base
-    // avant de l'ouvrir), donc ce fil-là est à notre charge. L'environnement donne EXACTEMENT le
-    // manager de la fenêtre — celui que le menu atteindra.
-    .onChange(of: undoManager, initial: true) { modelContext.undoManager = undoManager }
-    // Retour de complétion Rappels → app : EventKit prévient de tout changement du store ;
-    // le retour au premier plan couvre le rappel coché pendant que l'app était en arrière-plan.
-    .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
-      syncWithReminders()
-    }
-    // Et le sens app → Rappels, qui n'avait AUCUN déclencheur : dater une tâche n'écrit que dans
-    // SwiftData, donc ne poste pas `.EKEventStoreChanged`. La tâche partait quand même — mais
-    // seulement au prochain réveil venu d'ailleurs (un remaniement iCloud, un retour au premier
-    // plan), soit une quinzaine de secondes en moyenne, mesurées à l'usage le 6 août 2026.
-    // `ModelContext.didSave` est le pendant exact de la notification d'EventKit, côté nous.
-    .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-      syncWithReminders()
-    }
-    // Une liste renommée doit recoller ses raccourcis tout de suite, pas seulement quand les
-    // Réglages passent dessus (cf. `reconcileShortcuts`).
-    .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-      reconcileShortcuts()
-    }
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
-    {
-      _ in syncWithReminders()
-    }
-    // Ce qui s'installe se démonte : la passe en attente survivrait à la fermeture de la fenêtre.
-    .onDisappear { syncPass?.cancel() }
-    // Une vraie toolbar (transparente) : c'est elle qui donne le gros rayon « moderne ».
-    // L'item doit exister pour que macOS attache un NSToolbar réel, mais ce n'est PAS un
-    // bouton (macOS applique un fond "glass" à tout contrôle bouton dans la toolbar) :
-    // une vue neutre suffit à garder le rayon sans afficher de chrome.
-    .toolbar {
-      // Sidebar repliée → plus aucun moyen de changer de destination à la souris : on remonte
-      // la sidebar dans la barre de titre, sous forme de sélecteur.
-      // macOS 26 pose un fond « glass » partagé sur le conteneur de l'item lui-même (pas sur le
-      // contrôle) : sans cet opt-out, la pilule apparaît DANS une seconde capsule système.
-      // Rien à faire avant macOS 26, qui n'a pas ce fond.
-      if !sidebarVisible {
-        if #available(macOS 26, *) {
-          ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-          ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
+    // Le verre est posé ICI, sur le HStack, et pas sur le `body` : celui-ci porte déjà une
+    // vingtaine de modificateurs et un de plus lui faisait dépasser son budget de type-checking.
+    .background { windowGlass }
+  }
+
+  var body: some View {
+    columns
+      // Poignée : clic = replier/déplier, glisser = redimensionner. En overlay (pas dans le HStack)
+      // pour rester visible sidebar repliée, où il n'y a plus de séparateur auquel s'accrocher.
+      // Pas `HSplitView`, qui donnerait le redimensionnement gratuitement mais remplace le layout
+      // par un NSSplitView : exit le repli animé et le fond pleine hauteur des colonnes.
+      .overlay(alignment: .leading) { grabber }
+      .environment(\.pageTint, tint)
+      .environment(filing)
+      // Le cadre de la ligne en vol remonte de la page jusqu'ici. Une préférence et pas une écriture
+      // directe : la rangée est enfouie sous `TaskListView` puis sous sa page, et rien d'autre ne
+      // relie ces deux colonnes.
+      .onPreferenceChange(DraggedRowFrameKey.self) { filing.track($0) }
+      // Le bord où la page rogne. La fenêtre est la seule à le connaître : la sidebar se replie et se
+      // tire. `initial` parce que la largeur de repos ne change pas au lancement — sans lui, aucun
+      // glissement ne serait « en vol » tant qu'on n'aurait pas touché à la poignée.
+      .onChange(of: effectiveWidth, initial: true) { filing.sidebarEdge = effectiveWidth }
+      .overlay { taskDragGhost }
+      // La palette flotte AU-DESSUS de toute la fenêtre (centrée en haut), elle n'est pas
+      // ancrée au bouton : c'est le comportement Spotlight demandé.
+      .overlay {
+        if searchPresented {
+          QuickFindPanel(
+            recents: recents,
+            current: selection,
+            onSelect: {
+              selection = $0
+              searchPresented = false
+            },
+            onDismiss: { searchPresented = false }
+          )
+          .transition(.opacity)
         }
       }
-      ToolbarItem(placement: .primaryAction) {
-        Color.clear
-          .frame(width: 0, height: 0)
-          .allowsHitTesting(false)
-          .accessibilityHidden(true)
+      .animation(.easeOut(duration: 0.12), value: searchPresented)
+      .animation(.easeOut(duration: 0.2), value: sidebarVisible)
+      // Ce que la barre de menus atteint dans cette fenêtre. ⌘B passait par un bouton CACHÉ posé
+      // ici : il marchait, mais rien ne l'annonçait — un raccourci qu'on ne peut pas découvrir
+      // n'existe que pour qui l'a écrit. Même chose pour la recherche, qui n'avait que sa loupe.
+      .focusedSceneValue(\.search, MenuAction(id: "search") { searchPresented = true })
+      .focusedSceneValue(
+        \.sidebarToggle, SidebarToggle(isVisible: sidebarVisible) { sidebarVisible.toggle() }
+      )
+      .onChange(of: selection) { _, new in recordRecent(new) }
+      // Un ⌘↩ ou un raccourci texte (« !today ») venu de la capsule de saisie rapide : elle vit dans
+      // une autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
+      .onReceive(NotificationCenter.default.publisher(for: AppCommand.selectionNotification)) {
+        note in
+        // La destination est PORTÉE par la notification : une `ContentView` dont la fenêtre est
+        // fermée reste abonnée, et un jeton à consommer une fois partait à celle-là (cf. `deliver`).
+        guard let wanted = note.object as? SidebarSelection else { return }
+        selection = wanted
       }
-    }
-    .toolbarBackground(.hidden, for: .windowToolbar)
-    .background(WindowConfigurator())
+      // La même commande quand la fenêtre venait d'être fermée : elle est recréée par la commande, et
+      // c'est le SEUL chemin dans ce cas — `AppCommand.deliver` ne poste alors AUCUNE notification,
+      // qui serait consommée par la `ContentView` sortante, encore abonnée.
+      .onAppear(perform: applyPendingSelection)
+      // La base a refusé de s'ouvrir au lancement : le dire, ICI, parce que c'est le premier moment
+      // où une fenêtre existe (la quarantaine, elle, a lieu pendant la construction du container).
+      .onAppear { quarantinedPaths = StoreQuarantine.consumeReport() }
+      .alert("Une base illisible a été mise de côté", isPresented: quarantineAlertPresented) {
+        // Le seul bouton qui fait quelque chose d'utile : montrer les fichiers. Les retrouver à la
+        // main demanderait d'aller dans un dossier que le Finder cache par défaut.
+        Button("Afficher dans le Finder") {
+          NSWorkspace.shared.activateFileViewerSelecting(
+            quarantinedPaths.map { URL(fileURLWithPath: $0) })
+        }
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text(
+          "Today n'a pas pu ouvrir sa base de données et a redémarré sur une base vide. "
+            + "RIEN N'A ÉTÉ SUPPRIMÉ : l'ancienne est à côté, sous un nom horodaté.\n\n"
+            + quarantinedPaths.map { ($0 as NSString).lastPathComponent }.joined(separator: "\n")
+            + "\n\nNe ressaisis rien avant d'avoir tenté de la récupérer.")
+      }
+      // ⌘Z. Le menu *Édition ▸ Annuler* n'annule pas « ce qui vient d'être fait » dans l'absolu : il
+      // envoie `undo:` dans la chaîne des répondeurs, qui aboutit à l'`UndoManager` DE LA FENÊTRE.
+      // Poser un `UndoManager` neuf sur le contexte SwiftData — ce qui était fait au démarrage —
+      // ouvrait une SECONDE pile, correctement alimentée mais que rien ne pouvait atteindre : ⌘Z
+      // restait sans effet partout, sans erreur ni menu grisé pour le dire.
+      //
+      // C'est ce que branche `modelContainer(for:isUndoEnabled:)` quand on laisse SwiftUI fabriquer
+      // le container ; le nôtre est bâti à la main (cf. `TodayApp.openStore`, qui sauvegarde la base
+      // avant de l'ouvrir), donc ce fil-là est à notre charge. L'environnement donne EXACTEMENT le
+      // manager de la fenêtre — celui que le menu atteindra.
+      .onChange(of: undoManager, initial: true) { modelContext.undoManager = undoManager }
+      // Retour de complétion Rappels → app : EventKit prévient de tout changement du store ;
+      // le retour au premier plan couvre le rappel coché pendant que l'app était en arrière-plan.
+      .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
+        syncWithReminders()
+      }
+      // Et le sens app → Rappels, qui n'avait AUCUN déclencheur : dater une tâche n'écrit que dans
+      // SwiftData, donc ne poste pas `.EKEventStoreChanged`. La tâche partait quand même — mais
+      // seulement au prochain réveil venu d'ailleurs (un remaniement iCloud, un retour au premier
+      // plan), soit une quinzaine de secondes en moyenne, mesurées à l'usage le 6 août 2026.
+      // `ModelContext.didSave` est le pendant exact de la notification d'EventKit, côté nous.
+      .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+        syncWithReminders()
+      }
+      // Une liste renommée doit recoller ses raccourcis tout de suite, pas seulement quand les
+      // Réglages passent dessus (cf. `reconcileShortcuts`).
+      .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+        reconcileShortcuts()
+      }
+      .onReceive(
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      ) {
+        _ in syncWithReminders()
+      }
+      // Ce qui s'installe se démonte : la passe en attente survivrait à la fermeture de la fenêtre.
+      .onDisappear { syncPass?.cancel() }
+      // Une vraie toolbar (transparente) : c'est elle qui donne le gros rayon « moderne ».
+      // L'item doit exister pour que macOS attache un NSToolbar réel, mais ce n'est PAS un
+      // bouton (macOS applique un fond "glass" à tout contrôle bouton dans la toolbar) :
+      // une vue neutre suffit à garder le rayon sans afficher de chrome.
+      .toolbar {
+        // Sidebar repliée → plus aucun moyen de changer de destination à la souris : on remonte
+        // la sidebar dans la barre de titre, sous forme de sélecteur.
+        // macOS 26 pose un fond « glass » partagé sur le conteneur de l'item lui-même (pas sur le
+        // contrôle) : sans cet opt-out, la pilule apparaît DANS une seconde capsule système.
+        // Rien à faire avant macOS 26, qui n'a pas ce fond.
+        if !sidebarVisible {
+          if #available(macOS 26, *) {
+            ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
+              .sharedBackgroundVisibility(.hidden)
+          } else {
+            ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
+          }
+        }
+        ToolbarItem(placement: .primaryAction) {
+          Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+      }
+      .toolbarBackground(.hidden, for: .windowToolbar)
+      .background(WindowConfigurator())
   }
 
   /// Curseur cohérent avec ce que le geste permet réellement (comme un NSSplitView) : main quand
