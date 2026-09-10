@@ -2038,21 +2038,31 @@ private func comingSoon(_ title: String, searchPresented: Binding<Bool>) -> some
   }
 }
 
-/// Pastille grise d'un jeton : même gabarit pour le tag de jour planifié d'une ligne au repos
-/// (`dateTag`) et pour les jetons en attente du champ « Nouvelle tâche » — ce qu'on voit en tapant
-/// est exactement ce que la tâche portera.
+/// Pastille d'un jeton : même gabarit pour le quand d'une ligne au repos (`dateTag`) et pour les
+/// jetons en attente du champ « Nouvelle tâche » — ce qu'on voit en tapant est exactement ce que
+/// la tâche portera.
+///
+/// `tint` change ce que la pastille DIT. Teintée, c'est un attribut posé sur une tâche qui
+/// existe : elle prend la couleur de la page et se lit à distance, comme l'heure d'une ligne.
+/// Grise (le défaut), c'est un jeton en cours de saisie — rien n'est encore enregistré, rien ne
+/// doit encore attirer l'œil.
 struct TokenPill: View {
   let text: String
+  var tint: Color? = nil
 
   var body: some View {
     Text(text)
-      .font(.app(.callout))
-      .foregroundStyle(.secondary)
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .background(
-        Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+      // Chiffres tabulaires : une colonne d'heures alignée à droite danse d'une ligne à l'autre
+      // dès que les glyphes n'ont pas la même chasse.
+      .monospacedDigit()
+      // 12 = la taille native de `.callout`, mise à l'échelle par `Font.app` comme partout.
+      .font(.app(12, weight: tint == nil ? .regular : .medium))
+      .foregroundStyle(
+        tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(HierarchicalShapeStyle.secondary)
       )
+      .padding(.horizontal, 7)
+      .padding(.vertical, 2)
+      .background(tint?.opacity(0.15) ?? Color.primary.opacity(0.06), in: Capsule())
       .fixedSize()
   }
 

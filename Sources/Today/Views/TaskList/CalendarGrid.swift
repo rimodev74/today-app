@@ -126,7 +126,7 @@ struct CalendarGrid: View {
         .background {
           Circle()
             .fill(
-              isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(thingsSelectionFill)
+              isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(rowSelectionFill)
             )
             .opacity(isSelected ? 1 : (hovered == day ? 1 : 0))
             .frame(width: Self.dot, height: Self.dot)

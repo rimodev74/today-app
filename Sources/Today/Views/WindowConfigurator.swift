@@ -73,8 +73,18 @@ struct WindowConfigurator: NSViewRepresentable {
     // barre d'onglets* et les cinq entrées d'onglets du menu *Fenêtre*, toutes sans objet. C'est
     // ce regroupement en onglets qui faisait ouvrir un onglet sur ⌘N (cf. `MainMenuCommands`).
     window.tabbingMode = .disallowed
-    // Fenêtre laissée OPAQUE → macOS dessine coins + ombre natifs.
+    // Fenêtre TRANSPARENTE : c'est la condition du verre. Un `NSVisualEffectView` en
+    // `blendingMode = .behindWindow` (cf. `WindowGlass`) prélève ce qu'il y a DERRIÈRE la fenêtre —
+    // le bureau. Tant que la fenêtre est opaque, il n'a rien à prélever et le matériau retombe sur
+    // un gris plat : c'est exactement ce qu'on voyait avant, d'où les fonds opaques peints à la
+    // main que ce chantier remplace.
+    //
+    // Les coins arrondis et l'ombre RESTENT natifs : c'est la vue de cadre d'AppKit qui masque le
+    // contenu, pas le fond de la fenêtre. Rien à redessiner.
+    //
     // Pas d'inset manuel des feux tricolores : la position native est celle voulue
     // (un décalage manuel se fait défaire par le relayout AppKit au premier clic).
+    window.isOpaque = false
+    window.backgroundColor = .clear
   }
 }

@@ -237,8 +237,9 @@ struct SidebarView: View {
       }
       .padding(.vertical, 6)
       .padding(.horizontal, 12)
-      .contentShape(Capsule())
-      .background(.quaternary.opacity(0.5), in: Capsule())
+      .contentShape(RoundedRectangle(cornerRadius: rowRadius, style: .continuous))
+      .background(
+        rowHoverFill, in: RoundedRectangle(cornerRadius: rowRadius, style: .continuous))
     }
     .buttonStyle(.plain)
   }
@@ -335,8 +336,8 @@ struct SidebarView: View {
     // même rayon, même gabarit mesuré) — juste vide, sans anneau ni titre.
     .background(alignment: .topLeading) {
       if let layout, let r = placeholderRect(layout: layout) {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-          .fill(Self.rowFill)
+        RoundedRectangle(cornerRadius: rowRadius, style: .continuous)
+          .fill(rowSelectionFill)
           .frame(width: r.width, height: r.height)
           .offset(x: r.minX, y: r.minY)
           .allowsHitTesting(false)
@@ -594,19 +595,13 @@ struct SidebarView: View {
 
   // MARK: Ligne générique
 
-  /// Fond d'une ligne survolée ou sélectionnée. Teinte FIXE imposée par la maquette (#E5E6E6 /
-  /// #3A3C3F) et non `unemphasizedSelectedContentBackgroundColor` : la couleur système suit
-  /// l'accent et le focus de la fenêtre, ce qui la faisait varier d'un état à l'autre.
-  /// `NSColor` à provider plutôt qu'un `@Environment(\.colorScheme)` : une seule définition,
-  /// utilisable aussi depuis le placeholder de drag qui doit être exactement de la même couleur.
-  fileprivate static let rowFill = Color(
-    nsColor: NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(srgbRed: 0x3A / 255, green: 0x3C / 255, blue: 0x3F / 255, alpha: 1)
-        : NSColor(srgbRed: 0xE5 / 255, green: 0xE6 / 255, blue: 0xE6 / 255, alpha: 1)
-    })
-
   /// Fond d'une ligne de sidebar : sélection en priorité, sinon un survol léger.
+  ///
+  /// Les deux teintes viennent de `rowSelectionFill`/`rowHoverFill`, partagées avec les pages de
+  /// tâches : c'est la même notion des deux côtés de la fenêtre. La sidebar avait sa propre paire
+  /// opaque (#E5E6E6 / #3A3C3F), et surtout UNE SEULE valeur pour les deux états — survoler une
+  /// ligne la faisait donc apparaître exactement comme la ligne sélectionnée, à un endroit où
+  /// savoir où l'on est compte. Deux alphas séparent enfin les deux.
   /// État `@State` propre à cette enveloppe — un survol vit et meurt avec la ligne, il n'y a pas
   /// besoin de le remonter à `SidebarView`.
   private struct HoverBackground<Content: View>: View {
@@ -622,8 +617,8 @@ struct SidebarView: View {
     var body: some View {
       content()
         .background(
-          isSelected || hovering ? SidebarView.rowFill : .clear,
-          in: RoundedRectangle(cornerRadius: 6)
+          isSelected ? rowSelectionFill : (hovering ? rowHoverFill : .clear),
+          in: RoundedRectangle(cornerRadius: rowRadius, style: .continuous)
         )
         // Pas de curseur « main » : ces lignes sont de la navigation, pas des liens — le curseur
         // flèche reste celui du reste de l'app.

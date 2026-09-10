@@ -3,24 +3,8 @@ import EventKit
 import SwiftData
 import SwiftUI
 
-/// Fonds opaques des deux colonnes. En clair : valeurs Things exactes (#ffffff / #f9f9fa) ;
-/// en sombre : couleurs système natives, faute de valeurs de référence fournies.
-private let pageBackground = Color(
-  nsColor: NSColor(name: nil) { appearance in
-    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-      ? .textBackgroundColor
-      : NSColor(white: 1, alpha: 1)
-  })
-private let sidebarBackground = Color(
-  nsColor: NSColor(name: nil) { appearance in
-    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-      ? .windowBackgroundColor
-      : NSColor(red: 0xF9 / 255, green: 0xF9 / 255, blue: 0xFA / 255, alpha: 1)
-  })
-
 struct ContentView: View {
   @Environment(RemindersService.self) private var remindersService
-  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.modelContext) private var modelContext
   /// Celui de la fenêtre : c'est lui que le menu *Édition ▸ Annuler* atteint (cf. `.onChange`
   /// plus bas, qui le donne au contexte SwiftData).
@@ -91,6 +75,13 @@ struct ContentView: View {
     Binding(get: { !quarantinedPaths.isEmpty }, set: { if !$0 { quarantinedPaths = [] } })
   }
 
+  /// La couleur de la destination courante, calculée UNE fois ici et distribuée par
+  /// l'environnement (cf. `EnvironmentValues.pageTint`). La fenêtre est le seul endroit qui
+  /// connaisse la sélection ET qui coiffe les deux colonnes : le lavis du fond et les rangées
+  /// doivent lire la même valeur, sans quoi une page s'ambiancerait en orange avec des cases
+  /// violettes.
+  private var tint: Color { selection?.tint ?? PageTint.inbox }
+
   /// Ce que le layout affiche vraiment : le drag en cours s'il y en a un, sinon l'état validé.
   private var effectiveWidth: Double {
     dragWidth ?? (sidebarVisible ? sidebarWidth : 0)
@@ -124,13 +115,14 @@ struct ContentView: View {
       .frame(width: layoutWidth, alignment: .leading)
       .frame(width: effectiveWidth, alignment: .leading)
       .clipped()
-      // En sombre, les fonds opaques natifs des deux colonnes sont la MÊME valeur (#1E1E1E pour
-      // window/text/controlBackgroundColor) : les colonnes se confondaient, seul le séparateur les
-      // distinguait. Le matériau `.bar` rend l'étagement vibrant d'une sidebar native (Finder,
-      // Réglages) sans inventer de teinte. En clair on garde la valeur Things exacte.
+      // Le matériau `.sidebar`, celui du Finder et des Réglages — pas une teinte inventée. En
+      // `behindWindow` (cf. `WindowGlass`) il floute LE BUREAU, pas le contenu de l'app : c'est de
+      // là que vient la couleur de la fenêtre, et c'est pour ça qu'elle change avec le fond d'écran.
+      // Le voile par-dessus est plus léger que celui de la page : la sidebar reste la colonne la
+      // plus vitrée des deux, ce qui suffit à les distinguer sans inventer de teinte.
       .background {
-        Rectangle()
-          .fill(colorScheme == .dark ? AnyShapeStyle(.bar) : AnyShapeStyle(sidebarBackground))
+        WindowGlass(material: .sidebar)
+          .overlay(Scrim.sidebar)
           .ignoresSafeArea()
       }
       // Survoler la sidebar suffit à faire apparaître son mors, sans aller le chercher au bord.
@@ -145,16 +137,16 @@ struct ContentView: View {
         pendingTitleFocus: $pendingTitleFocus
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      // Matériau plus épais que celui de la sidebar : les deux colonnes gardent des tons distincts
-      // (une même vibrance des deux côtés les refondrait en une seule surface, cf. le cas des fonds
-      // opaques ci-dessus), tout en partageant la teinte que le matériau prélève sur le bureau.
+      // La colonne qu'on LIT : même verre, voile plus couvrant, plus le lavis de la destination
+      // courante. Les trois couches ont chacune leur rôle et aucune ne remplace l'autre — le verre
+      // donne l'ambiance du bureau, le voile rend le texte lisible par-dessus, le lavis dit sur
+      // quelle page on est.
       // ponytail: façon Réglages Système (fenêtre entièrement en matériau) plutôt que Finder/Mail,
       // qui gardent une zone de contenu OPAQUE — c'est un choix d'app, pas le défaut d'AppKit.
       .background {
-        Rectangle()
-          .fill(
-            colorScheme == .dark ? AnyShapeStyle(.thickMaterial) : AnyShapeStyle(pageBackground)
-          )
+        WindowGlass(material: .underWindowBackground)
+          .overlay(Scrim.page)
+          .overlay(PageTintWash(tint: tint))
           .ignoresSafeArea()
       }
     }
@@ -163,6 +155,7 @@ struct ContentView: View {
     // Pas `HSplitView`, qui donnerait le redimensionnement gratuitement mais remplace le layout
     // par un NSSplitView : exit le repli animé et le fond pleine hauteur des colonnes.
     .overlay(alignment: .leading) { grabber }
+    .environment(\.pageTint, tint)
     .environment(filing)
     // Le cadre de la ligne en vol remonte de la page jusqu'ici. Une préférence et pas une écriture
     // directe : la rangée est enfouie sous `TaskListView` puis sous sa page, et rien d'autre ne
@@ -333,7 +326,7 @@ struct ContentView: View {
         // pas de rognage à la largeur de la sidebar (essayé aussi) : ce calque doit rester
         // au-dessus de TOUT, sidebar et page confondues — un `.frame().clipped()` posé ici le
         // faisait passer sous les fonds opaques des deux colonnes.
-        SidebarDropGhost()
+        SidebarDropGhost(tint: tint)
           .position(
             x: flying.minX + filing.grabOffsetX - origin.x,
             y: flying.midY - origin.y)
@@ -1262,11 +1255,14 @@ private struct QuickFindRow<Icon: View>: View {
 /// Ce qu'on emmène vers la barre latérale : la pilule de sélection, RÉDUITE, et le compte de ce
 /// qu'elle transporte.
 ///
-/// C'est le calque de Things, et il dit deux choses en ne dessinant presque rien : la teinte est
-/// celle d'une ligne sélectionnée (`thingsSelectionFill`, exactement la même valeur), donc l'objet
-/// en vol se lit comme « la ligne que je viens de prendre » ; et il est court, donc il ne masque
-/// pas la destination qu'on vise. Un calque à la largeur de la rangée recouvrirait la colonne
-/// entière au moment précis où il faut la lire.
+/// Il dit deux choses en ne dessinant presque rien : la teinte est celle de la PAGE d'où la ligne
+/// vient, donc l'objet en vol se lit comme « la ligne que je viens de prendre » ; et il est court,
+/// donc il ne masque pas la destination qu'on vise. Un calque à la largeur de la rangée
+/// recouvrirait la colonne entière au moment précis où il faut la lire.
+///
+/// Teinté et non `rowSelectionFill` : ce gris neutre vaut 7 % de noir, ce qui suffit à poser une
+/// sélection SUR une page mais disparaît quand la pilule survole la barre latérale, dont c'est
+/// déjà le fond.
 ///
 /// Son bord AVANT à mi-hauteur est le point qui vise (cf. `SidebarFiling.anchor`) : ce qu'on voit
 /// est ce qui touche.
@@ -1275,6 +1271,8 @@ private struct QuickFindRow<Icon: View>: View {
 /// page d'où la ligne vient. Ce qu'on ne sait pas sans lui, c'est COMBIEN on transporte — d'où le
 /// badge, et rien d'autre.
 private struct SidebarDropGhost: View {
+  let tint: Color
+
   static let height: CGFloat = 22
   /// Largeur fixe : la pilule ne représente pas un contenu mais un objet en transit — c'est un
   /// curseur de dépôt, pas un aperçu.
@@ -1283,7 +1281,7 @@ private struct SidebarDropGhost: View {
 
   var body: some View {
     Capsule()
-      .fill(thingsSelectionFill)
+      .fill(tint.opacity(0.85))
       .frame(width: Self.width, height: Self.height)
       // Le badge DÉBORDE, en haut à droite : posé dedans il se lirait comme une pastille de
       // contenu, alors qu'il compte ce que la pilule porte. Il ne change pas la taille de mise en

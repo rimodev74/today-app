@@ -45,6 +45,7 @@ en-tête AVANT d'écrire.
 | `Models/TodaySchema.swift` + `Tests/…/DeployedSchemaSnapshot.swift` | la forme des données, écrite deux fois et confrontée à chaque test |
 | `Services/StoreBackup.swift`                             | copie la base AVANT de l'ouvrir, quand la forme des modèles a changé         |
 | `TodayApp.openStore`                                     | l'unique façon d'ouvrir un store                                             |
+| `Views/Theme.swift`                                      | le verre, la couleur de chaque page, les voiles et les surfaces de ligne      |
 
 Toutes existent parce que la même logique vivait en double dans des vues. Ce que chacune a remplacé,
 et le bug que ça coûtait : `PIEGES.md`.
@@ -229,10 +230,9 @@ Chiffres et détail : `PIEGES.md` § Déjà rejeté.
 - **Avant d'ajouter un `@State`, chercher le type qui porte déjà ce comportement** (sélection,
   édition, brouillon, glissement). Un second état pour une notion existante est exactement la façon
   dont deux pages se mettent à diverger sans que personne ne le voie.
-- **Une couleur figée se double.** Quand une valeur de maquette s'impose, passer par
-  `NSColor(name:) { appearance in … }` avec sa version sombre (cf. `SidebarView.rowFill`,
-  `thingsSelectionFill`, `HeaderRow.dragLayer`). Une `Color(red:…)` nue est un bug de mode sombre en
-  attente.
+- **Une couleur figée se double**, et ça passe par `dualColor(light:dark:)` de `Theme.swift` — pas
+  par un `NSColor(name:)` réécrit à la main (trois copies traînaient, elles ont fusionné). Une
+  `Color(red:…)` nue est un bug de mode sombre en attente.
 - **Ce qui s'installe se démonte.** Moniteur `NSEvent`, observateur `NotificationCenter`, `Timer` :
   chacun a son `removeMonitor` / `removeObserver` / `invalidate` sur le chemin de sortie
   (`dismantleNSView`, `onDisappear`).

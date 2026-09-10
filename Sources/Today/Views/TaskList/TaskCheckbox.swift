@@ -7,42 +7,43 @@ import AppKit
 import SwiftData
 import SwiftUI
 
-/// Case à cocher façon Things : un carré à coin arrondi, vide et cerné d'un filet gris ;
-/// rempli en accent avec une coche blanche une fois complété.
+/// Un ANNEAU à la couleur de la page, qui se remplit de cette même couleur avec une coche blanche
+/// une fois la tâche faite.
+///
+/// C'était un carré à coin arrondi cerné de gris — la signature de Things, et le repère le plus
+/// reconnaissable de tout ce que l'app lui empruntait. Le cercle teinté le remplace : la forme
+/// change, mais surtout la COULEUR entre dans la ligne, et c'est celle de la destination
+/// (`pageTint`). Une page se lit donc à sa colonne de gauche avant même son titre.
 ///
 /// Custom et pas `.toggleStyle(.checkbox)` : la case native de macOS 26 est un carré **plein**,
 /// impossible d'en tirer ce rendu par un simple restylage.
 struct TaskCheckbox: View {
   let isCompleted: Bool
-  /// Sous-tâche = cercle ; tâche = rectangle arrondi (défaut). Même case, seule la forme change :
-  /// on ne duplique pas le tracé du check animé, le bounce ni le curseur main.
-  var circular: Bool = false
+  /// Case d'une SOUS-ligne : même anneau, plus petit. C'est la taille qui hiérarchise, pas la
+  /// forme — deux formes différentes se lisaient comme deux natures de case, alors que c'est le
+  /// même geste.
+  var compact: Bool = false
   var onToggle: () -> Void
 
-  private static let size: CGFloat = 16
+  /// Lue ici plutôt que passée : cette case est enfouie sous quatre niveaux de vues
+  /// (cf. `EnvironmentValues.pageTint`).
+  @Environment(\.pageTint) private var tint
+
+  private var size: CGFloat { compact ? 14 : 17 }
 
   var body: some View {
     Button(action: onToggle) {
-      // Forme branchée UNE fois en gardant un type `InsettableShape` concret (Circle /
-      // RoundedRectangle) : `.strokeBorder` (trait posé À L'INTÉRIEUR du contour, cf. le rendu
-      // Things d'origine) n'existe que sur `InsettableShape`, pas sur un `AnyShape` type-effacé.
-      Group {
-        if circular {
-          fillAndBorder(Circle())
-        } else {
-          fillAndBorder(RoundedRectangle(cornerRadius: 4.5, style: .continuous))
+      ring
+        .overlay {
+          // `.trim` = strokeEnd de Core Animation exposé en SwiftUI : le trait se *trace*
+          // (0→1) au lieu d'apparaître. lineCap/Join .round pour la même douceur que Things.
+          Checkmark()
+            .trim(from: 0, to: isCompleted ? 1 : 0)
+            .stroke(.white, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+            .frame(width: size * 0.52, height: size * 0.52)
         }
-      }
-      .overlay {
-        // `.trim` = strokeEnd de Core Animation exposé en SwiftUI : le trait se *trace*
-        // (0→1) au lieu d'apparaître. lineCap/Join .round pour la même douceur que Things.
-        Checkmark()
-          .trim(from: 0, to: isCompleted ? 1 : 0)
-          .stroke(.white, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-          .frame(width: Self.size * 0.55, height: Self.size * 0.55)
-      }
-      .frame(width: Self.size, height: Self.size)
-      .contentShape(Rectangle())
+        .frame(width: size, height: size)
+        .contentShape(Rectangle())
     }
     // Bounce au press/release via un ButtonStyle dédié ; le tracé + le fond restent animés par le
     // withAnimation de la page.
@@ -60,16 +61,19 @@ struct TaskCheckbox: View {
     .overlay { PointingHandCursorArea().allowsHitTesting(false) }
   }
 
-  /// Fond + bordure d'une case, génériques sur la forme concrète (donc `.strokeBorder` disponible).
-  /// Bordure et fond coexistent en permanence (opacité pilotée par isCompleted) : pas de `if` qui
-  /// insère/retire une vue, sinon l'anim n'aurait rien à interpoler.
-  private func fillAndBorder<S: InsettableShape>(_ shape: S) -> some View {
-    shape
-      .fill(isCompleted ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
+  /// Anneau + disque, tous deux montés en permanence (opacité pilotée par `isCompleted`) : pas de
+  /// `if` qui insère/retire une vue, sinon l'anim n'aurait rien à interpoler.
+  ///
+  /// Le disque vide est TRANSPARENT et non `.controlBackgroundColor` : sur le verre, un rond opaque
+  /// se lit comme un trou percé dans la fenêtre. C'est le trait seul qui dessine la case.
+  private var ring: some View {
+    Circle()
+      .fill(tint)
+      .opacity(isCompleted ? 1 : 0)
       .overlay {
-        shape
-          .strokeBorder(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
-          .opacity(isCompleted ? 0 : 1)
+        Circle()
+          .strokeBorder(tint, lineWidth: 1.6)
+          .opacity(isCompleted ? 0 : 0.85)
       }
   }
 }

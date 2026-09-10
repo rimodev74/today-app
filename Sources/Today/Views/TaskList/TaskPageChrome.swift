@@ -60,36 +60,20 @@ func keepEditedTaskIfBlank(_ focus: TaskFocus, in context: ModelContext) {
 let taskContentColumn: CGFloat = rowInset * 2
 let taskRowColumn: CGFloat = taskContentColumn + rowInset
 
-/// Icône d'un bandeau de page (« Tâches », « Aujourd'hui », « Archives »). Dessinée à la taille du
-/// titre, mais LARGEUR de layout figée à celle d'une `TaskCheckbox` et alignée à gauche : le glyphe
-/// débordera de quelques points dans l'espace qui suit (SwiftUI ne rogne pas), ce qui est exactement
-/// l'effet voulu — la colonne reste juste des deux côtés quel que soit le symbole (une étoile est
-/// plus large qu'une coche). Sans ce cadrage, chaque page décale son titre d'une valeur différente.
+/// Icône d'un bandeau de page (« Tâches », « Aujourd'hui », « Archives »).
+///
+/// Ce n'est plus un glyphe nu mais le cartouche teinté de `PageBadge` : une icône posée à côté d'un
+/// titre se lit comme une décoration, la même dans un cadre de sa couleur se lit comme l'identité
+/// de la page. Le cadrage reste FIXE (le cartouche entier) pour la raison qui l'imposait déjà : sans
+/// lui, chaque page décale son titre d'une valeur différente selon la largeur de son symbole.
 struct PageHeaderIcon: View {
   let systemImage: String
   let tint: Color
 
   var body: some View {
-    Image(systemName: systemImage)
-      .font(.app(.title2))
-      .foregroundStyle(tint)
-      .frame(width: 16, alignment: .leading)
+    PageBadge(systemImage: systemImage, tint: tint)
   }
 }
-
-/// Le lavande de sélection de Things : #D1DFFC. Teinte de l'accent système, translucide, résolue par
-/// apparence : périwinkle clair sur fond blanc, bleu voilé sur fond sombre — et suit la couleur
-/// d'accent choisie par l'utilisateur. Plus opaque en sombre : sur le fond navy, une même alpha
-/// rendrait la sélection quasi invisible. Partagé par la sélection d'une tâche, d'une en-tête, et
-/// les calques en cascade du drag d'en-tête.
-///
-/// Non privée : son propre commentaire disait déjà « partagé », elle ne l'était que par accident de
-/// fichier. C'est sa place ici, avec les autres jetons de style communs, qui rend ça vrai.
-let thingsSelectionFill = Color(
-  nsColor: NSColor(name: nil) { appearance in
-    let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-    return NSColor.controlAccentColor.withAlphaComponent(dark ? 0.28 : 0.18)
-  })
 
 /// Transitions des états d'une tâche (normal ↔ select ↔ edit). Déclenchées en EXPLICITE
 /// (`withAnimation` côté parent), jamais en `.animation(value:)` par ligne : ainsi une ligne
@@ -272,8 +256,8 @@ extension View {
   func taskRowSelection(_ isSelected: Bool) -> some View {
     padding(.horizontal, rowInset)
       .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(thingsSelectionFill)
+        RoundedRectangle(cornerRadius: rowRadius, style: .continuous)
+          .fill(rowSelectionFill)
           .opacity(isSelected ? 1 : 0)
       )
       .padding(.horizontal, -rowInset)

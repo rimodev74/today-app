@@ -1183,11 +1183,11 @@ private struct QuickEntryView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  /// Case ronde décorative, comme dans les sous-tâches d'une vraie tâche : il n'y a rien à cocher
+  /// Case décorative réduite, comme dans les sous-tâches d'une vraie tâche : il n'y a rien à cocher
   /// sur une étape qu'on est en train d'écrire, mais la ligne doit se lire comme une sous-tâche.
   private func subtaskRow(_ index: Int) -> some View {
     HStack(spacing: 9) {
-      TaskCheckbox(isCompleted: false, circular: true) {}
+      TaskCheckbox(isCompleted: false, compact: true) {}
         .allowsHitTesting(false)
       TextField("Sous-tâche", text: $subtasks[index])
         .textFieldStyle(.plain)

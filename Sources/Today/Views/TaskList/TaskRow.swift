@@ -56,6 +56,9 @@ struct TaskRow: View {
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.modelContext) private var modelContext
   @Environment(\.openSettings) private var openSettings
+  /// La couleur de la page courante : la case à cocher la lit aussi, mais la pastille de
+  /// quand doit la teindre depuis ici (cf. `EnvironmentValues.pageTint`).
+  @Environment(\.pageTint) private var tint
 
   /// Aucun calendrier d'événements désigné — donc une durée posée ici ne créera rien dans l'agenda.
   ///
@@ -138,9 +141,7 @@ struct TaskRow: View {
           Task { await remindersService.pushCompletion(for: task) }
           onCompletionChanged()
         }
-        if !isEditing { dateTag }
-        // Durée estimée, à gauche du titre comme la date : ce sont les deux faces d'une même
-        // décision (quand, et pour combien de temps). Rien tant que rien n'est estimé — la page
+        // Durée estimée, à gauche du titre. Rien tant que rien n'est estimé — la page
         // « Aujourd'hui » est le seul endroit qui réclame l'absence de durée.
         if !isEditing, let estimate = Estimate.label(task.estimateMinutes) {
           Text(estimate)
@@ -149,17 +150,27 @@ struct TaskRow: View {
             .foregroundStyle(.secondary)
             .fixedSize()
         }
-        // DEVANT le titre, avec la date et la durée, et pas après lui. Le titre est un `TextField`,
-        // donc glouton : il prend toute la largeur restante, et tout ce qui le suit se retrouve
-        // collé au bord droit de la fenêtre quelle que soit la longueur du texte. C'est ce que
-        // faisait ce libellé — une colonne de gris en dents de scie, détachée des titres qu'elle
-        // qualifie. Ici il rejoint le cluster des attributs de la tâche (quand, combien de temps,
-        // d'où), qui est fixe et se lit d'un bloc avec le titre.
+        // DEVANT le titre, avec la durée, et pas après lui. Le titre est un `TextField`, donc
+        // glouton : il prend toute la largeur restante, et tout ce qui le suit se retrouve collé
+        // au bord droit de la fenêtre quelle que soit la longueur du texte. C'est ce que faisait
+        // ce libellé — une colonne de gris en dents de scie, détachée des titres qu'elle qualifie.
+        // Ici il rejoint le cluster des attributs de la tâche, fixe, qui se lit d'un bloc avec le
+        // titre. (Le QUAND, lui, est reparti à droite : il est de largeur quasi constante et
+        // forme une vraie colonne — cf. plus bas.)
         // Toujours sur UNE ligne : la ligne garde la hauteur qu'elle a dans une page de liste,
         // l'ouverture de la carte d'édition reste donc continue.
         if !isEditing, let parentTag { parentPill(parentTag) }
         titleView
         Spacer(minLength: 0)
+        // Le QUAND part à DROITE, teinté. Il était à gauche du titre, comme dans Things — donc
+        // dans le paquet d'attributs qu'on lit AVANT de savoir de quelle tâche il s'agit. Une
+        // journée se lit par ses heures : à droite elles forment une colonne qu'on parcourt d'un
+        // coup d'œil, et le titre récupère le bord gauche pour lui seul.
+        //
+        // Ce n'est PAS le cas de la pastille de provenance, restée à gauche : elle qualifie le
+        // titre, et sa largeur varie avec un nom de projet — à droite, elle refaisait la colonne
+        // en dents de scie qui l'avait fait déménager.
+        if !isEditing { dateTag }
         if !isEditing { trailing(subtasks) }
       }
 
@@ -530,7 +541,7 @@ struct TaskRow: View {
     let radius: CGFloat = isEditing ? 14 : 8
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     return ZStack {
-      shape.fill(thingsSelectionFill).opacity(isSelected && !isEditing ? 1 : 0)
+      shape.fill(rowSelectionFill).opacity(isSelected && !isEditing ? 1 : 0)
       shape.fill(Color(nsColor: .controlBackgroundColor)).opacity(isEditing ? 1 : 0)
       shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
         .opacity(isEditing ? 1 : 0)
@@ -542,9 +553,8 @@ struct TaskRow: View {
 
   // MARK: Date
 
-  /// Tag de jour planifié (`when`), à GAUCHE du titre (cf. Things) : petit fond gris arrondi,
-  /// « 31 juil. », « 31 juil. 14:30 » si la tâche porte une heure. Distinct de l'échéance (drapeau,
-  /// à droite). Rien si aucune date.
+  /// Tag de jour planifié (`when`), à DROITE de la ligne : capsule teintée à la couleur de
+  /// la page. Rien si aucune date.
   ///
   /// Sur une page qui ne montre pas les dates (« Aujourd'hui », où le jour est implicite), l'HEURE
   /// reste affichée seule : c'est la seule chose que la page ne dit pas déjà, et c'est justement ce
@@ -557,9 +567,9 @@ struct TaskRow: View {
       // montre que l'heure) n'est pas gratuite, et une ligne se redessine plusieurs fois par image
       // pendant une animation.
       if showsDate {
-        TokenPill(text: TokenPill.schedule(when, minutes: task.whenMinutes))
+        TokenPill(text: TokenPill.schedule(when, minutes: task.whenMinutes), tint: tint)
       } else if let minutes = task.whenMinutes {
-        TokenPill(text: TokenPill.time(minutes))
+        TokenPill(text: TokenPill.time(minutes), tint: tint)
       }
     }
   }
@@ -827,7 +837,7 @@ struct TaskRow: View {
     Button {
       task.when = Calendar.current.startOfDay(for: Date())
     } label: {
-      Label("Aujourd'hui", systemImage: "star.fill")
+      Label("Aujourd'hui", systemImage: SmartList.today.systemImage)
     }
     Button {
       let today = Calendar.current.startOfDay(for: Date())
@@ -886,7 +896,7 @@ struct TaskRow: View {
           }
         } else {
           // La coche est DANS le texte, pas un `systemImage` : macOS n'affiche pas les icônes des
-          // items de ces menus (le `star.fill` d'« Aujourd'hui » ne se voit nulle part). Elle est
+          // items de ces menus (le soleil d'« Aujourd'hui » ne se voit nulle part). Elle est
           // là pour se lire d'un coup d'œil, sans lire la phrase.
           Text(
             eventCalendarName.isEmpty

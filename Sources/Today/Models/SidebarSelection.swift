@@ -100,21 +100,28 @@ enum SmartList: Hashable, CaseIterable {
     }
   }
 
+  /// Les symboles disent ce que la page EST, pas ce qu'elle ressemble ailleurs.
+  ///
+  /// « Tâches » ne montre que la boîte de réception : c'est un bac, pas une pile. « Aujourd'hui »
+  /// est un jour, donc un soleil — l'étoile jaune appartient à une autre app, et c'était le repère
+  /// le plus reconnaissable qu'on lui avait emprunté.
   var systemImage: String {
     switch self {
-    case .all: return "square.stack.fill"
-    case .today: return "star.fill"
+    case .all: return "tray.fill"
+    case .today: return "sun.max.fill"
     case .upcoming: return "calendar"
-    case .archive: return "checkmark.square.fill"
+    case .archive: return "checkmark.circle.fill"
     }
   }
 
+  /// La teinte de la page, et pas seulement de son icône : elle irrigue le badge du bandeau, les
+  /// cases à cocher, les pilules d'heure et le lavis du fond (cf. `PageTint`).
   var color: Color {
     switch self {
-    case .all: return .teal
-    case .today: return .yellow
-    case .upcoming: return .red
-    case .archive: return .green
+    case .all: return PageTint.inbox
+    case .today: return PageTint.today
+    case .upcoming: return PageTint.upcoming
+    case .archive: return PageTint.archive
     }
   }
 }
@@ -124,6 +131,18 @@ enum SidebarSelection: Hashable {
   case project(Project)
   case list(TodoList)
   case pomodoro
+
+  /// La couleur que la fenêtre pousse dans l'environnement pour la destination courante
+  /// (cf. `EnvironmentValues.pageTint`). Une liste hérite de son projet : c'est déjà la couleur que
+  /// portent son anneau de progression et sa pastille de provenance, elle ne peut pas en avoir deux.
+  var tint: Color {
+    switch self {
+    case .smartList(let list): return list.color
+    case .project(let project): return project.color?.color ?? .accentColor
+    case .list(let list): return list.project?.color?.color ?? PageTint.inbox
+    case .pomodoro: return PageTint.pomodoro
+    }
+  }
 }
 
 /// Les bornes de date d'un filtrage, calculées UNE fois pour toute une liste de tâches.

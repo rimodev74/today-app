@@ -38,7 +38,8 @@ struct WhenPicker: View {
         .padding(.bottom, 10)
 
       // Les deux jours qu'on choisit neuf fois sur dix : à portée directe, avant la grille.
-      quickRow("Aujourd'hui", symbol: "star.fill", tint: .yellow, day: today)
+      quickRow(
+        "Aujourd'hui", symbol: SmartList.today.systemImage, tint: SmartList.today.color, day: today)
       quickRow("Demain", symbol: "sunrise.fill", tint: .orange, day: tomorrow)
 
       Divider().padding(.vertical, 8)

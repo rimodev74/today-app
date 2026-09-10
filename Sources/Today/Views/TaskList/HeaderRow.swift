@@ -53,31 +53,16 @@ struct HeaderRow: View {
   ///
   /// Elles doivent rester OPAQUES (les calques se recouvrent : la moindre translucidité les ferait
   /// transparaître les uns à travers les autres), donc figées, donc à doubler pour le mode sombre —
-  /// même contrainte et même solution que `SidebarView.rowFill`. Sans ce doublon, tout le drag
+  /// même contrainte et même solution que `rowSelectionFill`. Sans ce doublon, tout le drag
   /// d'en-tête s'affichait en bleu pâle de mode clair par-dessus une page sombre.
   ///
-  /// Les valeurs claires sont celles de la maquette Things. Les sombres ne sont pas inventées : ce
-  /// sont les équivalents OPAQUES de la pilule AU REPOS en sombre (`thingsSelectionFill`, soit
-  /// l'accent à 28 % sur le fond de page), déclinés dans les mêmes proportions que les claires. La
-  /// pilule tirée garde donc exactement la teinte perçue qu'elle a au repos, et le titre en accent
-  /// y conserve la lisibilité qu'il avait déjà — aucun pari de contraste à prendre.
-  private static let dragTop = dragLayer(light: 0xCA_E1FF, dark: 0x18_3A5D)
-  private static let dragLayer1 = dragLayer(light: 0xDC_EAFF, dark: 0x1A_3149)
-  private static let dragLayer2 = dragLayer(light: 0xEA_F1FF, dark: 0x1C_2937)
-
-  private static func dragLayer(light: Int, dark: Int) -> Color {
-    func srgb(_ hex: Int) -> NSColor {
-      NSColor(
-        srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-        green: CGFloat((hex >> 8) & 0xFF) / 255,
-        blue: CGFloat(hex & 0xFF) / 255,
-        alpha: 1)
-    }
-    return Color(
-      nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? srgb(dark) : srgb(light)
-      })
-  }
+  /// Les valeurs sont NEUTRES depuis la refonte, comme la pilule au repos (`rowSelectionFill`) : le
+  /// bleu d'avant reprenait le lavande de Things, et par-dessus le verre il jurait avec la teinte de
+  /// la page. Ce sont les équivalents OPAQUES du gris de sélection, éclaircis d'un cran par calque —
+  /// la pilule tirée garde donc la teinte perçue qu'elle a au repos, sans pari de contraste.
+  private static let dragTop = dualColor(light: 0xDB_DBDF, dark: 0x3E_3E44)
+  private static let dragLayer1 = dualColor(light: 0xE6_E6EA, dark: 0x34_343A)
+  private static let dragLayer2 = dualColor(light: 0xEF_EFF2, dark: 0x2C_2C31)
 
   var body: some View {
     let active = isSelected || isEditing
@@ -167,12 +152,12 @@ struct HeaderRow: View {
       // travers. Hors drag, le lavande translucide (comme une tâche sélectionnée) suffit, ou la
       // teinte choisie si définie. Ombre de soulevé seulement au drag.
       // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
-      // `thingsSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
+      // `rowSelectionFill` — à aligner si l'écart se voit trop en mode sombre.
       let tinted = task.headerColor.map { AnyShapeStyle($0.color.opacity(0.22)) }
       RoundedRectangle(cornerRadius: 8, style: .continuous)
         .fill(
           isDragging
-            ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(thingsSelectionFill))
+            ? AnyShapeStyle(Self.dragTop) : (tinted ?? AnyShapeStyle(rowSelectionFill))
         )
         .shadow(color: .black.opacity(isDragging ? 0.14 : 0), radius: 6, y: 3)
     }
