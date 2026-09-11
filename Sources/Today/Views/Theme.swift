@@ -110,9 +110,15 @@ struct WindowGlass: NSViewRepresentable {
 /// ponytail: deux constantes à régler à l'œil, pas une formule de contraste. Plafond : sur un fond
 /// d'écran très clair ET très contrasté, monter `page` de quelques centièmes.
 enum Scrim {
-  static let page = dualColor(light: 0xFF_FFFF, dark: 0x1E_1E24, lightAlpha: 0.46, darkAlpha: 0.26)
+  /// Les alphas sont ceux de la maquette (`--window-bg` / `--sidebar-bg`) : la page tire vraiment
+  /// vers le BLANC, elle n'est pas un gris translucide. Un voile trop mince laissait le verre
+  /// prendre la couleur du bureau jusque sous le texte — c'était gris quoi qu'on fasse.
+  ///
+  /// La sidebar reste plus grise ET moins couverte : elle prélève donc davantage sur le bureau.
+  /// C'est ce double écart, pas une teinte inventée, qui sépare les deux colonnes.
+  static let page = dualColor(light: 0xFF_FFFF, dark: 0x1E_1E22, lightAlpha: 0.68, darkAlpha: 0.52)
   static let sidebar = dualColor(
-    light: 0xFF_FFFF, dark: 0x0C_0C10, lightAlpha: 0.18, darkAlpha: 0.32)
+    light: 0xF2_F2F5, dark: 0x0E_0E12, lightAlpha: 0.52, darkAlpha: 0.60)
 }
 
 /// Le lavis de teinte en tête de la page : la couleur de la destination qui déteint sur le haut du

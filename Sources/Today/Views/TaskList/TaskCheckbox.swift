@@ -7,19 +7,19 @@ import AppKit
 import SwiftData
 import SwiftUI
 
-/// Un ANNEAU à la couleur de la page, qui se remplit de cette même couleur avec une coche blanche
-/// une fois la tâche faite.
+/// Un carré à coin arrondi À LA COULEUR DE LA PAGE : cerné de cette couleur tant que la tâche
+/// reste à faire, rempli de la même avec une coche blanche une fois faite.
 ///
-/// C'était un carré à coin arrondi cerné de gris — la signature de Things, et le repère le plus
-/// reconnaissable de tout ce que l'app lui empruntait. Le cercle teinté le remplace : la forme
-/// change, mais surtout la COULEUR entre dans la ligne, et c'est celle de la destination
-/// (`pageTint`). Une page se lit donc à sa colonne de gauche avant même son titre.
+/// La FORME est celle d'origine et elle le reste — le cercle essayé à la refonte v2 a été repris.
+/// Ce qui change par rapport à l'avant, et ce qui suffit, c'est la COULEUR : le contour était gris
+/// système, il est maintenant celui de la destination (`pageTint`). Une page se lit donc à sa
+/// colonne de gauche avant même son titre, sans toucher au repère que la main connaît déjà.
 ///
 /// Custom et pas `.toggleStyle(.checkbox)` : la case native de macOS 26 est un carré **plein**,
 /// impossible d'en tirer ce rendu par un simple restylage.
 struct TaskCheckbox: View {
   let isCompleted: Bool
-  /// Case d'une SOUS-ligne : même anneau, plus petit. C'est la taille qui hiérarchise, pas la
+  /// Case d'une SOUS-ligne : même case, plus petite. C'est la taille qui hiérarchise, pas la
   /// forme — deux formes différentes se lisaient comme deux natures de case, alors que c'est le
   /// même geste.
   var compact: Bool = false
@@ -30,10 +30,13 @@ struct TaskCheckbox: View {
   @Environment(\.pageTint) private var tint
 
   private var size: CGFloat { compact ? 14 : 17 }
+  /// Le rayon suit la taille : 4,5 pt sur une case de 16 était la valeur de la maquette d'origine,
+  /// soit un peu plus du quart du côté. Figé, il aurait rendu la case réduite presque circulaire.
+  private var radius: CGFloat { size * 0.28 }
 
   var body: some View {
     Button(action: onToggle) {
-      ring
+      box
         .overlay {
           // `.trim` = strokeEnd de Core Animation exposé en SwiftUI : le trait se *trace*
           // (0→1) au lieu d'apparaître. lineCap/Join .round pour la même douceur que Things.
@@ -61,17 +64,22 @@ struct TaskCheckbox: View {
     .overlay { PointingHandCursorArea().allowsHitTesting(false) }
   }
 
-  /// Anneau + disque, tous deux montés en permanence (opacité pilotée par `isCompleted`) : pas de
+  /// Contour + fond, tous deux montés en permanence (opacité pilotée par `isCompleted`) : pas de
   /// `if` qui insère/retire une vue, sinon l'anim n'aurait rien à interpoler.
   ///
-  /// Le disque vide est TRANSPARENT et non `.controlBackgroundColor` : sur le verre, un rond opaque
-  /// se lit comme un trou percé dans la fenêtre. C'est le trait seul qui dessine la case.
-  private var ring: some View {
-    Circle()
+  /// La case vide est TRANSPARENTE et non `.controlBackgroundColor` : sur le verre, un fond opaque
+  /// se lit comme un trou percé dans la fenêtre. C'est le trait seul qui la dessine.
+  ///
+  /// `.strokeBorder` (trait posé À L'INTÉRIEUR du contour) n'existe que sur `InsettableShape` —
+  /// d'où la forme concrète gardée ici, sans `AnyShape` type-effacé.
+  private var box: some View {
+    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+    return
+      shape
       .fill(tint)
       .opacity(isCompleted ? 1 : 0)
       .overlay {
-        Circle()
+        shape
           .strokeBorder(tint, lineWidth: 1.6)
           .opacity(isCompleted ? 0 : 0.85)
       }
