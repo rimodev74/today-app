@@ -247,7 +247,7 @@ extension View {
     transition(.opacity)
   }
 
-  /// La pilule lavande d'une ligne sélectionnée, pour les rangées qui ne sont pas des `TaskRow`
+  /// La pilule grise d'une ligne sélectionnée, pour les rangées qui ne sont pas des `TaskRow`
   /// (« À venir », « Archives », qui ont leur propre rendu).
   ///
   /// Le double retrait est volontaire : la pilule déborde de `rowInset` de chaque côté, comme dans

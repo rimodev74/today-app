@@ -594,4 +594,45 @@ final class RemindersSyncTests: XCTestCase {
       RemindersSync.reminderVerdict(
         task, due: nil, lastSeen: nil, wasSeenAlive: false, calendar: calendar), .push)
   }
+
+  // MARK: Le titre
+
+  /// Le défaut du 14 septembre 2026 : le rappel part pendant la frappe (« Inves »), et le titre fini
+  /// ne le rejoignait jamais. Ce qu'on y a écrit soi-même ne fait pas foi.
+  func testUnTitrePartiEnCoursDeFrappeEstComplete() {
+    XCTAssertEqual(
+      RemindersSync.titleVerdict(task: "Investir dans les ETF", apple: "Inves", lastSeen: "Inves"),
+      .push)
+  }
+
+  /// Au lancement, aucune mémoire : l'app fait foi pour le TITRE, à l'inverse des dates. C'est ce
+  /// qui répare les rappels déjà tronqués — les reprendre écraserait les titres complets.
+  func testAuLancementLeTitreDeLAppFaitFoi() {
+    XCTAssertEqual(
+      RemindersSync.titleVerdict(task: "Investir dans les ETF", apple: "Inves", lastSeen: nil),
+      .push)
+  }
+
+  func testUnRappelRenommeDansRappelsRenommeLaTache() {
+    XCTAssertEqual(
+      RemindersSync.titleVerdict(task: "Courses", apple: "Courses du samedi", lastSeen: "Courses"),
+      .pull)
+  }
+
+  func testUnTitreIdentiqueNeReecritRien() {
+    XCTAssertEqual(
+      RemindersSync.titleVerdict(task: "Courses", apple: "Courses", lastSeen: nil), .agreed)
+  }
+
+  /// Rien à lire ⇒ rien à trancher : la création est l'affaire du verdict des dates.
+  func testUnRappelIllisibleNeTrancheRien() {
+    XCTAssertEqual(
+      RemindersSync.titleVerdict(task: "Courses", apple: nil, lastSeen: "Courses"), .agreed)
+  }
+
+  /// Un titre vidé dans Rappels ne vide pas la tâche : `isPushable` la ferait sortir du pont.
+  func testUnTitreVideDansRappelsNeSeReprendPas() {
+    XCTAssertEqual(
+      RemindersSync.titleVerdict(task: "Courses", apple: " ", lastSeen: "Courses"), .push)
+  }
 }

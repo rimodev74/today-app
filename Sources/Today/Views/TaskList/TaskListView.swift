@@ -1003,7 +1003,7 @@ private struct ListPageView: View {
   /// `minimumDistance: 0` pour capter le mouseDown ; le réordonnancement ne démarre qu'au-delà d'un
   /// seuil. Fusionner tout dans un même geste évite qu'un geste séparé ne « vole » le drag.
   ///
-  /// Tâche comme en-tête : clic → sélection (surbrillance lavande) ; clic sur une ligne DÉJÀ
+  /// Tâche comme en-tête : clic → sélection (surbrillance) ; clic sur une ligne DÉJÀ
   /// sélectionnée → édition (renommage façon Finder). Les enfants (case, menu •••) gardent leurs
   /// propres clics.
   private func dragGesture(for task: TaskItem) -> some Gesture {
@@ -1394,7 +1394,7 @@ private struct ListPageView: View {
   }
 
   /// Cible le bloc de la sélection courante (pas systématiquement le dernier) ; la sélection est
-  /// ensuite retirée pour que la surbrillance lavande ne reste pas affichée pendant qu'on tape
+  /// ensuite retirée pour que la surbrillance de sélection ne reste pas affichée pendant qu'on tape
   /// dans « Nouvelle tâche » — sinon les deux se lisent comme un focus ambigu. Utilisé par le
   /// bouton « + » de la barre d'outils (saisie rapide, sans ouvrir la carte d'édition complète).
   ///

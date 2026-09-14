@@ -281,6 +281,35 @@ final class RemindersService {
     lastAgreed[identifier] = due.map { DateInterval(start: $0, duration: 0) }
   }
 
+  /// Le titre du dernier accord, à part des dates : les deux se tranchent séparément (cf.
+  /// `RemindersSync.titleVerdict`). Même raison d'être en mémoire seule que `lastAgreed`.
+  private var lastAgreedTitle: [String: String] = [:]
+
+  func lastSeenReminderTitle(_ identifier: String) -> String? { lastAgreedTitle[identifier] }
+
+  func rememberReminderTitle(_ identifier: String, _ title: String) {
+    lastAgreedTitle[identifier] = title
+  }
+
+  /// Le titre du rappel lié — `nil` s'il est introuvable. Lu dans l'instantané de la passe.
+  func reminderTitle(for identifier: String) -> String? {
+    guard authorizationStatus == .fullAccess else { return nil }
+    return reminder(identifier).flatMap { $0.title as String? }
+  }
+
+  /// Renomme le rappel lié, et RIEN d'autre : passer par `schedule(…)` réécrirait aussi l'échéance,
+  /// donc l'heure réglée dans Rappels. Muet, comme tout ce que la passe écrit seule.
+  ///
+  /// La lecture à l'unité est l'aller-retour synchrone qu'on refuse de payer PAR TÂCHE (cf.
+  /// `passSnapshot`) ; ici, elle ne se paie que pour un titre qui a réellement changé.
+  func renameReminder(_ identifier: String, to title: String) {
+    guard authorizationStatus == .fullAccess,
+      let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder
+    else { return }
+    reminder.title = title
+    try? store.save(reminder, commit: true)
+  }
+
   /// Efface les événements dont la tâche n'a plus de durée (ou plus de date), et ceux des tâches
   /// qu'on supprime. Même contrat que `forgetReminders` : synchrone, muet, par IDENTIFIANT — donc
   /// utilisable APRÈS que SwiftData a effacé les objets (cf. sa doc, et le plantage du 6 août 2026).
@@ -543,6 +572,7 @@ final class RemindersService {
     missedOnce.remove(identifier)
     seenAlive.remove(identifier)
     lastAgreed.removeValue(forKey: identifier)
+    lastAgreedTitle.removeValue(forKey: identifier)
     return true
   }
 
@@ -605,6 +635,7 @@ final class RemindersService {
     guard authorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
     for identifier in identifiers {
       lastAgreed.removeValue(forKey: identifier)
+      lastAgreedTitle.removeValue(forKey: identifier)
       guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
         continue
       }

@@ -5,7 +5,7 @@ import AppKit
 import SwiftData
 import SwiftUI
 
-/// En-tête de section dans la liste. La pilule lavande (ou teintée si une `PaletteColor` est
+/// En-tête de section dans la liste. La pilule grise de sélection (ou teintée si une `PaletteColor` est
 /// choisie) est TOUJOURS visible, repos comme sélection/édition — ce n'est plus un indicateur de
 /// sélection mais l'apparence permanente de l'en-tête. Le ••• apparaît au survol ou en
 /// sélection/édition ; en édition le champ devient actif + focus (curseur de saisie).
@@ -71,8 +71,8 @@ struct HeaderRow: View {
     let layers = min(max(attachedTaskCount, 0), 2)
     VStack(alignment: .leading, spacing: 6) {
       // Calques en cascade DERRIÈRE la pilule, décalés vers le bas et rétrécis. Chacun est une
-      // pilule périwinkle OPAQUE globalement atténuée : nettement visible (pas noyée comme un
-      // simple lavande translucide) mais de plus en plus transparente.
+      // pilule grise OPAQUE globalement atténuée : nettement visible (pas noyée comme un simple
+      // voile translucide) mais de plus en plus transparente.
       //
       // En `.background` de la pilule et NON en frères dans un `ZStack`, et ce n'est pas cosmétique.
       // Un `RoundedRectangle` est une forme : flexible dans les DEUX dimensions, elle prend la
@@ -127,7 +127,7 @@ struct HeaderRow: View {
     .onChange(of: isEditing) { _, editing in titleFocused = editing }
   }
 
-  /// Le corps de l'en-tête : titre + menu, sur une pilule lavande quand elle est active. La palette
+  /// Le corps de l'en-tête : titre + menu, sur une pilule grise quand elle est active. La palette
   /// se révèle SOUS la ligne du titre, dans la même pilule, qui grandit pour l'accueillir.
   private func pill(active: Bool) -> some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -148,8 +148,8 @@ struct HeaderRow: View {
     .background {
       // La pilule est TOUJOURS visible (plus un indicateur de sélection) : c'est l'apparence
       // permanente de l'en-tête. Pendant le drag, l'en-tête est le calque du DESSUS de la
-      // cascade : couleur OPAQUE dédiée (#CAE1FF), sinon les calques derrière transparaissent à
-      // travers. Hors drag, le lavande translucide (comme une tâche sélectionnée) suffit, ou la
+      // cascade : couleur OPAQUE dédiée (`dragTop`), sinon les calques derrière transparaissent à
+      // travers. Hors drag, le gris translucide (comme une tâche sélectionnée) suffit, ou la
       // teinte choisie si définie. Ombre de soulevé seulement au drag.
       // ponytail: opacité fixe (0.22) plutôt que le double palier clair/sombre de
       // `rowSelectionFill` — à aligner si l'écart se voit trop en mode sombre.

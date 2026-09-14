@@ -96,9 +96,10 @@ enum RemindersSync {
   /// l'écart, et sa tolérance au JOUR est aussi ce qui empêche l'heure par défaut d'être prise
   /// pour un changement au lancement.
   ///
-  /// ponytail: le TITRE n'est pas comparé, exactement comme côté rappels — renommer une tâche ne
-  /// renomme pas son événement tant qu'aucune date ni durée ne bouge. L'ajouter demanderait de le
-  /// faire des deux côtés d'un coup, sans quoi les deux ponts se mettraient à diverger.
+  /// ponytail: le TITRE n'est pas comparé ici, contrairement aux rappels (cf. `titleVerdict`) —
+  /// renommer une tâche ne renomme pas son événement tant qu'aucune date ni durée ne bouge. Moins
+  /// grave que côté rappels : une durée se pose au menu, titre déjà tapé, donc l'événement ne part
+  /// jamais en pleine frappe. Le brancher le jour où quelqu'un renomme une tâche à durée.
   static func needsEventPush(
     _ task: TaskItem, eventStart: Date?, eventMinutes: Int?, calendar: Calendar = .current
   ) -> Bool {
@@ -278,6 +279,30 @@ enum RemindersSync {
     guard let due else { return wantsPush ? .push : .agreed }
     if lastSeen.map({ $0 != due }) ?? wantsPush { return .pull }
     return wantsPush ? .push : .agreed
+  }
+
+  /// Le verdict du TITRE d'un rappel, tranché à part des dates : les deux bougent indépendamment, et
+  /// réécrire le rappel entier pour un titre reposerait l'heure par défaut sur une échéance réglée
+  /// dans Rappels (cf. `needsPush`, qui tolère le même jour).
+  ///
+  /// **Il existe parce que le titre ne traversait JAMAIS.** Le titre d'une tâche s'écrit à chaque
+  /// frappe, l'autosave enregistre en pleine saisie, et `didSave` réveille la passe : le rappel
+  /// partait donc avec « Inves » pour « Investir dans les ETF », puis restait tel quel. Mesuré le
+  /// 14 septembre 2026 dans la vraie base Rappels : dix rappels tronqués, tous liés à la bonne tâche.
+  ///
+  /// Même fusion à trois que les dates, avec UNE différence : sans mémoire, **l'app fait foi**. La
+  /// règle inverse (Apple fait foi au lancement) reprendrait « Inves » sur la tâche et détruirait
+  /// précisément le titre complet qu'il faut rendre au rappel.
+  ///
+  /// ponytail: un rappel renommé dans Rappels PENDANT que l'app est fermée est réécrit au lancement.
+  /// Trancher demanderait une date de modification côté tâche, donc un champ de plus au schéma.
+  static func titleVerdict(task: String, apple: String?, lastSeen: String?) -> Verdict {
+    guard let apple, apple != task else { return .agreed }
+    // Un titre vidé là-bas ne se reprend pas : une tâche sans titre sort du pont (`isPushable`).
+    let renamedThere =
+      (lastSeen.map { $0 != apple } ?? false)
+      && !apple.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    return renamedThere ? .pull : .push
   }
 
   /// Recopie sur la tâche ce que porte l'élément Apple — le geste du verdict `.pull`, et celui de

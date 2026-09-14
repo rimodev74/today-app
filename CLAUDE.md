@@ -316,6 +316,10 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   seule). L'élément ne bouge pas tout seul ⇒ s'il a changé, c'est l'utilisateur, et il fait foi ;
   sinon l'écart vient d'ici, et on pousse. Au lancement, sans mémoire, Apple fait foi — l'app ne
   peut pas avoir modifié une tâche pendant qu'elle était fermée.
+  **Le TITRE d'un rappel se tranche à part (`RemindersSync.titleVerdict`), et au lancement c'est
+  l'APP qui fait foi** — l'inverse des dates. Le rappel part en pleine frappe (autosave → `didSave`),
+  donc Rappels porte souvent un titre tronqué : le reprendre détruirait le titre complet. Dix rappels
+  « Inves… » en vraie base le 14 septembre 2026, avant que le titre ne traverse.
   **Et le miroir tient aussi pour la suppression** : un événement supprimé dans le Calendrier retire
   la DURÉE de la tâche (`RemindersSync.shouldDropDuration`), qui redevient un rappel — la tâche,
   elle, reste. Mêmes deux preuves que `shouldDelete` (`RemindersService.eventPresence` : vu vivant dans la

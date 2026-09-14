@@ -602,34 +602,62 @@ struct ContentView: View {
         if let id = task.reminderIdentifier {
           remindersService.rememberReminderDue(id, reminderDue)
         }
-        continue
       case .pull:
         // Rappels → app : l'échéance changée là-bas devient le jour (et l'heure) de la tâche.
         guard let id = task.reminderIdentifier, let reminderDue else { continue }
         RemindersSync.adopt(reminderDue, minutes: nil, on: task)
         remindersService.rememberReminderDue(id, reminderDue)
         changed = true
-        continue
       case .push:
-        break
+        guard let when = task.when else { continue }
+        let due = RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour)
+        // Capturé AVANT l'`await` : la frappe continue pendant l'écriture, et mémoriser un autre
+        // titre que celui écrit ferait lire l'écart comme un renommage dans Rappels — la passe
+        // suivante reprendrait alors le titre tronqué SUR la tâche.
+        let title = task.title
+        guard
+          let id = try? await remindersService.schedule(
+            title: title,
+            start: when,
+            due: due,
+            list: task.reminderIdentifier == nil ? list : nil,
+            existingIdentifier: task.reminderIdentifier)
+        else { continue }
+        task.reminderIdentifier = id
+        // Ce qu'on vient d'écrire EST le nouvel accord. L'oublier ferait lire l'écriture suivante
+        // comme un changement venu de Rappels.
+        remindersService.rememberReminderDue(id, due)
+        remindersService.rememberReminderTitle(id, title)
+        changed = true
+        continue
       }
-      guard let when = task.when else { continue }
-      let due = RemindersSync.due(for: when, minutes: task.whenMinutes, hour: remindersDueHour)
-      guard
-        let id = try? await remindersService.schedule(
-          title: task.title,
-          start: when,
-          due: due,
-          list: task.reminderIdentifier == nil ? list : nil,
-          existingIdentifier: task.reminderIdentifier)
-      else { continue }
-      task.reminderIdentifier = id
-      // Ce qu'on vient d'écrire EST le nouvel accord. L'oublier ferait lire l'écriture suivante
-      // comme un changement venu de Rappels.
-      remindersService.rememberReminderDue(id, due)
-      changed = true
+      if syncTitle(of: task) { changed = true }
     }
     if changed { try? modelContext.save() }
+  }
+
+  /// Le titre, tranché À PART de l'échéance (cf. `RemindersSync.titleVerdict`) — c'est ce qui
+  /// rend son titre complet à un rappel parti en pleine frappe. Rend `true` si la TÂCHE a changé.
+  private func syncTitle(of task: TaskItem) -> Bool {
+    guard let id = task.reminderIdentifier,
+      let apple = remindersService.reminderTitle(for: id)
+    else { return false }
+    switch RemindersSync.titleVerdict(
+      task: task.title, apple: apple, lastSeen: remindersService.lastSeenReminderTitle(id))
+    {
+    case .agreed:
+      remindersService.rememberReminderTitle(id, apple)
+      return false
+    case .pull:
+      task.title = apple
+      remindersService.rememberReminderTitle(id, apple)
+      return true
+    case .push:
+      let title = task.title
+      remindersService.renameReminder(id, to: title)
+      remindersService.rememberReminderTitle(id, title)
+      return false
+    }
   }
 
   /// App → Calendrier : une tâche datée QUI PORTE UNE DURÉE prend sa place dans l'agenda.

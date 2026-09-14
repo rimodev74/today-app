@@ -1,6 +1,6 @@
 import SwiftData
 
-/// Ce qu'une page de tâches désigne : la ligne SÉLECTIONNÉE (surbrillance lavande) et, le cas
+/// Ce qu'une page de tâches désigne : la ligne SÉLECTIONNÉE (surbrillance de sélection) et, le cas
 /// échéant, celle ouverte en ÉDITION. Éditer implique sélectionner ; jamais deux lignes à la fois.
 ///
 /// Les trois pages qui affichent des tâches — une liste, « Aujourd'hui », « Tâches » — pilotaient
@@ -59,7 +59,7 @@ struct TaskFocus: Equatable {
   }
 
   /// Retire la surbrillance sans rien fermer d'autre : le focus part ailleurs qu'à une ligne (le
-  /// champ « Nouvelle tâche »), et laisser la lavande allumée derrière se lirait comme deux focus
+  /// champ « Nouvelle tâche »), et laisser la surbrillance allumée derrière se lirait comme deux focus
   /// concurrents. Courbe attendue : `taskSelectFade`.
   mutating func deselect() { selected = nil }
 

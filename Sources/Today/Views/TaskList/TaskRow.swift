@@ -523,14 +523,14 @@ struct TaskRow: View {
   /// nombres varient, et comme la bascule d'état est enveloppée d'un `withAnimation` côté page,
   /// SwiftUI les interpole :
   /// - `cornerRadius` 8 → 14 : le coin s'ouvre en même temps que la hauteur.
-  /// - calque lavande : visible en SÉLECTION SEULE (`isSelected && !isEditing`), jamais sous la
-  ///   carte. S'il restait à pleine opacité pendant l'édition, la fermeture (blanc + lavande qui
-  ///   s'effacent ensemble) le laisserait transparaître une fraction de seconde sous le blanc qui
-  ///   part → un flash « edit → select → normal ». Caché en édition, il n'a rien à révéler.
-  /// - calque blanc : ne monte qu'en édition, par-dessus le lavande → à l'ouverture la pilule
-  ///   « devient » carte (crossfade lavande→blanc sur le même rect qui grandit).
+  /// - calque de sélection : visible en SÉLECTION SEULE (`isSelected && !isEditing`), jamais sous
+  ///   la carte. S'il restait à pleine opacité pendant l'édition, la fermeture (blanc + sélection
+  ///   qui s'effacent ensemble) le laisserait transparaître une fraction de seconde sous le blanc
+  ///   qui part → un flash « edit → select → normal ». Caché en édition, il n'a rien à révéler.
+  /// - calque blanc : ne monte qu'en édition, par-dessus la sélection → à l'ouverture la pilule
+  ///   « devient » carte (crossfade sélection→blanc sur le même rect qui grandit).
   /// - bordure : ne se révèle qu'en édition.
-  /// On n'interpole PAS entre deux `Color` dynamiques (lavande accent ↔ blanc système), ce qui
+  /// On n'interpole PAS entre deux `Color` dynamiques (sélection ↔ blanc système), ce qui
   /// scintille ; on anime l'OPACITÉ de calques à couleur fixe, c'est stable.
   ///
   /// L'ombre reste à zéro hors édition : un `.shadow` réellement rendu sur chaque ligne force un
