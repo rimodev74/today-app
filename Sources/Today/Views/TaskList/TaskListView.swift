@@ -1613,10 +1613,22 @@ private struct ProjectPageView: View {
   /// dégradé qui dit « ça continue ».
   private static let previewLimit = 6
 
+  /// Projets dont les cartes ont déjà fait leur entrée pendant cette session : le rebond accueille
+  /// une première ouverture, il ne se rejoue pas à chaque aller-retour depuis une liste. En
+  /// mémoire seule, exprès — un relancement est une nouvelle session.
+  private static var enteredProjects: Set<PersistentIdentifier> = []
+  /// Le projet dont l'entrée vient d'être lancée. `enteredProjects` seul ne suffit pas : écrire un
+  /// `static` ne fait rien re-rendre, c'est ce `@State` — LU dans le body — qui porte la
+  /// transaction animée.
+  @State private var entranceTrigger: PersistentIdentifier?
+
   var body: some View {
     // Construit UNE fois en tête du body, puis distribué (cf. Conventions) : lu depuis les
     // rangées, chaque chiffre retraverserait SwiftData à chaque rendu.
     let board = ProjectBoard.build(from: project, previewLimit: Self.previewLimit)
+    let cardsShown =
+      entranceTrigger == project.persistentModelID
+      || Self.enteredProjects.contains(project.persistentModelID)
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 20) {
@@ -1626,21 +1638,23 @@ private struct ProjectPageView: View {
           columns: [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 16)],
           alignment: .leading, spacing: 16
         ) {
-          ForEach(board.cards) { card in
+          ForEach(Array(board.cards.enumerated()), id: \.element.id) { rank, card in
             ListCardView(
               card: card,
               open: { selection = .list(card.list) },
               rename: { rename(card.list) },
               delete: { requestDelete(card.list) }
             )
+            .enteringCard(cardsShown, rank: rank)
             // La carte qui part s'efface, celles qui restent COULENT vers leur nouvelle place —
-            // le `withAnimation(taskInsert)` des chemins de création/suppression anime le
+            // le `withAnimation(boardFlow)` des chemins de création/suppression anime le
             // replacement de la grille, cette transition ne concerne que la carte elle-même.
             // Même couple qu'une tâche qui disparaît d'une liste (cf. `TaskRow`) : fondu seul,
             // pas de glissement, sinon la carte part de travers pendant que la grille se retasse.
             .transition(.opacity)
           }
           createCard
+            .enteringCard(cardsShown, rank: board.cards.count)
         }
         // Même colonne que `listsHeader` et l'anneau du titre juste au-dessus (cf.
         // `taskContentColumn`) : sans elle, les cartes partaient du bord de section, 20 pt trop à
@@ -1658,6 +1672,12 @@ private struct ProjectPageView: View {
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
         onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
+    }
+    // `initial` ET changement : la vue est RÉUTILISÉE d'un projet à l'autre (pas d'`.id`, cf.
+    // `TaskListView.page`), `onAppear` ne verrait que le premier.
+    .onChange(of: project.persistentModelID, initial: true) { _, id in
+      guard Self.enteredProjects.insert(id).inserted else { return }
+      withAnimation(cardEntrance) { entranceTrigger = id }
     }
     .alert(
       "Supprimer la liste ?",
@@ -1766,6 +1786,21 @@ private struct ProjectPageView: View {
           from: $selection, in: modelContext, forget: remindersService.forgetAppleItems)
       }
     }
+  }
+}
+
+extension View {
+  /// L'entrée d'une carte, en cascade. La PAGE déclenche (`withAnimation(cardEntrance)`) ; la carte
+  /// n'ajoute que son retard, et seulement quand `shown` bascule — une suppression ou un survol
+  /// n'héritent d'aucun délai. Des effets de rendu seuls (pas de cadre qui bouge) : la grille ne se
+  /// retasse pas pendant l'entrée, et le body de la carte ne se rejoue pas.
+  ///
+  /// ponytail: retard plafonné au 8e rang — au-delà, la cascade traînerait sur un gros projet.
+  fileprivate func enteringCard(_ shown: Bool, rank: Int) -> some View {
+    opacity(shown ? 1 : 0)
+      .scaleEffect(shown ? 1 : 0.92)
+      .offset(y: shown ? 0 : 12)
+      .transaction(value: shown) { $0.animation = $0.animation?.delay(Double(min(rank, 8)) * 0.05) }
   }
 }
 

@@ -96,6 +96,10 @@ let taskInsert = Animation.spring(response: 0.32, dampingFraction: 1)
 /// parcourue change ce qu'on lit du même ressort, d'où deux amortissements et pas deux courbes
 /// inventées séparément. Même raisonnement que `ProgressRing.ringFlow`.
 let boardFlow = Animation.spring(response: 0.32, dampingFraction: 1)
+/// L'entrée des cartes à la première ouverture d'un projet dans la session. Elle rebondit, ELLE,
+/// et ça ne contredit pas `boardFlow` : la carte ne traverse rien, elle grandit de quelques
+/// points SUR PLACE — le dépassement se lit comme un « pop », pas comme un ballottement.
+let cardEntrance = Animation.spring(response: 0.42, dampingFraction: 0.68)
 /// TOUT dépliant de l'app : chevron qui tourne et contenu qui apparaît/disparaît — repli d'un
 /// projet dans la sidebar, section d'« Aujourd'hui », archives d'une liste, sous-tâches d'une
 /// ligne. Quatre valeurs coexistaient (`.snappy(0.2)`, `.snappy(0.22)`,
