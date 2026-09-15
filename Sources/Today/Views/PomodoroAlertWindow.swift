@@ -58,11 +58,9 @@ final class PomodoroAlertWindow {
     // Le thème est posé sur la FENÊTRE, pas par un `.preferredColorScheme` : glissé sous le calque
     // de flou, le contenu SwiftUI reprenait l'apparence système et ignorait le réglage. Posé ici, il
     // descend aussi dans le matériau, qui s'éclaircit ou s'assombrit avec.
-    switch AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "") {
-    case .light: panel.appearance = NSAppearance(named: .aqua)
-    case .dark: panel.appearance = NSAppearance(named: .darkAqua)
-    case .system, nil: panel.appearance = nil
-    }
+    panel.appearance =
+      AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "")?
+      .appearance
 
     let hosting = NSHostingView(
       rootView: PomodoroAlertView(

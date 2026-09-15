@@ -300,6 +300,28 @@ l'opacité : `0.20 0.41 0.59 0.74 0.87 0.96 1.00`, et le flou fond avec.
 **La sonde vaut mieux que la capture** : `screencapture` prend ~250 ms, il rate un fondu de 450 ms
 une fois sur deux. Échantillonner le calque depuis le process dit en une ligne si l'animation joue.
 
+### `.preferredColorScheme(nil)` ne rend PAS une fenêtre au système
+
+Le thème passait par `.preferredColorScheme(theme.colorScheme)` sur la fenêtre principale et les
+Réglages, `nil` pour « Système ». Choisir « Sombre » puis « Système » sur un Mac clair laissait la
+fenêtre SOMBRE : une fois un thème explicite posé, repasser le modificateur à `nil` ne défait rien
+(vu le 15 septembre 2026 dans l'accueil). La capsule y échappait par accident — son contenu est
+neuf à chaque ouverture — et la pastille figeait carrément le thème de son premier affichage.
+
+Le thème passe désormais par `NSApp.appearance` (`AppAppearance` dans `Theme.swift`), dont le `nil`
+est un vrai « suivre le système », pour TOUTES les fenêtres d'un coup. Aucun `.preferredColorScheme`
+ne doit revenir.
+
+### Fondre un changement de thème : ni `CATransition`, une image qui s'efface
+
+Une `CATransition` `.fade` posée sur le calque du contenu juste avant `NSApp.appearance = …` ne jouait
+pas : SwiftUI redessine au tour de boucle SUIVANT, dans une autre transaction. Ce qui marche : figer
+chaque fenêtre (`layer.render(in:)`) dans une vue posée par-dessus, changer le thème, puis animer
+l'opacité de cette vue — sondé depuis le process : `1.00 → 0.80 → 0.29 → 0.01`. Deux détails
+mesurés : le calque d'un contenu SwiftUI est RETOURNÉ (`contentsAreFlipped()`), l'image sortait à
+l'envers sans retourner le contexte ; et l'icône de la barre des menus est une fenêtre visible pour
+AppKit — ne figer que les fenêtres qui peuvent devenir clés.
+
 ### Le journal système ne remonte rien de ce process
 
 `log show --predicate 'process == "Today"'` rend 0 ligne, y compris pour un `NSLog` que le binaire
@@ -938,6 +960,23 @@ C'est le même piège que celui déjà payé sur `MenuBarTimerLabel`, où lire l
 corps de la Scene invalidait l'arbre entier chaque seconde. La règle : **avec un `@Observable`, ce
 n'est pas ce que la vue AFFICHE qui compte, c'est ce qu'elle LIT** — et l'ordre des lectures fait
 partie du code.
+
+### Une animation retardée est une animation EN COURS
+
+(15 septembre 2026.) Le Mac dessiné de l'accueil bouclait par `PhaseAnimator`, dont la seule façon de
+marquer une pause est un `.delay()` dans l'animation de la phase suivante. Or pendant ce délai
+l'animation tourne déjà : la vue entière — ombres, masque en dégradé, zoom — se redessinait à chaque
+image alors que rien ne bougeait. Mesuré sur TodayDev, fenêtre au premier plan : **6 à 8 % de CPU en
+continu** sur les trois écrans qui le montrent, contre 0 % sur Bienvenue.
+
+La pause passe par un `Task.sleep` dans un `.task` (`PhaseLoop`), puis `withAnimation` sans délai :
+**3 à 5 %**, des échantillons à 0 pendant les pauses. Ce qui reste est le passage lui-même. Pour une
+pause, attendre ; ne jamais retarder.
+
+**`.drawingGroup()` sur le Mac, sous le zoom, DOUBLE ce qui reste** — essayé le même jour pour
+aplatir ombres et masque en une texture. CPU cumulé sur 30 s, fenêtre au premier plan : écran
+Rappels **4,3 → 8,3 %**, écran Prêt **5,3 → 11,2 %**. Le contenu et l'échelle changeant à chaque
+image du passage, la texture est refaite à chaque image, en plus du reste. Retiré.
 
 ### Une rangée qui relit cinq fois la même relation
 

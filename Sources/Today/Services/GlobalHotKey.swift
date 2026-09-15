@@ -44,6 +44,11 @@ final class GlobalHotKey {
   /// d'être : la routine de routage ne sait pas ce qu'est une date ni une fenêtre.
   var perform: (String) -> Void = { _ in }
 
+  /// La combinaison de la capsule a-t-elle été ACCEPTÉE par le système ? Faux quand une autre app la
+  /// tient déjà, ou quand elle a été retirée. L'accueil le lit pour le DIRE : il invite à frapper le
+  /// raccourci, et une combinaison refusée l'aurait laissé attendre une frappe qui ne vient jamais.
+  private(set) var isQuickEntryRegistered = false
+
   private var hotKeys: [EventHotKeyRef] = []
   /// Ce que chaque identifiant enregistré déclenche. Reconstruit à chaque `reload` : c'est lui qui
   /// permet à UN seul handler Carbon de servir toutes les combinaisons.
@@ -132,8 +137,9 @@ final class GlobalHotKey {
     actions.removeAll()
     installHandler()
 
+    isQuickEntryRegistered = false
     if let combo = Self.current {
-      register(combo, id: 1) { [weak self] in self?.action() }
+      isQuickEntryRegistered = register(combo, id: 1) { [weak self] in self?.action() }
     }
     // ponytail: pas de détection de conflit entre deux combinaisons identiques — la seconde
     // `RegisterEventHotKey` échoue, la première de la liste gagne. Un badge dans les réglages si ça
@@ -147,18 +153,21 @@ final class GlobalHotKey {
     }
   }
 
-  private func register(_ combo: KeyCombo, id: UInt32, run: @escaping () -> Void) {
+  /// Rend `false` si le système a refusé la combinaison.
+  @discardableResult
+  private func register(_ combo: KeyCombo, id: UInt32, run: @escaping () -> Void) -> Bool {
     var ref: EventHotKeyRef?
     // Signature arbitraire mais stable ("TDYQ") : elle n'identifie nos hot keys qu'auprès de nous.
     let hotKeyID = EventHotKeyID(signature: 0x5444_5951, id: id)
     let status = RegisterEventHotKey(
       UInt32(combo.keyCode), Self.carbonModifiers(combo.flags), hotKeyID,
       GetApplicationEventTarget(), 0, &ref)
-    // Échec = combinaison déjà prise par une autre app (Spotlight, etc.). Rien à faire ici : le
-    // réglage reste affiché tel quel, l'utilisateur en choisira une autre en voyant que rien ne vient.
-    guard status == noErr, let ref else { return }
+    // Échec = combinaison déjà prise par une autre app (Spotlight, etc.). Le réglage reste affiché
+    // tel quel ; seul l'accueil le signale, par `isQuickEntryRegistered`.
+    guard status == noErr, let ref else { return false }
     hotKeys.append(ref)
     actions[id] = run
+    return true
   }
 
   private func installHandler() {

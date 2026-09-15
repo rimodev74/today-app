@@ -233,6 +233,8 @@ Chiffres et détail : `PIEGES.md` § Déjà rejeté.
 - **Une couleur figée se double**, et ça passe par `dualColor(light:dark:)` de `Theme.swift` — pas
   par un `NSColor(name:)` réécrit à la main (trois copies traînaient, elles ont fusionné). Une
   `Color(red:…)` nue est un bug de mode sombre en attente.
+- **Le thème passe par `AppAppearance` (`NSApp.appearance`), jamais par `.preferredColorScheme`** :
+  repassé à `nil`, ce modificateur ne rend pas la fenêtre au système. → `PIEGES.md` § Fenêtres.
 - **Ce qui s'installe se démonte.** Moniteur `NSEvent`, observateur `NotificationCenter`, `Timer` :
   chacun a son `removeMonitor` / `removeObserver` / `invalidate` sur le chemin de sortie
   (`dismantleNSView`, `onDisappear`).
@@ -329,6 +331,16 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   la capsule depuis une autre app, un pomodoro piloté au clavier (`!pomodoro…` d'`AppCommand`, qui
   n'active délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux, l'y ajouter en
   ferait du bruit.
+- **L'accueil du premier lancement** (`OnboardingView`, règle dans `Models/Onboarding.swift`) :
+  six écrans À LA PLACE des colonnes, dans la fenêtre principale devenue carrée
+  (`OnboardingWindowFrame`, taille dans `MainWindowSize`) — les colonnes ne sont pas montées, donc
+  rien de ce qu'elles publient au clavier ou au menu n'existe. Il ne s'affiche que sur une base
+  VIERGE : drapeau `onboardingCompleted` absent + base sans travail, tranché dans
+  `TodayApp.onboardingPending` AVANT que la fenêtre existe (sa taille en dépend). Une base existante,
+  ou une base qui sort de quarantaine, écrit le drapeau sans rien montrer. Le seul geste réel est la
+  capsule : l'écran avance quand une tâche arrive en base (`ModelContext.didSave`, pas de `@Query`).
+  Le Mac animé de trois écrans (`OnboardingShowcase.swift`) est un EXEMPLE en cours de validation.
+  On revoit l'accueil par *Aide ▸ Revoir l'accueil*.
 - **Le glisser** existe sur une liste, « Aujourd'hui » et « Tâches ». « À venir » et « Archives »
   n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus — c'est un tableau
   de cartes, il n'y a aucune ligne de tâche à y glisser.

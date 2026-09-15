@@ -95,10 +95,10 @@ final class HUDWindow {
       .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
     ]
 
-    let theme = AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "")
-    let hosting = NSHostingView(
-      rootView: HUDView(state: state)
-        .preferredColorScheme((theme ?? .system).colorScheme))
+    // Pas de thème posé ici : le panneau hérite de `NSApp.appearance` (cf. `AppAppearance`). Le figer à
+    // la création du panneau — ce qui était fait — gardait le thème du premier affichage pour la vie
+    // du process.
+    let hosting = NSHostingView(rootView: HUDView(state: state))
     hosting.layer?.backgroundColor = .clear
     panel.contentView = hosting
     return panel

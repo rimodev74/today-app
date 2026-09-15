@@ -97,13 +97,13 @@ final class QuickEntryWindow {
 
     let channel = QuickEntryChannel()
     self.channel = channel
-    let theme = AppTheme(rawValue: UserDefaults.standard.string(forKey: AppTheme.storageKey) ?? "")
+    // Pas de `.preferredColorScheme` : le panneau est GARDÉ, et SwiftUI ne lui rend jamais le thème
+    // du système une fois un thème explicite posé. Il hérite de `NSApp.appearance` (cf. `AppAppearance`).
     let hosting = NSHostingView(
       rootView: QuickEntryView(
         channel: channel, prefill: prefill, onClose: { [weak self] in self?.close() }
       )
       .modelContainer(container)
-      .preferredColorScheme((theme ?? .system).colorScheme)
     )
     hosting.layer?.backgroundColor = .clear
     panel.contentView = hosting

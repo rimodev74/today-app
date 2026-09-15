@@ -36,6 +36,97 @@ func dualColor(
     })
 }
 
+// MARK: - Clair, sombre, système
+
+/// Pose le thème choisi sur TOUTE l'app, par `NSApp.appearance`.
+///
+/// Pas par `.preferredColorScheme` : sur macOS, repasser ce modificateur à `nil` ne rend PAS une
+/// fenêtre déjà affichée au système — elle garde le dernier thème explicite. Choisir « Système »
+/// après « Sombre » laissait l'app sombre sur un Mac clair (vu le 15 septembre 2026, dans l'accueil
+/// comme dans les Réglages). L'apparence de l'application a, elle, un vrai `nil` : toute fenêtre qui
+/// n'en impose pas suit le système, et le suit encore quand il change.
+///
+/// Le passage se FOND au lieu de sauter : chaque fenêtre est figée dans l'ancien thème, l'image posée
+/// par-dessus s'efface pendant que le nouveau se dessine dessous. Sur le calque et pas en SwiftUI,
+/// comme tout ce qui change une fenêtre entière (cf. CLAUDE.md § Animations) : le contenu n'est
+/// dessiné qu'une fois, seule l'opacité de l'image est animée.
+@MainActor
+enum AppAppearance {
+  static let fadeDuration: CFTimeInterval = 0.35
+
+  static func apply(_ theme: AppTheme, animated: Bool) {
+    let target = theme.appearance
+    guard NSApp.appearance?.name != target?.name else { return }
+    // L'image de chaque fenêtre DANS L'ANCIEN thème, prise avant le changement — des vraies
+    // fenêtres seulement : l'icône de la barre des menus en est une aussi pour AppKit, vide…
+    let covers =
+      animated
+      ? NSApp.windows.filter { $0.isVisible && $0.canBecomeKey }.compactMap(cover(of:)) : []
+    NSApp.appearance = target
+    // …puis effacée un tour plus tard, quand la fenêtre s'est redessinée dessous.
+    DispatchQueue.main.async {
+      for cover in covers { fadeOut(cover) }
+    }
+  }
+
+  /// Fige la fenêtre dans une vue posée par-dessus son contenu.
+  ///
+  /// Une image et pas une `CATransition` : essayée d'abord, elle ne jouait pas — SwiftUI redessine
+  /// au tour de boucle SUIVANT le changement d'apparence, dans une autre transaction que celle qui
+  /// portait la transition. Une vue neutre dont on anime l'opacité est la façon qui marche ici
+  /// (→ `PIEGES.md` § Fenêtres, le fondu d'entrée d'une fenêtre).
+  ///
+  /// Le verre n'est pas dans l'image (`render(in:)` ne dessine pas le flou du bureau) : il passe au
+  /// nouveau thème d'un coup, sous les voiles de l'image qui, eux, fondent.
+  private static func cover(of window: NSWindow) -> NSView? {
+    guard let content = window.contentView, let layer = content.layer,
+      let host = content.superview ?? Optional(content)
+    else { return nil }
+    let scale = window.backingScaleFactor
+    let size = content.bounds.size
+    guard size.width > 0, size.height > 0,
+      let context = CGContext(
+        data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+        bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.scaleBy(x: scale, y: scale)
+    // Le calque d'un contenu SwiftUI est RETOURNÉ (origine en haut), le contexte non : sans ce
+    // retournement, l'image sortait à l'envers — vu à mi-fondu le 15 septembre 2026.
+    if layer.contentsAreFlipped() {
+      context.translateBy(x: 0, y: size.height)
+      context.scaleBy(x: 1, y: -1)
+    }
+    layer.render(in: context)
+    guard let image = context.makeImage() else { return nil }
+
+    let cover = NSView(frame: content.frame)
+    cover.wantsLayer = true
+    cover.layer?.contents = image
+    cover.layer?.contentsScale = scale
+    cover.layer?.contentsGravity = .resize
+    host.addSubview(cover, positioned: .above, relativeTo: content === host ? nil : content)
+    return cover
+  }
+
+  private static func fadeOut(_ cover: NSView) {
+    guard let layer = cover.layer else {
+      cover.removeFromSuperview()
+      return
+    }
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { cover.removeFromSuperview() }
+    let fade = CABasicAnimation(keyPath: "opacity")
+    fade.fromValue = 1
+    fade.toValue = 0
+    fade.duration = fadeDuration
+    fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+    layer.opacity = 0
+    layer.add(fade, forKey: "appearance")
+    CATransaction.commit()
+  }
+}
+
 // MARK: - La couleur d'une page
 
 /// La teinte d'une destination. C'est le pivot de la refonte : chaque page porte SA couleur, et

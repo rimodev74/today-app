@@ -166,7 +166,10 @@ private struct ProfileSettingsRows: View {
 /// lui laisser (une combinaison à modificateurs part d'abord au menu — ⌘Q quitterait l'app en pleine
 /// saisie), alors qu'un moniteur local voit l'événement AVANT le menu et peut le consommer
 /// (`return nil`).
-private struct HotKeyRecorder: View {
+///
+/// Interne et non privé : l'accueil du premier lancement s'en sert pour changer la combinaison de
+/// la capsule quand celle d'office est déjà prise.
+struct HotKeyRecorder: View {
   @Binding var combo: KeyCombo?
   var width: CGFloat = 150
 
@@ -750,9 +753,7 @@ private struct RemindersSyncSection: View {
   /// `RemindersSync.eventCalendarNameStorageKey` pour la raison. À l'ouverture ET au changement :
   /// un calendrier renommé ailleurs se rattrape à la visite suivante.
   private func rememberCalendarName() {
-    UserDefaults.standard.set(
-      remindersService.eventCalendar(withIdentifier: eventCalendarID)?.title ?? "",
-      forKey: RemindersSync.eventCalendarNameStorageKey)
+    remindersService.rememberEventCalendarName(for: eventCalendarID)
   }
 }
 

@@ -63,6 +63,11 @@ struct ContentView: View {
   /// des deux côtés) : les deux zones se touchent, et rien ne garantit que SwiftUI livre la sortie
   /// de l'une avant l'entrée dans l'autre — un seul drapeau clignoterait au passage de la frontière.
   @State private var sidebarHovered = false
+  /// L'écran d'accueil affiché, ou `nil`. Un `@State` et pas le drapeau des défauts lu en direct :
+  /// l'écriture d'un `@AppStorage` échappe à la transaction animée, et l'accueil disparaîtrait sec
+  /// (cf. CLAUDE.md § Animations). Sa valeur de départ est tranchée AVANT que la fenêtre existe
+  /// (cf. `TodayApp.onboardingPending`) : elle en décide la taille.
+  @State private var onboarding: OnboardingStep? = TodayApp.onboardingPending ? .welcome : nil
 
   /// Le mors se montre dès que la souris est quelque part sur la sidebar OU sur la bande qui la
   /// longe : on ne le cherche pas, il est déjà là quand on arrive au bord.
@@ -127,11 +132,38 @@ struct ContentView: View {
     Scrim.page.overlay(PageTintWash(tint: tint)).ignoresSafeArea()
   }
 
-  /// Les deux colonnes, et rien d'autre.
+  /// Le contenu de la fenêtre : l'accueil, OU les deux colonnes — jamais l'un par-dessus l'autre.
+  ///
+  /// Pendant l'accueil, la fenêtre entière devient son carré (cf. `OnboardingWindowFrame`) et les
+  /// colonnes ne sont pas montées. C'est ce qui rend l'accueil sûr sans rien ajouter aux pages : ni le
+  /// moniteur de ⌫ et ↑/↓, ni les actions de menu qu'elles publient (⌘N, ⌘⌥N…) n'existent tant
+  /// qu'elles ne sont pas là.
   ///
   /// Sortie du `body` pour le type-checker : la fenêtre porte une vingtaine de modificateurs, et
   /// le calque de verre était celui de trop — le compilateur renonçait à résoudre l'expression.
   private var columns: some View {
+    Group {
+      if let step = onboarding {
+        OnboardingView(
+          step: Binding(get: { step }, set: { onboarding = $0 }), finish: finishOnboarding
+        )
+        // Taille EXACTE, et pas « tout ce qui est proposé ». La fenêtre n'étant plus redimensionnable
+        // pendant l'accueil, SwiftUI la recale sur la taille idéale de son contenu à chaque écran ; un
+        // contenu flexible en hauteur l'étirait donc jusqu'au bas de l'écran (660 × 1 415, mesuré au
+        // passage de Bienvenue à Profil le 15 septembre 2026).
+        .frame(width: MainWindowSize.onboarding.width, height: MainWindowSize.onboarding.height)
+        .transition(.opacity)
+      } else {
+        appColumns.transition(.opacity)
+      }
+    }
+    // Le verre est posé ICI, sous les deux contenus, et pas sur le `body` : celui-ci porte déjà une
+    // vingtaine de modificateurs et un de plus lui faisait dépasser son budget de type-checking.
+    .background { windowGlass }
+  }
+
+  /// Les deux colonnes, et rien d'autre.
+  private var appColumns: some View {
     // Layout custom (HStack) MAIS fenêtre à toolbar native → gros rayon système sans inset de sidebar.
     HStack(spacing: 0) {
       // Montée en permanence, largeur pilotée (0 = repliée) : c'est ce qui permet de la tirer
@@ -165,18 +197,52 @@ struct ContentView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background { pageBackground }
     }
-    // Le verre est posé ICI, sur le HStack, et pas sur le `body` : celui-ci porte déjà une
-    // vingtaine de modificateurs et un de plus lui faisait dépasser son budget de type-checking.
-    .background { windowGlass }
+  }
+
+  private func finishOnboarding() {
+    UserDefaults.standard.set(true, forKey: Onboarding.completedStorageKey)
+    selection = .smartList(.today)
+    withAnimation(onboardingFlow) { onboarding = nil }
   }
 
   var body: some View {
+    window
+      // Ici plutôt que dans `window` : la chaîne de celle-ci dépassait déjà son budget de
+      // type-checking.
+      .background(OnboardingWindowFrame(isActive: onboarding != nil))
+      // Muettes pendant l'accueil : la palette et la barre latérale appartiennent aux colonnes, qui
+      // ne sont pas montées. La palette, elle, s'ouvrirait quand même, champ focalisé mais inutile.
+      // *Revoir l'accueil* aussi : en plein accueil, il ramenait à Bienvenue en gardant la tâche
+      // notée et le pont connecté de l'essai en cours.
+      .focusedSceneValue(\.replayOnboarding, onboarding == nil ? replayOnboardingAction : nil)
+      .focusedSceneValue(\.search, onboarding == nil ? searchAction : nil)
+      .focusedSceneValue(\.sidebarToggle, onboarding == nil ? sidebarToggleAction : nil)
+  }
+
+  private var replayOnboardingAction: MenuAction {
+    MenuAction(id: "onboarding.replay") {
+      withAnimation(onboardingFlow) { onboarding = .welcome }
+    }
+  }
+
+  private var searchAction: MenuAction {
+    MenuAction(id: "search") { searchPresented = true }
+  }
+
+  private var sidebarToggleAction: SidebarToggle {
+    SidebarToggle(isVisible: sidebarVisible) { sidebarVisible.toggle() }
+  }
+
+  private var window: some View {
     columns
       // Poignée : clic = replier/déplier, glisser = redimensionner. En overlay (pas dans le HStack)
       // pour rester visible sidebar repliée, où il n'y a plus de séparateur auquel s'accrocher.
       // Pas `HSplitView`, qui donnerait le redimensionnement gratuitement mais remplace le layout
       // par un NSSplitView : exit le repli animé et le fond pleine hauteur des colonnes.
-      .overlay(alignment: .leading) { grabber }
+      .overlay(alignment: .leading) {
+        // Pas pendant l'accueil : sa bande de survol longe le bord gauche de la fenêtre, carré compris.
+        if onboarding == nil { grabber }
+      }
       .environment(\.pageTint, tint)
       .environment(filing)
       // Le cadre de la ligne en vol remonte de la page jusqu'ici. Une préférence et pas une écriture
@@ -209,10 +275,7 @@ struct ContentView: View {
       // Ce que la barre de menus atteint dans cette fenêtre. ⌘B passait par un bouton CACHÉ posé
       // ici : il marchait, mais rien ne l'annonçait — un raccourci qu'on ne peut pas découvrir
       // n'existe que pour qui l'a écrit. Même chose pour la recherche, qui n'avait que sa loupe.
-      .focusedSceneValue(\.search, MenuAction(id: "search") { searchPresented = true })
-      .focusedSceneValue(
-        \.sidebarToggle, SidebarToggle(isVisible: sidebarVisible) { sidebarVisible.toggle() }
-      )
+      // Les deux sont publiées par `body`, où l'accueil les fait taire.
       .onChange(of: selection) { _, new in recordRecent(new) }
       // Un ⌘↩ ou un raccourci texte (« !today ») venu de la capsule de saisie rapide : elle vit dans
       // une autre fenêtre et ne peut pas toucher ce `@State` autrement (cf. `AppCommand`).
@@ -291,7 +354,7 @@ struct ContentView: View {
         // macOS 26 pose un fond « glass » partagé sur le conteneur de l'item lui-même (pas sur le
         // contrôle) : sans cet opt-out, la pilule apparaît DANS une seconde capsule système.
         // Rien à faire avant macOS 26, qui n'a pas ce fond.
-        if !sidebarVisible {
+        if !sidebarVisible, onboarding == nil {
           if #available(macOS 26, *) {
             ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
               .sharedBackgroundVisibility(.hidden)

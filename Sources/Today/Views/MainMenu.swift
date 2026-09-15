@@ -39,6 +39,7 @@ private struct NewListKey: FocusedValueKey { typealias Value = MenuAction }
 private struct NewProjectKey: FocusedValueKey { typealias Value = MenuAction }
 private struct SearchKey: FocusedValueKey { typealias Value = MenuAction }
 private struct SidebarToggleKey: FocusedValueKey { typealias Value = SidebarToggle }
+private struct ReplayOnboardingKey: FocusedValueKey { typealias Value = MenuAction }
 
 extension FocusedValues {
   /// ⌘N — publiée par `TaskPageBase`, donc par les cinq pages d'un coup. `nil` sur une page qui ne
@@ -68,6 +69,12 @@ extension FocusedValues {
     get { self[SidebarToggleKey.self] }
     set { self[SidebarToggleKey.self] = newValue }
   }
+  /// *Aide ▸ Revoir l'accueil* — publiée par `ContentView`, qui porte l'accueil. `nil` pendant
+  /// l'accueil lui-même.
+  var replayOnboarding: MenuAction? {
+    get { self[ReplayOnboardingKey.self] }
+    set { self[ReplayOnboardingKey.self] = newValue }
+  }
 }
 
 /// La barre de menus de Today.
@@ -88,6 +95,7 @@ struct MainMenuCommands: Commands {
   @FocusedValue(\.newProject) private var newProject
   @FocusedValue(\.search) private var search
   @FocusedValue(\.sidebarToggle) private var sidebarToggle
+  @FocusedValue(\.replayOnboarding) private var replayOnboarding
 
   /// Déclenche une action qui agit DANS la fenêtre principale — et seulement si c'est bien elle
   /// qui a le clavier.
@@ -187,6 +195,13 @@ struct MainMenuCommands: Commands {
       ForEach(AppCommand.pomodoroCommands) { command in
         Button(command.label) { command.run() }
       }
+    }
+
+    // *Aide*. `replacing` : l'item d'office, « Aide Today », n'ouvrait qu'un « Aucune aide
+    // disponible ». L'accueil est la seule aide que l'app ait.
+    CommandGroup(replacing: .help) {
+      Button("Revoir l'accueil") { inMainWindow(replayOnboarding) }
+        .disabled(replayOnboarding == nil)
     }
   }
 }

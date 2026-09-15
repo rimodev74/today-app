@@ -1,5 +1,5 @@
+import AppKit
 import Foundation
-import SwiftUI
 
 enum AppTheme: String, CaseIterable, Identifiable {
   case light
@@ -18,10 +18,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
   }
 
-  var colorScheme: ColorScheme? {
+  /// L'apparence AppKit du thème. `nil` pour « Système » : c'est le seul `nil` qui rend vraiment une
+  /// fenêtre au système (cf. `AppAppearance`).
+  var appearance: NSAppearance? {
     switch self {
-    case .light: return .light
-    case .dark: return .dark
+    case .light: return NSAppearance(named: .aqua)
+    case .dark: return NSAppearance(named: .darkAqua)
     case .system: return nil
     }
   }

@@ -154,6 +154,45 @@ struct TodayApp: App {
     try? context.save()
   }
 
+  /// L'accueil est-il à présenter à cette fenêtre ?
+  ///
+  /// Tranché AVANT que la fenêtre existe, et c'est tout l'objet : pendant l'accueil la fenêtre EST
+  /// son carré (cf. `OnboardingWindowFrame`), donc sa taille par défaut en dépend. Décidé au
+  /// `onAppear`, la grande fenêtre paraissait une image avant de rétrécir.
+  ///
+  /// Le drapeau est relu à chaque appel — une fenêtre rouverte après l'accueil ne doit pas le
+  /// revoir ; seul le tri des bases existantes n'a lieu qu'une fois.
+  static var onboardingPending: Bool {
+    _ = settledOnboarding
+    return !UserDefaults.standard.bool(forKey: Onboarding.completedStorageKey)
+  }
+
+  private static let settledOnboarding: Void = settleOnboarding(in: container)
+
+  /// Écrit le drapeau de l'accueil, sans rien montrer, sur une base qui porte déjà du travail (cf.
+  /// `Onboarding.decide`). Une base qui sort de quarantaine compte comme telle : elle est neuve donc
+  /// VIDE, mais c'est celle de quelqu'un qui travaillait — « Bonjour » passait sinon par-dessus
+  /// l'alerte qui lui dit de ne rien ressaisir (vu le 15 septembre 2026 sur une base de dev).
+  private static func settleOnboarding(in container: ModelContainer) {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: Onboarding.completedStorageKey) else { return }
+    let context = ModelContext(container)
+    // Un comptage qui échoue compte comme du travail présent : dans le doute, on se tait plutôt que
+    // de dire « Bonjour » à une base pleine.
+    func count<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) -> Int {
+      (try? context.fetchCount(descriptor)) ?? 1
+    }
+    let existing =
+      count(FetchDescriptor<TaskItem>()) + count(FetchDescriptor<Project>())
+      + count(FetchDescriptor<TodoList>(predicate: #Predicate { !$0.isInbox }))
+    let quarantined = !(defaults.stringArray(forKey: StoreQuarantine.reportKey) ?? []).isEmpty
+    if Onboarding.decide(completed: false, hasExistingData: existing > 0 || quarantined)
+      == .markCompleted
+    {
+      defaults.set(true, forKey: Onboarding.completedStorageKey)
+    }
+  }
+
   var body: some Scene {
     // Titre vide explicite : sinon SwiftUI ré-assigne "Today" (nom du bundle) à la
     // fenêtre à chaque re-render du toolbar, provoquant un flash du titre natif.
@@ -162,10 +201,17 @@ struct TodayApp: App {
         .environment(pomodoroTimer)
         .environment(remindersService)
         .environment(profile)
-        .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
     .modelContainer(Self.container)
-    .defaultSize(width: 1400, height: 900)
+    // Le thème de TOUTE l'app, fenêtres, Réglages et panneaux compris (cf. `AppAppearance`, qui dit
+    // pourquoi ce n'est plus un `.preferredColorScheme`). `initial` : posé avant la première image,
+    // la fenêtre ne s'ouvre pas dans le thème du système pour basculer ensuite.
+    .onChange(of: themeRaw, initial: true) { old, new in
+      AppAppearance.apply(AppTheme(rawValue: new) ?? .system, animated: old != new)
+    }
+    // Née en carré quand l'accueil l'attend : elle ne rétrécit donc pas sous les yeux au premier
+    // lancement. `OnboardingWindowFrame` fait le reste — la sortie, et *Revoir l'accueil*.
+    .defaultSize(Self.onboardingPending ? MainWindowSize.onboarding : MainWindowSize.app)
     // Menu Format natif (gras ⌘B, italique ⌘I, etc.) câblé sur le premier répondeur —
     // `RichTextEditor` (isRichText) gère déjà ces actions nativement, aucune logique à écrire.
     // Tout le reste de la barre de menus — Fichier, Rechercher, Aller, Pomodoro — vit dans
@@ -176,13 +222,11 @@ struct TodayApp: App {
     }
 
     Settings {
-      // Même thème que la fenêtre principale : sans ça, choisir « Sombre » avec un système clair
-      // laissait la fenêtre de réglages en clair (le scheme n'est pas hérité entre Scenes).
+      // Le thème n'est pas posé ici : `NSApp.appearance` le donne à cette fenêtre comme aux autres.
       SettingsView()
         .environment(profile)
         // Le pont avec Rappels se règle ici : l'onglet Tâches doit pouvoir énumérer les listes.
         .environment(remindersService)
-        .preferredColorScheme((AppTheme(rawValue: themeRaw) ?? .system).colorScheme)
     }
     // Les raccourcis texte proposent les listes comme destination : cette Scene a besoin du MÊME
     // container que la fenêtre principale, elle ne l'héritait pas.

@@ -57,6 +57,21 @@ final class RemindersService {
     return writableEventCalendars.first { $0.calendarIdentifier == identifier }
   }
 
+  /// Le calendrier où Calendrier range les nouveaux événements — ce que l'accueil propose d'office
+  /// quand on accepte de connecter l'app. `nil` s'il n'accepte pas l'écriture.
+  var defaultEventCalendar: EKCalendar? {
+    store.defaultCalendarForNewEvents.flatMap { $0.allowsContentModifications ? $0 : nil }
+  }
+
+  /// Recopie le nom du calendrier désigné à côté de son identifiant — cf.
+  /// `RemindersSync.eventCalendarNameStorageKey` pour la raison. Appelée par les deux endroits qui
+  /// désignent ce calendrier : les Réglages et l'accueil.
+  func rememberEventCalendarName(for identifier: String) {
+    UserDefaults.standard.set(
+      eventCalendar(withIdentifier: identifier)?.title ?? "",
+      forKey: RemindersSync.eventCalendarNameStorageKey)
+  }
+
   /// Demande l'accès complet. Full (et non write-only) est nécessaire pour relire un rappel
   /// par son identifiant afin de le modifier plus tard (bonus + socle de la synchro).
   /// Lève `RemindersError.accessDenied` en cas de refus.
