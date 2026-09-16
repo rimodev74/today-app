@@ -913,9 +913,9 @@ private struct QuickEntryView: View {
   private func createList(in project: Project) {
     let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else { return }
-    let list = TodoList(title: name, project: project)
-    list.sortIndex = (project.orderedLists.last?.sortIndex ?? -1) + 1
-    modelContext.insertAndSave(list)
+    // Le point de passage commun (cf. `Project.appendList`) : le rang compte TOUTES les listes du
+    // projet, archivées comprises — pas seulement celles qu'on voit.
+    project.appendList(titled: name, in: modelContext)
     // La capsule s'utilise depuis une AUTRE app : la sidebar où la liste vient d'apparaître n'est
     // pas à l'écran. Même raison que pour une tâche déposée.
     HUDWindow.show("Liste « \(name) » créée", systemImage: "checkmark", tint: .green)
@@ -1367,14 +1367,14 @@ private struct QuickEntryView: View {
       // (`list?.project`), une tâche se pose donc toujours dans une liste. Il n'est ici qu'un
       // titre de section.
       ForEach(projects) { project in
-        if !project.orderedLists.isEmpty {
+        if !project.activeLists.isEmpty {
           Text(project.title.isEmpty ? "Sans titre" : project.title)
             .font(.app(11, weight: .medium))
             .foregroundStyle(.tertiary)
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 1)
-          ForEach(project.orderedLists, content: destinationRow)
+          ForEach(project.activeLists, content: destinationRow)
         }
       }
     }
@@ -1698,7 +1698,7 @@ private struct QuickEntryView: View {
   private var quickEntryNames: [String] { reachable.map(\.title) + projects.map(\.title) }
 
   private func resolve(_ name: String) -> TodoList? {
-    reachable.first { $0.title == name } ?? projects.first { $0.title == name }?.orderedLists.first
+    reachable.first { $0.title == name } ?? projects.first { $0.title == name }?.activeLists.first
   }
 
 }

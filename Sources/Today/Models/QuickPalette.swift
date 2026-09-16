@@ -179,7 +179,9 @@ struct QuickPalette {
     // sous son nom de liste donnerait deux lignes pour un seul endroit. Et une liste SANS dossier
     // n'apparaît nulle part dans la sidebar (cf. `reachable`) — il en traîne d'anciennes en base,
     // y déposer une tâche la rendrait introuvable.
-    for list in lists where !list.isInbox && list.project != nil {
+    // Une liste archivée n'est plus proposée comme endroit où écrire (cf. `TodoList.archivedAt`) ;
+    // ses tâches, elles, restent trouvables juste en dessous.
+    for list in lists where !list.isInbox && list.project != nil && !list.isArchived {
       offer([list.title], weight: 2, row: listRow(list))
     }
     for task in tasks where !task.isHeader {
@@ -245,7 +247,7 @@ struct QuickPalette {
   /// permet d'entrer dans une existante — sans quoi choisir un dossier obligeait à relancer une
   /// recherche pour atteindre ce qu'il contient, ce qui vidait le geste de son sens.
   static func inside(project: Project) -> QuickPalette {
-    QuickPalette(rows: project.orderedLists.prefix(limit).map(listRow))
+    QuickPalette(rows: project.activeLists.prefix(limit).map(listRow))
   }
 
   // MARK: Les lignes, par nature
@@ -258,7 +260,7 @@ struct QuickPalette {
   }
 
   private static func projectRow(_ project: Project) -> Row {
-    let lists = project.orderedLists
+    let lists = project.activeLists
     return Row(
       id: AnyHashable(project.uuid),
       title: project.title.isEmpty ? "Sans titre" : project.title, kind: "Dossier",

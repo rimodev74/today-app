@@ -1030,14 +1030,14 @@ private struct SidebarMenu: View {
     ForEach(projects) { project in
       separator
       projectRow(project)
-      ForEach(project.orderedLists) { listRow($0, counts) }
+      ForEach(project.activeLists) { listRow($0, counts) }
     }
   }
 
   @ViewBuilder private func filteredRows(_ counts: SidebarCounts) -> some View {
     let smart = SmartList.allCases.filter { $0.label.localizedCaseInsensitiveContains(needle) }
     let matchedProjects = projects.filter { $0.title.localizedCaseInsensitiveContains(needle) }
-    let matchedLists = projects.flatMap(\.orderedLists).filter {
+    let matchedLists = projects.flatMap(\.activeLists).filter {
       $0.title.localizedCaseInsensitiveContains(needle)
     }
     if smart.isEmpty && matchedProjects.isEmpty && matchedLists.isEmpty {

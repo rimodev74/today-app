@@ -31,9 +31,10 @@ struct TodayPageView: View {
   // toute tâche sans projet — « Aujourd'hui » ne fait que la filtrer par date, ce n'est pas sa
   // liste propre.
   @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
-  /// Cibles du « Déplacer vers… » : depuis cette page, toutes les listes sont des destinations
-  /// possibles (les tâches affichées viennent déjà d'un peu partout).
-  @Query private var allLists: [TodoList]
+  /// Cibles du « Déplacer vers… » : depuis cette page, toutes les listes EN COURS sont des
+  /// destinations possibles (les tâches affichées viennent déjà d'un peu partout). Les archivées
+  /// sont écartées par la requête, pas par rangée (cf. `TodoList.archivedAt`).
+  @Query(filter: #Predicate<TodoList> { $0.archivedAt == nil }) private var activeLists: [TodoList]
   // Ce que la page appelle « aujourd'hui » ne doit pas être figé à l'ouverture : `startOfToday`
   // en dépend (la date posée à une tâche créée ici), et le rafraîchissement EventKit aussi. Sans
   // re-rendu régulier, une page laissée ouverte à travers minuit daterait d'hier.
@@ -204,7 +205,7 @@ struct TodayPageView: View {
       task: task,
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
-      moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
+      moveTargets: activeLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: false,
       parentTag: showsParent ? TaskParentTag(of: task) : nil,
       onBeginEditing: { beginEditing(task) },
@@ -239,7 +240,7 @@ struct TodayPageView: View {
   /// Relâchement. La mécanique (lire le plan avant de désarmer, tout écrire en une transaction)
   /// est dans `dropTaskDrag` ; ici il ne reste que ce qui appartient à cette page — le rang.
   private func dropDraggedTask() {
-    dropTaskDrag(&reorder, onto: filing, lists: allLists, in: modelContext) { ordered in
+    dropTaskDrag(&reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
     }

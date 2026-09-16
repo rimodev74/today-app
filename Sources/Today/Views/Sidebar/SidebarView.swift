@@ -320,7 +320,7 @@ struct SidebarView: View {
           // un jour `.transition(.identity)` l'éteindrait sans qu'on le voie. Le `Group` porte la
           // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
           Group {
-            ForEach(project.orderedLists) { list in
+            ForEach(project.activeLists) { list in
               listRow(list, offsets: offsets, counts: counts)
             }
             addListRow(project, offsets: offsets)
@@ -554,6 +554,13 @@ struct SidebarView: View {
     }
     .contextMenu {
       Button("Renommer") { startRename(id) }
+      // Seulement une liste FINIE : c'est la seule qui encombre sans plus rien demander.
+      // `count` vient de la passe unique d'en haut — rien n'est relu ici.
+      if count.isFinished {
+        Button("Archiver la liste") {
+          withAnimation(disclosureFlow) { list.archive(from: $selection, in: modelContext) }
+        }
+      }
       Divider()
       Button("Supprimer la liste", role: .destructive) { requestDelete(list) }
     }
@@ -1016,7 +1023,7 @@ struct SidebarView: View {
     for p in sortedProjects {
       rows.append(.project(p.persistentModelID))
       if !p.isCollapsed {
-        for l in p.orderedLists { rows.append(.list(l.persistentModelID)) }
+        for l in p.activeLists { rows.append(.list(l.persistentModelID)) }
         rows.append(.addList(p.persistentModelID))
       }
     }
@@ -1029,7 +1036,7 @@ struct SidebarView: View {
     guard isProject, let p = project(id) else { return [.list(id)] }
     var keys: [RowKey] = [.project(id)]
     if !p.isCollapsed {
-      keys += p.orderedLists.map { .list($0.persistentModelID) }
+      keys += p.activeLists.map { .list($0.persistentModelID) }
       keys.append(.addList(id))
     }
     return keys
@@ -1205,7 +1212,7 @@ struct SidebarView: View {
     }
     guard let target = targetID.flatMap({ project($0) }) ?? projects.first else { return }
     moved.project = target
-    var lists = target.orderedLists.filter { $0.persistentModelID != id }
+    var lists = target.activeLists.filter { $0.persistentModelID != id }
     lists.insert(moved, at: min(index, lists.count))
     for (i, l) in lists.enumerated() { l.sortIndex = i }
     target.isCollapsed = false  // déplie le projet cible pour révéler le drop

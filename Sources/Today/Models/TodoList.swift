@@ -17,6 +17,15 @@ final class TodoList {
   /// La liste singleton qui porte les tâches sans projet — page « Tâches » de la sidebar
   /// (équivalent d'« À classer » dans Things). Créée une fois au lancement (cf. `ThingsCloneApp`).
   var isInbox: Bool = false
+  /// Quand la liste a été rangée dans les archives de son projet, ou `nil` si elle ne l'est pas.
+  /// Une date plutôt qu'un booléen : c'est aussi l'ordre des archives, la plus récente en tête.
+  ///
+  /// Archivée, elle quitte les endroits où l'on PARCOURT et où l'on RANGE — barre latérale,
+  /// grille du projet, menus « Déplacer vers… », destinations de la capsule. Elle reste là où on
+  /// la NOMME ou la CHERCHE (`#Nom`, raccourcis, recherche) : archiver ne casse rien de ce qui la
+  /// vise. Retirer un nom du jeu des Réglages le ferait réconcilier par PRÉFIXE contre les autres
+  /// listes (`QuickEntry.reconciledListToken`), et un raccourci changerait de cible sans un mot.
+  var archivedAt: Date?
   @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
 
   // Stocké en Int comme sur TaskItem : SwiftData persiste le stocké, pas le calculé.
@@ -32,6 +41,8 @@ final class TodoList {
     self.tasks = []
     self.createdAt = Date()
   }
+
+  var isArchived: Bool { archivedAt != nil }
 
   /// Ordre manuel. `createdAt` départage les ex æquo (deux tâches créées avant
   /// tout réordonnancement partagent sortIndex 0) pour que l'ordre reste stable.

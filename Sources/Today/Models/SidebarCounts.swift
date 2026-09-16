@@ -27,9 +27,16 @@ struct SidebarCounts {
     /// Les tâches qui comptent — en-têtes exclues.
     var countable = 0
     var done = 0
+    /// Au moins une tâche, comptée ou non : `countable` ignore ce qui a été coché avant aujourd'hui,
+    /// il ne distingue donc pas une liste vide d'une liste finie hier.
+    var hasTasks = false
 
     /// Le badge de la sidebar. 0 ⇒ pas de badge.
     var remaining: Int { countable - done }
+
+    /// De quoi proposer l'archivage — même règle que `ProjectBoard.Card.isFinished`. Une tâche à
+    /// faire compte TOUJOURS (`countsTowardProgress`), `remaining` est donc bien tout le reste à faire.
+    var isFinished: Bool { hasTasks && remaining == 0 }
 
     /// L'anneau. Une liste VIDE reste à 0 et pas à « tout fait » : sans ce garde, 0/0 vaudrait
     /// `nan` et l'anneau se remplirait pour une liste où il n'y a rien à faire.
@@ -43,9 +50,11 @@ struct SidebarCounts {
   /// archivée (cochée avant `bounds.startOfToday`) ne compte plus non plus — même règle que
   /// `TodoList.progress`, calculée une fois pour toutes les rangées plutôt qu'à chaque lecture.
   init(tasks: [TaskItem], bounds: DayBounds = DayBounds()) {
-    for task in tasks where !task.isHeader && task.countsTowardProgress(bounds) {
+    for task in tasks where !task.isHeader {
       guard let list = task.list?.persistentModelID else { continue }
-      rows[list, default: Row()].countable += 1
+      rows[list, default: Row()].hasTasks = true
+      guard task.countsTowardProgress(bounds) else { continue }
+      rows[list]!.countable += 1
       if task.isCompleted { rows[list]!.done += 1 }
     }
   }

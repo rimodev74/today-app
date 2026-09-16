@@ -95,4 +95,30 @@ final class SidebarCountsTests: XCTestCase {
     XCTAssertEqual(counts[list].remaining, list.remainingCount)
     XCTAssertEqual(counts[list].progress, list.progress())
   }
+
+  /// Ce qui ouvre « Archiver la liste ». Le piège : finie HIER, la liste a un anneau à 0 et rien de
+  /// compté — elle n'en est pas moins finie, et c'est justement celle qui encombre.
+  func testUneListeFinieHierResteFinie() throws {
+    let context = try makeContext()
+    let finished = TodoList(title: "Finie")
+    let empty = TodoList(title: "Vide")
+    let open = TodoList(title: "En cours")
+    let headersOnly = TodoList(title: "Titres")
+    [finished, empty, open, headersOnly].forEach(context.insert)
+    let old = add("hier", to: finished, in: context, completed: true)
+    old.completedAt = Calendar.current.date(byAdding: .day, value: -1, to: Date())
+    add("à faire", to: open, in: context)
+    add("fait", to: open, in: context, completed: true)
+    add("section", to: headersOnly, in: context, isHeader: true)
+
+    let counts = SidebarCounts(
+      tasks: [finished, empty, open, headersOnly].flatMap(\.tasks),
+      bounds: DayBounds(progressResetsDaily: true))
+
+    XCTAssertEqual(counts[finished].countable, 0, "l'anneau l'ignore bien")
+    XCTAssertTrue(counts[finished].isFinished)
+    XCTAssertFalse(counts[empty].isFinished, "rien de fait n'est pas « fini »")
+    XCTAssertFalse(counts[open].isFinished)
+    XCTAssertFalse(counts[headersOnly].isFinished, "une en-tête n'est pas une tâche")
+  }
 }

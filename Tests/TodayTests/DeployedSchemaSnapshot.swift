@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 6.0.0, 4 septembre 2026.** Ne se modifie que
+/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 7.0.0, 15 septembre 2026.** Ne se modifie que
 /// quand la forme déployée change, et alors dans le même geste que les modèles vivants — jamais
 /// pour faire taire un test.
 ///
@@ -25,6 +25,8 @@ import SwiftData
 ///   `.lightweight`. Une tâche d'avant n'avait pas d'heure et n'en a toujours pas : `nil` partout.
 /// - `TaskItem.eventIdentifier`, 4 septembre 2026 — l'événement Calendrier d'une tâche à durée,
 ///   ajout PUR (optionnel), étape `.lightweight`. Aucune base d'avant n'a écrit d'événement.
+/// - `TodoList.archivedAt`, 15 septembre 2026 — une liste terminée rangée dans les archives de son
+///   projet, ajout PUR (optionnel), étape `.lightweight`. Aucune liste d'avant n'est archivée.
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -40,7 +42,7 @@ import SwiftData
 /// ces classes relisent sans perte un fichier écrit par les modèles de premier niveau, relations
 /// comprises.
 enum DeployedSchemaSnapshot: VersionedSchema {
-  static let versionIdentifier = Schema.Version(6, 0, 0)
+  static let versionIdentifier = Schema.Version(7, 0, 0)
 
   static var models: [any PersistentModel.Type] {
     [Project.self, TodoList.self, TaskItem.self, Subtask.self]
@@ -69,6 +71,7 @@ enum DeployedSchemaSnapshot: VersionedSchema {
     var priorityRaw: Int = 0
     var project: Project?
     var isInbox: Bool = false
+    var archivedAt: Date?
     @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
 
     init() {}

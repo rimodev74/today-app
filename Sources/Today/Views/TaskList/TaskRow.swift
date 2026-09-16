@@ -713,7 +713,8 @@ struct TaskRow: View {
     if subtask.title.trimmingCharacters(in: .whitespaces).isEmpty {
       focusedSubtask = nil
     } else {
-      focusedSubtask = task.addSubtask().uuid
+      // Même transaction que `addNewSubtask` : sans elle la rangée surgit et la carte saute.
+      withAnimation(taskFlow) { focusedSubtask = task.addSubtask().uuid }
     }
   }
 
@@ -766,7 +767,7 @@ struct TaskRow: View {
     } label: {
       Image(systemName: "calendar")
         .font(.app(13, weight: .regular))
-        .foregroundStyle(task.when != nil ? Color.accentColor : Color.secondary)
+        .foregroundStyle(task.when != nil ? tint : Color.secondary)
         .frame(width: 22, height: 22)
         .contentShape(Rectangle())
     }
@@ -957,13 +958,13 @@ struct TaskRow: View {
   }
 
   /// Icône de la rangée d'actions : éteinte tant que rien n'est défini, teintée dès qu'une
-  /// valeur existe.
+  /// valeur existe — de sa couleur propre (priorité) ou, à défaut, de celle de la page.
   private func actionIcon(_ name: String, active: Bool = false, tint: Color? = nil) -> some View {
     Image(systemName: name)
       .font(.app(15))
       .foregroundStyle(
         active
-          ? (tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(Color.accentColor))
+          ? AnyShapeStyle(tint ?? self.tint)
           : AnyShapeStyle(.secondary)
       )
       .frame(width: 22, height: 22)

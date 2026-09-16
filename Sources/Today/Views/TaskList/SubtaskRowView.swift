@@ -15,6 +15,8 @@ struct SubtaskRowView: View {
   var onDelete: () -> Void
 
   @State private var hovering = false
+  /// La couleur de la page, comme la case d'une tâche (cf. `EnvironmentValues.pageTint`).
+  @Environment(\.pageTint) private var tint
 
   var body: some View {
     HStack(spacing: 10) {
@@ -30,7 +32,15 @@ struct SubtaskRowView: View {
           .textFieldStyle(.plain)
           .foregroundStyle(.secondary)
           .focused($focus, equals: subtask.uuid)
-          .onSubmit(onEnter)
+          // Intercepté AVANT le field editor, pas en `onSubmit` : un `NSTextField` qui valide
+          // re-sélectionne tout son texte, et ce surlignage restait visible le temps que le focus
+          // rejoigne la nouvelle sous-tâche. Même geste que le titre de `TaskRow`.
+          // `\u{03}` : l'Entrée du pavé numérique (et fn+↩), que `onSubmit` couvrait aussi.
+          .onKeyPress(phases: .down) { press in
+            guard press.key == .return || press.characters == "\u{03}" else { return .ignored }
+            onEnter()
+            return .handled
+          }
       } else {
         Text(subtask.title)
           .strikethrough(subtask.isDone)
@@ -60,23 +70,23 @@ struct SubtaskRowView: View {
   }
 
   /// Case carrée mais NETTEMENT plus arrondie que celle d'une tâche (rayon 5,5 sur 14 vs 4,5 sur 16).
-  /// Cochée : contour bleu accent + ✓ bleu sur fond léger — assez marqué pour se lire d'un coup
-  /// d'œil dans une liste dépliée, sans le bleu plein d'une tâche parente cochée.
+  /// Cochée : contour + ✓ à la couleur de la page sur fond léger — assez marqué pour se lire d'un
+  /// coup d'œil dans une liste dépliée, sans le plein d'une tâche parente cochée.
   private var subtaskCheckbox: some View {
     RoundedRectangle(cornerRadius: 5.5, style: .continuous)
       .strokeBorder(
-        subtask.isDone ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary),
+        subtask.isDone ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary),
         lineWidth: 1.5
       )
       .background {
         RoundedRectangle(cornerRadius: 5.5, style: .continuous)
-          .fill(Color.accentColor.opacity(subtask.isDone ? 0.14 : 0))
+          .fill(tint.opacity(subtask.isDone ? 0.14 : 0))
       }
       .overlay {
         if subtask.isDone {
           Image(systemName: "checkmark")
             .font(.app(9, weight: .bold))
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(tint)
         }
       }
       .frame(width: 14, height: 14)
@@ -84,17 +94,19 @@ struct SubtaskRowView: View {
   }
 }
 
-/// Petit anneau de progression (fraction 0…1) pour l'en-tête du dépliant de sous-tâches : l'arc bleu
-/// se remplit au fur et à mesure des sous-tâches cochées.
+/// Petit anneau de progression (fraction 0…1) pour l'en-tête du dépliant de sous-tâches : l'arc, à
+/// la couleur de la page, se remplit au fur et à mesure des sous-tâches cochées.
 struct SubtaskProgressRing: View {
   let fraction: Double
+
+  @Environment(\.pageTint) private var tint
 
   var body: some View {
     ZStack {
       Circle().stroke(Color.secondary.opacity(0.25), lineWidth: 2)
       Circle()
         .trim(from: 0, to: max(0, min(1, fraction)))
-        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
         // Départ à midi plutôt qu'à 3 h (l'arc de `trim` commence à droite par défaut).
         .rotationEffect(.degrees(-90))
     }

@@ -83,6 +83,35 @@ extension TodoList {
     // planter l'app le 6 août 2026 : la vraie cause était l'annulation, cf. `deleteCascadeAndSave`.
     forget(doomed)
   }
+
+  /// Range la liste dans les archives de son projet, pour les deux endroits qui l'offrent (clic
+  /// droit dans la sidebar, menu d'une carte de projet). Rien n'est effacé : ses tâches restent,
+  /// et elle se retrouve en bas de la page du projet.
+  ///
+  /// La sélection part sur le projet quand c'est CETTE liste qui est affichée : sa ligne vient de
+  /// quitter la sidebar, et c'est là que la liste s'est rangée. Ce changement de page-là ne s'anime
+  /// pas, même si l'appelant anime le reste : une page ne s'anime JAMAIS en changeant (cf.
+  /// `SidebarView.navigate`) — seule la ligne qui s'en va le fait.
+  func archive(from selection: Binding<SidebarSelection?>, in context: ModelContext) {
+    if selection.wrappedValue == .list(self) {
+      var instant = Transaction()
+      instant.disablesAnimations = true
+      withTransaction(instant) {
+        selection.wrappedValue = project.map(SidebarSelection.project) ?? .smartList(.all)
+      }
+    }
+    archivedAt = Date()
+    try? context.save()
+  }
+
+  /// Ressort la liste des archives. Elle revient EN FIN de projet, pas à son ancien rang : entre-
+  /// temps, un glissement a pu renuméroter les listes restées en place (cf. `SidebarView`), et son
+  /// vieux `sortIndex` la ferait retomber n'importe où parmi elles.
+  func unarchive(in context: ModelContext) {
+    archivedAt = nil
+    sortIndex = (project?.lists.map(\.sortIndex).max() ?? -1) + 1
+    try? context.save()
+  }
 }
 
 enum SmartList: Hashable, CaseIterable {

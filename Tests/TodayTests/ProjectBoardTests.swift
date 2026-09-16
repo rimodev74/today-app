@@ -234,4 +234,40 @@ final class ProjectBoardTests: XCTestCase {
     XCTAssertEqual(board.cards[0].progress, 0)
     XCTAssertEqual(board.cards[0].remainingCount, 1)
   }
+
+  // MARK: Les archives
+
+  /// Une archivée quitte la grille et le total, et les archives se lisent de la plus récente à la
+  /// plus ancienne — pas dans l'ordre manuel, qui ne veut plus rien dire pour elles.
+  func testArchivedListsLeaveTheGridMostRecentFirst() {
+    let old = list("ancienne", sortIndex: 0, tasks: [task("faite", done: true)])
+    old.archivedAt = Date(timeIntervalSince1970: 1_000)
+    let recent = list("récente", sortIndex: 1, tasks: [task("faite", done: true)])
+    recent.archivedAt = Date(timeIntervalSince1970: 2_000)
+    let active = list("en cours", sortIndex: 2, tasks: [task("à faire")])
+
+    let board = ProjectBoard.build(from: project([old, recent, active]), previewLimit: 4)
+
+    XCTAssertEqual(board.cards.map(\.list.title), ["en cours"])
+    XCTAssertEqual(board.archived.map(\.title), ["récente", "ancienne"])
+    XCTAssertEqual(board.remainingCount, 1)
+  }
+
+  /// `isFinished` ne lit pas l'anneau : finie hier, une liste y vaut 0 et reste finie.
+  func testIsFinishedIgnoresTheDailyRingReset() {
+    let old = task("faite hier", done: true)
+    old.completedAt = Calendar.current.date(byAdding: .day, value: -1, to: Date())
+    let board = ProjectBoard.build(
+      from: project([
+        list("finie hier", sortIndex: 0, tasks: [old]),
+        list("vide", sortIndex: 1),
+        list("en cours", sortIndex: 2, tasks: [task("à faire"), task("faite", done: true)]),
+        list("titres", sortIndex: 3, tasks: [task("section", header: true)]),
+      ]),
+      previewLimit: 4,
+      bounds: DayBounds(progressResetsDaily: true))
+
+    XCTAssertEqual(board.cards.map(\.isFinished), [true, false, false, false])
+    XCTAssertEqual(board.cards[0].progress, 0)
+  }
 }

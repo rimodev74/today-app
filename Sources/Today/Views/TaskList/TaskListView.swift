@@ -86,7 +86,8 @@ private struct ListPageView: View {
   /// vol comme les autres et consulte la cible au relâchement (cf. `endDrag`).
   @Environment(SidebarDrop.self) private var filing
   @Environment(\.modelContext) private var modelContext
-  // Toutes les listes, pour l'action « Déplacer vers… » du menu d'une tâche.
+  // Toutes les listes, archivées comprises : `#Nom` les vise encore. Le « Déplacer vers… » du menu
+  // d'une tâche, lui, en écarte les archivées (cf. `moveTargets` en tête du body).
   @Query private var allLists: [TodoList]
   // Idem pour la saisie rapide `#projet`, qui vise la première liste du projet.
   @Query private var allProjects: [Project]
@@ -162,6 +163,11 @@ private struct ListPageView: View {
     // elle-même dans la séquence, soit un balayage quadratique à chaque image de glissement.
     let offsets = state?.rows.offsets() ?? [:]
     let placeholder = state.flatMap(dragPlaceholderRect)
+    // Même règle : le « Déplacer vers… » de TOUTES les rangées, filtré une fois. Les archivées en
+    // sortent ici et pas dans la requête : `allLists` sert aussi à `#Nom`, qui les garde.
+    let moveTargets = allLists.filter {
+      !$0.isArchived && $0.persistentModelID != list.persistentModelID
+    }
     return GeometryReader { geo in
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
@@ -177,10 +183,10 @@ private struct ListPageView: View {
           // créer y insère la tâche à la fin de CE bloc, pas tout en bas de la liste.
           ForEach(blocks) { block in
             if let header = block.header {
-              draggableRow(for: header, offsets: offsets)
+              draggableRow(for: header, offsets: offsets, moveTargets: moveTargets)
             }
             ForEach(block.tasks) { task in
-              draggableRow(for: task, offsets: offsets)
+              draggableRow(for: task, offsets: offsets, moveTargets: moveTargets)
             }
             if showsNewTaskField(block) {
               // Le champ s'efface pendant un drag, mais reste MONTÉ : `rowFrames` est gelé à
@@ -549,9 +555,9 @@ private struct ListPageView: View {
 
   /// Enveloppe drag/drop d'une ligne (en-tête ou tâche), mutualisée entre les deux : mesure de la
   /// position de repos, décalage/soulevé pendant le drag, et le geste unique de la page.
-  private func draggableRow(for task: TaskItem, offsets: [RowKey: CGFloat])
-    -> some View
-  {
+  private func draggableRow(
+    for task: TaskItem, offsets: [RowKey: CGFloat], moveTargets: [TodoList]
+  ) -> some View {
     // `lifted` = cette ligne fait partie du groupe tiré (bloc entier pour une en-tête) → elle se
     // soulève. `grabbed` = c'est LA ligne empoignée → elle porte l'ancre du léger agrandissement.
     // `folding` = une tâche du bloc dont on tire l'en-tête : elle s'estompe (se replie dans le
@@ -560,7 +566,7 @@ private struct ListPageView: View {
     let grabbed = draggingID == task.persistentModelID
     let folding = lifted && !task.isHeader && draggedGroup.first?.isHeader == true
     return
-      row(for: task)
+      row(for: task, moveTargets: moveTargets)
       // Carte éditée : marge basse pour ne pas coller la ligne suivante (ou « Nouvelle tâche »).
       // Pas pour une en-tête : elle n'a pas de carte de notes qui s'étend, la marge ne ferait
       // qu'ajouter un vide sous sa pilule.
@@ -625,7 +631,7 @@ private struct ListPageView: View {
   /// l'appelant). L'en-tête a désormais, comme la tâche, un état repos (titre en lecture) et un état
   /// édition (double-clic), pilotés par `focus`.
   @ViewBuilder
-  private func row(for task: TaskItem) -> some View {
+  private func row(for task: TaskItem, moveTargets: [TodoList]) -> some View {
     if task.isHeader {
       HeaderRow(
         task: task,
@@ -634,7 +640,7 @@ private struct ListPageView: View {
         isDragging: draggingID == task.persistentModelID,
         // Nombre RÉEL de tâches rattachées (badge rouge) ; les calques, eux, sont plafonnés à 3.
         attachedTaskCount: draggingID == task.persistentModelID ? draggedGroup.count - 1 : 0,
-        moveTargets: allLists.filter { $0.persistentModelID != list.persistentModelID },
+        moveTargets: moveTargets,
         onEndEditing: { endEditingHeader(task) },
         onMove: { moveHeader(task, to: $0) },
         onCopy: { copyHeaderToClipboard(task) },
@@ -646,7 +652,7 @@ private struct ListPageView: View {
         task: task,
         isSelected: focus.isSelected(task),
         isEditing: focus.isEditing(task),
-        moveTargets: allLists.filter { $0.persistentModelID != list.persistentModelID },
+        moveTargets: moveTargets,
         onBeginEditing: { beginEditing(task) },
         onEndEditing: { endEditing(task) },
         onMove: { move(task, to: $0) },
@@ -1253,7 +1259,7 @@ private struct ListPageView: View {
 
   private func resolveQuickEntryTarget(_ name: String) -> TodoList? {
     allLists.first { $0.title == name }
-      ?? allProjects.first { $0.title == name }?.orderedLists.first
+      ?? allProjects.first { $0.title == name }?.activeLists.first
   }
 
   // MARK: En-tête de liste
@@ -1613,36 +1619,35 @@ private struct ProjectPageView: View {
   /// dégradé qui dit « ça continue ».
   private static let previewLimit = 6
 
-  /// Projets dont les cartes ont déjà fait leur entrée pendant cette session : le rebond accueille
-  /// une première ouverture, il ne se rejoue pas à chaque aller-retour depuis une liste. En
-  /// mémoire seule, exprès — un relancement est une nouvelle session.
-  private static var enteredProjects: Set<PersistentIdentifier> = []
-  /// Le projet dont l'entrée vient d'être lancée. `enteredProjects` seul ne suffit pas : écrire un
-  /// `static` ne fait rien re-rendre, c'est ce `@State` — LU dans le body — qui porte la
-  /// transaction animée.
+  /// Le projet dont les cartes ont fait leur entrée. Elles la rejouent à CHAQUE ouverture : la vue
+  /// est détruite dès qu'on quitte le projet (autre branche de `TaskListView.page`), et réutilisée
+  /// d'un projet à l'autre — dans les deux cas, ce `@State` ne vaut pas le projet affiché au
+  /// premier rendu, les cartes partent donc cachées et `onChange` les fait entrer.
   @State private var entranceTrigger: PersistentIdentifier?
+  /// Le dépliant des listes archivées, replié à chaque ouverture d'un projet (cf. `onChange`).
+  @State private var archiveExpanded = false
+
+  private static let columns = [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 16)]
 
   var body: some View {
     // Construit UNE fois en tête du body, puis distribué (cf. Conventions) : lu depuis les
-    // rangées, chaque chiffre retraverserait SwiftData à chaque rendu.
-    let board = ProjectBoard.build(from: project, previewLimit: Self.previewLimit)
-    let cardsShown =
-      entranceTrigger == project.persistentModelID
-      || Self.enteredProjects.contains(project.persistentModelID)
+    // rangées, chaque chiffre retraverserait SwiftData à chaque rendu. `bounds` aussi : les cartes
+    // en cours et celles des archives lisent le réglage de l'anneau au MÊME instant.
+    let bounds = DayBounds()
+    let board = ProjectBoard.build(from: project, previewLimit: Self.previewLimit, bounds: bounds)
+    let cardsShown = entranceTrigger == project.persistentModelID
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 20) {
         header
         listsHeader(board)
-        LazyVGrid(
-          columns: [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 16)],
-          alignment: .leading, spacing: 16
-        ) {
+        LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
           ForEach(Array(board.cards.enumerated()), id: \.element.id) { rank, card in
             ListCardView(
               card: card,
               open: { selection = .list(card.list) },
               rename: { rename(card.list) },
+              archive: card.isFinished ? ("Archiver la liste", { archive(card.list) }) : nil,
               delete: { requestDelete(card.list) }
             )
             .enteringCard(cardsShown, rank: rank)
@@ -1660,6 +1665,8 @@ private struct ProjectPageView: View {
         // `taskContentColumn`) : sans elle, les cartes partaient du bord de section, 20 pt trop à
         // gauche de tout le reste de la page (mesuré le 10 août 2026).
         .padding(.leading, taskContentColumn)
+
+        archiveSection(board, bounds: bounds)
       }
       // `gutter`, comme toutes les autres pages : à `gutter - 8`, l'en-tête et son encadré de notes
       // tombaient 8 pt à gauche de ceux d'une liste — un décalage que rien ne justifiait, visible
@@ -1676,7 +1683,8 @@ private struct ProjectPageView: View {
     // `initial` ET changement : la vue est RÉUTILISÉE d'un projet à l'autre (pas d'`.id`, cf.
     // `TaskListView.page`), `onAppear` ne verrait que le premier.
     .onChange(of: project.persistentModelID, initial: true) { _, id in
-      guard Self.enteredProjects.insert(id).inserted else { return }
+      // Hors transaction : un autre projet ne doit pas hériter du dépliant ouvert sur le précédent.
+      archiveExpanded = false
       withAnimation(cardEntrance) { entranceTrigger = id }
     }
     .alert(
@@ -1777,6 +1785,69 @@ private struct ProjectPageView: View {
     pendingTitleFocus = list.persistentModelID
   }
 
+  /// « N listes archivées », replié par défaut, sous la grille. Même geste que les tâches archivées
+  /// d'une liste (`ListPageView.archiveSection`) : absent tant que rien n'est archivé, et son
+  /// contenu RETIRÉ quand il est replié — les cartes des archives ne sont fabriquées qu'ici, à
+  /// l'ouverture (cf. `ProjectBoard.archived`).
+  @ViewBuilder
+  private func archiveSection(_ board: ProjectBoard, bounds: DayBounds) -> some View {
+    let count = board.archived.count
+    if count > 0 {
+      let plural = count > 1 ? "s" : ""
+      VStack(alignment: .leading, spacing: 0) {
+        Divider().padding(.vertical, 10)
+
+        Button {
+          withAnimation(disclosureFlow) { archiveExpanded.toggle() }
+        } label: {
+          HStack(spacing: 6) {
+            Text("\(count) liste\(plural) archivée\(plural)")
+              .font(.app(.subheadline).weight(.semibold))
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+              .font(.app(10, weight: .semibold))
+              .rotationEffect(.degrees(archiveExpanded ? 90 : 0))
+          }
+          .foregroundStyle(.secondary)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if archiveExpanded {
+          let cards = ProjectBoard.cards(
+            for: board.archived, previewLimit: Self.previewLimit, bounds: bounds)
+          LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
+            ForEach(cards) { card in
+              ListCardView(
+                card: card,
+                open: { selection = .list(card.list) },
+                rename: { rename(card.list) },
+                archive: ("Désarchiver", { unarchive(card.list) }),
+                delete: { requestDelete(card.list) }
+              )
+              .transition(.opacity)
+            }
+          }
+          .padding(.top, 16)
+          // Fondu EXPLICITE : un vrai retrait/insertion (cf. `PIEGES.md` § Animations).
+          .transition(.opacity)
+        }
+      }
+      .padding(.leading, taskContentColumn)
+      .transition(.opacity)
+    }
+  }
+
+  /// La carte quitte la grille en fondu et les autres coulent à sa place, comme une suppression —
+  /// sauf que la liste, elle, reste en base.
+  private func archive(_ list: TodoList) {
+    withAnimation(boardFlow) { list.archive(from: $selection, in: modelContext) }
+  }
+
+  private func unarchive(_ list: TodoList) {
+    withAnimation(boardFlow) { list.unarchive(in: modelContext) }
+  }
+
   private func requestDelete(_ list: TodoList) {
     if list.needsDeleteConfirmation {
       deletionCandidate = list
@@ -1811,6 +1882,9 @@ private struct ListCardView: View {
   let card: ProjectBoard.Card
   let open: () -> Void
   let rename: () -> Void
+  /// « Archiver la liste » sur une carte finie, « Désarchiver » dans les archives, `nil` sinon.
+  /// Sans valeur par défaut : chacune des deux grilles se prononce.
+  let archive: (title: String, run: () -> Void)?
   let delete: () -> Void
 
   @State private var hovering = false
@@ -1938,11 +2012,15 @@ private struct ListCardView: View {
     return n == 0 ? "Aucune tâche en attente" : "\(n) tâche\(n > 1 ? "s" : "") en attente"
   }
 
-  /// Le MÊME menu que le clic droit sur une liste dans la sidebar. Renommer ouvre la liste avec
-  /// son titre en édition (cf. `ProjectPageView.rename`), faute de champ éditable sur la carte.
+  /// Le MÊME menu que le clic droit sur une liste dans la sidebar — « Désarchiver » en plus, qu'on
+  /// ne peut offrir qu'ici : une archivée n'a pas de ligne dans la sidebar. Renommer ouvre la liste
+  /// avec son titre en édition (cf. `ProjectPageView.rename`), faute de champ éditable sur la carte.
   private var menu: some View {
     Menu {
       Button("Renommer") { rename() }
+      if let archive {
+        Button(archive.title, action: archive.run)
+      }
       Divider()
       Button("Supprimer la liste", role: .destructive) { delete() }
     } label: {

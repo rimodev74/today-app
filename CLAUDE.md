@@ -341,6 +341,13 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   capsule : l'écran avance quand une tâche arrive en base (`ModelContext.didSave`, pas de `@Query`).
   Le Mac animé de trois écrans (`OnboardingShowcase.swift`) est un EXEMPLE en cours de validation.
   On revoit l'accueil par *Aide ▸ Revoir l'accueil*.
+- **Les listes archivées** — une liste FINIE (au moins une tâche, plus rien à faire) s'archive par le
+  clic droit de la sidebar ou le ••• de sa carte, et se retrouve dans « N listes archivées », replié
+  sous la grille du projet (« Désarchiver » la remet EN FIN de projet). Rien n'est effacé
+  (`TodoList.archivedAt`, schéma 7.0.0). La règle qui porte tout : archivée, elle quitte les endroits
+  où l'on PARCOURT et où l'on RANGE (`Project.activeLists`, les « Déplacer vers… », les destinations
+  de la capsule) mais reste là où on la NOMME ou la CHERCHE (`#Nom`, raccourcis, recherche) — les
+  Réglages réconcilient un raccourci par PRÉFIXE, lui retirer un nom le ferait changer de cible.
 - **Le glisser** existe sur une liste, « Aujourd'hui » et « Tâches ». « À venir » et « Archives »
   n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus — c'est un tableau
   de cartes, il n'y a aucune ligne de tâche à y glisser.

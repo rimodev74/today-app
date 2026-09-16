@@ -24,9 +24,10 @@ struct AllTasksPageView: View {
   /// relâchement (cf. `dropTaskDrag`).
   @Environment(SidebarDrop.self) private var filing
   @Query private var allTasks: [TaskItem]
-  /// Cibles du « Déplacer vers… ». Toutes les listes : une tâche à classer peut aller n'importe où
-  /// — c'est même le geste principal de cette page.
-  @Query private var allLists: [TodoList]
+  /// Cibles du « Déplacer vers… ». Toutes les listes EN COURS : une tâche à classer peut aller
+  /// n'importe où — c'est même le geste principal de cette page. Les archivées sont écartées par la
+  /// requête, pas par rangée (cf. `TodoList.archivedAt`).
+  @Query(filter: #Predicate<TodoList> { $0.archivedAt == nil }) private var activeLists: [TodoList]
   @Query(filter: #Predicate<TodoList> { $0.isInbox }) private var inboxLists: [TodoList]
 
   /// Brouillon du champ de création : une tâche notée ici n'a ni projet ni date, c'est la
@@ -128,7 +129,7 @@ struct AllTasksPageView: View {
       task: task,
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
-      moveTargets: allLists.filter { $0.persistentModelID != task.list?.persistentModelID },
+      moveTargets: activeLists.filter { $0.persistentModelID != task.list?.persistentModelID },
       showsDate: true,
       parentTag: nil,
       onBeginEditing: { beginEditing(task) },
@@ -171,7 +172,7 @@ struct AllTasksPageView: View {
       withAnimation(disclosureFlow) { dragCollapse.reset() }
     }
     guard reorder.draggedTask != nil else { return }
-    dropTaskDrag(&reorder, onto: filing, lists: allLists, in: modelContext) { ordered in
+    dropTaskDrag(&reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
       // Toutes comparables entre elles (même liste) : renuméroter la séquence entière est juste.
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()

@@ -34,9 +34,14 @@ final class Project {
     set { colorRaw = newValue?.rawValue }
   }
 
+  /// TOUTES les listes, archivées comprises, dans l'ordre manuel. Ce que la barre latérale, la
+  /// grille et les destinations montrent, c'est `activeLists`.
   var orderedLists: [TodoList] {
     sortedByKey(lists, key: { ($0.sortIndex, $0.createdAt) }, areInIncreasingOrder: <)
   }
+
+  /// Les listes en cours, dans l'ordre manuel — sans les archivées (cf. `TodoList.archivedAt`).
+  var activeLists: [TodoList] { orderedLists.filter { !$0.isArchived } }
 
   var allTasks: [TaskItem] { lists.flatMap(\.tasks) }
 
