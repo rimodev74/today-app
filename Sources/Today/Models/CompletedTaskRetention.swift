@@ -7,9 +7,9 @@ enum CompletedTaskRetention: String, CaseIterable, Identifiable {
 
   static let storageKey = "completedTaskRetention"
 
-  /// Délai du mode `.timer`, partagé : `TaskListView` l'utilise pour faire sortir la ligne du flux,
-  /// les modèles pour savoir si la tâche compte encore dans une progression. Deux constantes
-  /// auraient divergé.
+  /// Délai du mode `.timer`, partagé : les pages de tâches l'utilisent pour faire sortir la ligne du
+  /// flux (`ListPageView` et `AllTasksPageView`, qui programment chacune leur réveil), les modèles
+  /// pour savoir si la tâche compte encore dans une progression. Deux constantes auraient divergé.
   static let timerDelay: TimeInterval = 1.5
 
   /// Le réglage vu d'un modèle. `@AppStorage` n'existe que dans une vue — même clé, même défaut.

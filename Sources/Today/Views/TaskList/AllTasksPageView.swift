@@ -40,11 +40,17 @@ struct AllTasksPageView: View {
   @State private var reorder = TaskPageReorder()
   /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskDragCollapse`).
   @State private var dragCollapse = TaskDragCollapse()
+  /// Quand une tâche cochée quitte le flux. Même réglage, même règle et mêmes deux réveils qu'une
+  /// page de liste (cf. `ListPageView`) : la sortie dépend de l'HEURE QU'IL EST, or SwiftUI ne
+  /// redessine que sur changement d'état.
+  @AppStorage(CompletedTaskRetention.storageKey) private var retentionRaw = CompletedTaskRetention
+    .untilNextDay.rawValue
+  @State private var tick = Date()
 
   var body: some View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture refiltrait et retriait
     // toute la base — plusieurs fois par image.
-    let page = AllTasksPage.build(tasks: allTasks)
+    let page = AllTasksPage.build(tasks: allTasks, retention: retention, now: tick)
     let offsets = reorder.offsets()
     // Largeur EXPLICITE et pas `maxWidth: .infinity`, sans quoi le titre d'une tâche en édition
     // disparaît. Le pourquoi est dans `PIEGES.md` § Layout, avec la mesure.
@@ -76,6 +82,13 @@ struct AllTasksPageView: View {
       // Une ligne qui apparaît ou disparaît sous le geste (la synchro Rappels, un ⌘Z) invaliderait
       // la séquence figée : on désarme plutôt que de viser dans le vide.
       if reorder.isDragging { reorder.end() }
+    }
+    // Minuit : ce qui a été coché hier quitte le flux (mode « jusqu'au lendemain »). Même réveil,
+    // pour la même raison, que sur une page de liste.
+    .onReceive(
+      NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
+    ) { _ in
+      withAnimation(taskInsert) { tick = Date() }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
@@ -137,7 +150,7 @@ struct AllTasksPageView: View {
       onMove: { move(task, to: $0) },
       onDuplicate: { duplicate(task) },
       onDelete: { delete(task) },
-      onCompletionChanged: {},
+      onCompletionChanged: scheduleRetentionRefresh,
       collapsedForDrag: dragCollapse.isCollapsed(task)
     )
     .rowPressGesture(
@@ -176,6 +189,20 @@ struct AllTasksPageView: View {
       // Toutes comparables entre elles (même liste) : renuméroter la séquence entière est juste.
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
+    }
+  }
+
+  private var retention: CompletedTaskRetention {
+    CompletedTaskRetention(rawValue: retentionRaw) ?? .untilNextDay
+  }
+
+  /// Cocher en mode « après 1,5 s » : programme le redessin qui fera sortir la ligne. Ailleurs, le
+  /// seuil ne dépend pas de l'heure — rien à réveiller.
+  private func scheduleRetentionRefresh() {
+    guard retention == .timer else { return }
+    Task {
+      try? await Task.sleep(for: .seconds(CompletedTaskRetention.timerDelay))
+      withAnimation(taskInsert) { tick = Date() }
     }
   }
 
@@ -279,7 +306,7 @@ struct AllTasksPageView: View {
     // Juste SOUS la ligne visée. Cette page range par ordre manuel (cf. `AllTasksPage.build`), pas
     // par `sortIndex` : c'est lui qu'on renumérote, et seulement quand une ligne est visée — même
     // règle que sur « Aujourd'hui ».
-    var ordered = AllTasksPage.build(tasks: allTasks).tasks
+    var ordered = AllTasksPage.build(tasks: allTasks, retention: retention, now: tick).tasks
     withAnimation(taskInsert) {
       if let index = ordered.firstIndex(where: { focus.isSelected($0) }) {
         ordered.insert(task, at: index + 1)

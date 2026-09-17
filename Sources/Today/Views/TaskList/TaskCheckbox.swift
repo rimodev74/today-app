@@ -44,6 +44,13 @@ struct TaskCheckbox: View {
             .trim(from: 0, to: isCompleted ? 1 : 0)
             .stroke(.white, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
             .frame(width: size * 0.52, height: size * 0.52)
+            // L'opacité EN PLUS du tracé, et c'est le correctif du 17 septembre 2026. `taskInsert`
+            // est un ressort critiquement amorti : il approche sa cible sans jamais l'atteindre
+            // franchement — ~2 % de trajet restant 0,3 s après le décochage. Sur un fond
+            // (`opacity`) 2 % ne se voit pas ; sur une GÉOMÉTRIE si : 2 % du chemin avec un bout
+            // rond de 1,7 pt, c'est un point blanc en pleine opacité sur la ligne sélectionnée,
+            // qui traîne puis saute. La coche se retire donc comme le fond, à la même courbe.
+            .opacity(isCompleted ? 1 : 0)
         }
         .frame(width: size, height: size)
         .contentShape(Rectangle())

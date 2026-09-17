@@ -20,9 +20,19 @@ struct AllTasksPage {
   /// automatique pour PLACER ce qui n'a jamais été glissé. C'est celui que la page a toujours eu —
   /// et pas le `sortIndex` de la liste Inbox, qui donnerait à la même liste deux ordres selon qu'on
   /// la lit ici ou depuis la barre latérale.
-  static func build(tasks: [TaskItem]) -> AllTasksPage {
+  ///
+  /// **Une tâche cochée RESTE**, barrée et repoussée en bas par le tri. Le filtre était
+  /// `!isCompleted` : la ligne disparaissait sous le clic, comme archivée d'office, et rien ne
+  /// confirmait la coche qu'on venait de poser. Ce qui la fait sortir est la règle COMMUNE à toute
+  /// l'app — `CompletedTaskRetention`, celle d'une page de liste —, pas une seconde règle propre à
+  /// celle-ci.
+  static func build(
+    tasks: [TaskItem], retention: CompletedTaskRetention = .current, now: Date = Date()
+  ) -> AllTasksPage {
     AllTasksPage(
       tasks: SmartList.today.sort(
-        tasks.filter { $0.list?.isInbox == true && !$0.isCompleted && !$0.isHeader }))
+        tasks.filter {
+          $0.list?.isInbox == true && !$0.isHeader && !$0.hasLeftTheFlow(retention, now: now)
+        }))
   }
 }

@@ -19,8 +19,13 @@ final class AllTasksPageTests: XCTestCase {
 
   private func today() -> Date { Calendar.current.startOfDay(for: Date()) }
 
-  private func build(_ ctx: ModelContext) throws -> AllTasksPage {
-    AllTasksPage.build(tasks: try ctx.fetch(FetchDescriptor<TaskItem>()))
+  /// Rétention INJECTÉE, jamais lue dans les défauts : un test qui dépend du réglage de la machine
+  /// passe ou casse selon ce qu'on a coché dans les Réglages la veille.
+  private func build(
+    _ ctx: ModelContext, retention: CompletedTaskRetention = .untilNextDay, now: Date = Date()
+  ) throws -> AllTasksPage {
+    AllTasksPage.build(
+      tasks: try ctx.fetch(FetchDescriptor<TaskItem>()), retention: retention, now: now)
   }
 
   private func inbox(_ ctx: ModelContext) -> TodoList {
@@ -65,11 +70,28 @@ final class AllTasksPageTests: XCTestCase {
     XCTAssertEqual(try build(ctx).tasks.map(\.title), ["aujourd'hui"])
   }
 
-  /// Une tâche cochée n'est plus à classer : elle vit dans « Archives ».
-  func testCompletedTasksLeaveTheInbox() throws {
+  /// **Une tâche qu'on vient de cocher RESTE affichée**, barrée. Elle disparaissait sous le clic :
+  /// plus rien ne confirmait la coche, et on la croyait archivée d'office. (Où elle se range est
+  /// l'affaire de `SmartList.sort` et de son réglage « Descendre en bas », testés chez eux.)
+  func testAFreshlyCompletedTaskStays() throws {
     let ctx = try makeContext()
-    let faite = TaskItem(title: "faite", list: inbox(ctx))
+    let list = inbox(ctx)
+    ctx.insert(TaskItem(title: "à faire", list: list))
+    let faite = TaskItem(title: "faite", list: list)
     faite.isCompleted = true
+    faite.completedAt = Date()
+    ctx.insert(faite)
+
+    XCTAssertEqual(try build(ctx).tasks.map(\.title), ["à faire", "faite"])
+  }
+
+  /// Et elle sort par la règle COMMUNE, pas par un filtre propre à cette page : cochée hier, elle
+  /// n'est plus là ce matin — elle se lit dans « Archives ».
+  func testYesterdaysCompletedTaskLeavesTheInbox() throws {
+    let ctx = try makeContext()
+    let faite = TaskItem(title: "faite hier", list: inbox(ctx))
+    faite.isCompleted = true
+    faite.completedAt = today().addingTimeInterval(-3600)
     ctx.insert(faite)
 
     XCTAssertTrue(try build(ctx).tasks.isEmpty)

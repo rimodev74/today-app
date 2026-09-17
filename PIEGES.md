@@ -978,6 +978,24 @@ aplatir ombres et masque en une texture. CPU cumulé sur 30 s, fenêtre au premi
 Rappels **4,3 → 8,3 %**, écran Prêt **5,3 → 11,2 %**. Le contenu et l'échelle changeant à chaque
 image du passage, la texture est refaite à chaque image, en plus du reste. Retiré.
 
+### La queue d'un ressort amorti ne se voit pas sur une opacité, elle se voit sur une GÉOMÉTRIE
+
+(17 septembre 2026.) Symptôme : après avoir DÉcoché une tâche, un léger trait blanc restait sur la
+ligne, puis sautait. La case à cocher pilote deux choses avec le même état : le fond du carré par
+`.opacity(isCompleted ? 1 : 0)`, et la coche elle-même par `.trim(to: isCompleted ? 1 : 0)` — le
+tracé qui la dessine à l'endroit et l'efface à l'envers.
+
+Les deux partent sur la MÊME courbe, `taskInsert`, un ressort à `dampingFraction: 1`. Critiquement
+amorti veut dire qu'il approche sa cible sans jamais l'atteindre franchement : `response: 0.32`
+laisse encore **~2 % du trajet 0,3 s après le geste**. Sur une opacité, 2 % est invisible. Sur une
+géométrie, non : 2 % d'un chemin de 8 pt tracé avec `lineCap: .round` et `lineWidth: 1.7`, c'est un
+point blanc **en pleine opacité**, de la taille du trait — et il se pose sur la ligne que le clic
+vient justement de SÉLECTIONNER, donc sur un fond gris qui le fait ressortir.
+
+La règle : une propriété qui fait DISPARAÎTRE quelque chose ne peut pas être géométrique seule.
+Ajouter l'opacité à côté du tracé (même état, même courbe, aucune animation locale de plus) suffit —
+la queue du ressort redevient invisible des deux côtés.
+
 ### Une rangée qui relit cinq fois la même relation
 
 (22 août 2026.) `TaskRow` lisait `task.subtasks` **cinq fois par rendu** : `orderedSubtasks` pour
@@ -1206,6 +1224,15 @@ l'assume — c'est bien une liste, celle de l'Inbox, et son titre le dit.
 
 Une tâche datée du jour RESTE désormais dans « Tâches » : elle n'en était retirée que parce que la
 section « Aujourd'hui » l'aurait montrée une seconde fois.
+
+**Et une tâche COCHÉE y reste aussi, depuis le 17 septembre 2026.** Le filtre de la page portait
+`!isCompleted` en dur : la ligne quittait l'écran sous le clic, ce qui se lisait comme un archivage
+d'office — la seule façon de vérifier la coche qu'on venait de poser était d'aller dans
+« Archives ». C'était une SECONDE règle de sortie, propre à cette page, alors que toutes les autres
+passent par `CompletedTaskRetention` (Réglages ▸ Tâches ▸ Conserver). Elle y passe maintenant, avec
+les deux réveils qui vont avec — les 1,5 s du mode minuteur et `NSCalendarDayChanged` —, sans
+lesquels la règle ne s'appliquerait jamais faute de redessin. Ce qu'une page peut décider, c'est ce
+qu'elle MONTRE ; quand une ligne cochée s'en va n'a jamais été sa décision.
 
 ### Les trois faux-semblants retirés le 2 août 2026
 
