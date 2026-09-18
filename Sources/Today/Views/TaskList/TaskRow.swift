@@ -396,6 +396,10 @@ struct TaskRow: View {
         if stillMounted { withAnimation(taskFlow) { actionsReveal = Self.actionRowHeight } }
       } else {
         titleFocused = false
+        // Le drapeau ne survit pas à la session : le tick qui le consomme est gardé par
+        // `editSession`, donc une fermeture arrivée entre-temps le laisserait armé — et la
+        // réouverture suivante de CETTE ligne s'ouvrirait sur une sous-tâche vide.
+        pendingSubtask = false
         // Fermeture ANIMÉE : les deux fenêtres rétrécissent (le clipping ravale la note et la rangée
         // d'actions, laissées affichées), puis on démonte le corps une fois à 0 — sauf si une
         // nouvelle session a redémarré.

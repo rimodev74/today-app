@@ -544,9 +544,11 @@ private struct QuickEntryView: View {
   /// Le contenu du bloc des destinations est-il monté ?
   ///
   /// Le BLOC, lui, l'est toujours — c'est ce qui donne la fusion progressive du verre (cf.
-  /// `destinationPane`). Mais son contenu se reconstruisait donc à CHAQUE rendu de la capsule,
-  /// chaque rangée y lisant `list.progress()`, qui retraverse les tâches de sa liste. Mesuré :
+  /// `destinationPane`). Mais son contenu se reconstruisait donc à CHAQUE rendu de la capsule, et
+  /// chaque rangée y lisait alors `list.progress()`, qui retraverse les tâches de sa liste. Mesuré :
   /// **19 ms sur les 28 que coûtait encore l'ouverture**, pour une liste que personne ne regarde.
+  /// Les anneaux passent depuis par `SidebarCounts` (cf. `destinationList`) ; le montage tardif
+  /// reste, il vaut pour tout ce que la liste construit.
   @State private var showsDestinations = false
   /// Invalide un démontage en attente quand le bloc se rouvre pendant sa fermeture (même jeton que
   /// `TaskRow.editSession`).
@@ -1361,20 +1363,28 @@ private struct QuickEntryView: View {
   }
 
   private var destinationList: some View {
-    VStack(alignment: .leading, spacing: 1) {
-      if let inbox { destinationRow(inbox) }
+    // Les anneaux en UNE passe sur la fournée déjà chargée (`begin` l'a fait avant d'ouvrir ce
+    // bloc), puis distribués. Chaque rangée lisait `list.progress()`, soit trois traversées de la
+    // relation `TodoList.tasks` par rangée et par rendu — le motif que `SidebarCounts` existe pour
+    // remplacer, et qui revenait ici à chaque survol.
+    let counts = SidebarCounts(tasks: allTasks)
+    return VStack(alignment: .leading, spacing: 1) {
+      if let inbox { destinationRow(inbox, counts) }
       // Un projet n'est PAS une destination : `TaskItem.project` se déduit de la liste
       // (`list?.project`), une tâche se pose donc toujours dans une liste. Il n'est ici qu'un
       // titre de section.
       ForEach(projects) { project in
-        if !project.activeLists.isEmpty {
+        // Lu UNE fois : `activeLists` trie la relation puis la filtre, le relire pour le `ForEach`
+        // la retraverse entièrement.
+        let lists = project.activeLists
+        if !lists.isEmpty {
           Text(project.title.isEmpty ? "Sans titre" : project.title)
             .font(.app(11, weight: .medium))
             .foregroundStyle(.tertiary)
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 1)
-          ForEach(project.activeLists, content: destinationRow)
+          ForEach(lists) { destinationRow($0, counts) }
         }
       }
     }
@@ -1383,7 +1393,7 @@ private struct QuickEntryView: View {
     .padding(.horizontal, 6)
   }
 
-  private func destinationRow(_ list: TodoList) -> some View {
+  private func destinationRow(_ list: TodoList, _ counts: SidebarCounts) -> some View {
     let id = list.persistentModelID
     return Button {
       withAnimation(.bouncy(duration: 0.4)) {
@@ -1401,7 +1411,7 @@ private struct QuickEntryView: View {
           if list.isInbox {
             Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
           } else {
-            ProgressRing(progress: list.progress(), size: 11, lineWidth: 1.8)
+            ProgressRing(progress: counts[list].progress, size: 11, lineWidth: 1.8)
               .tint(list.project?.color?.color)
           }
         }

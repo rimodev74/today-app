@@ -363,8 +363,11 @@ struct ContentView: View {
           }
         }
         ToolbarItem(placement: .primaryAction) {
+          // 1 pt et non 0 : une taille nulle rend la mesure de l'item AMBIGUË pour AppKit, qui s'en
+          // plaint deux fois à chaque lancement (« ambiguous height or width … zero height or
+          // width »). Un point transparent ne se voit pas davantage et la mesure est nette.
           Color.clear
-            .frame(width: 0, height: 0)
+            .frame(width: 1, height: 1)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
@@ -761,7 +764,11 @@ struct ContentView: View {
     let due = candidates.filter {
       RemindersSync.destination(for: $0, eventCalendarChosen: true) == .event
     }
-    let days = due.compactMap(\.when)
+    // Bornes prises sur les tâches DÉJÀ liées à un événement, pas sur toutes les tâches dues :
+    // ce sont les seules que `times` peut retrouver. Une tâche datée dans un an sans événement
+    // étirait la requête EventKit sur un an — un aller-retour synchrone d'autant plus long, sur le
+    // fil qui dessine, à chaque passe.
+    let days = due.filter { $0.eventIdentifier != nil }.compactMap(\.when)
     let times =
       days.isEmpty
       ? [:]

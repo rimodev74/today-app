@@ -25,3 +25,6 @@ Idée design app/
 # Captures des pistes de design (3,8 Mo de PNG) : matériau de travail, pas du produit.
 output/
 landing-page/
+
+# Traces Instruments : produites à la demande, jamais versionnées (`quick.sh` fait `git add -A`).
+*.trace/
