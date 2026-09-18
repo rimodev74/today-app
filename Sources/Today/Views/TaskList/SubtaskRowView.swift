@@ -25,7 +25,9 @@ struct SubtaskRowView: View {
       } label: {
         subtaskCheckbox
       }
-      .buttonStyle(.plain)
+      // Même rebond que la case d'une tâche (`PressBounceButtonStyle`) ; le contour, le fond et la
+      // coche restent animés par la transaction de la carte, pas par la case.
+      .buttonStyle(PressBounceButtonStyle())
 
       if isEditing {
         TextField("Sous-tâche", text: $subtask.title)

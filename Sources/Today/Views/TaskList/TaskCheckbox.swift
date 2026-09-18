@@ -107,7 +107,11 @@ private struct Checkmark: Shape {
 
 /// Rétrécit tant que le bouton est maintenu, puis rebondit au relâchement (spring peu amorti →
 /// léger dépassement). C'est le « bounce au clic » de Things, sans dépendre de la pression réelle.
-private struct PressBounceButtonStyle: ButtonStyle {
+///
+/// Partagé avec la case des SOUS-tâches (`SubtaskRowView`) : même geste, donc même courbe — deux
+/// ressorts réglés séparément, c'est exactement la façon dont deux cases se mettent à ne plus
+/// répondre pareil sans que personne ne le voie.
+struct PressBounceButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .scaleEffect(configuration.isPressed ? 0.8 : 1)
