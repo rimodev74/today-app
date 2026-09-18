@@ -178,7 +178,10 @@ struct TaskRow: View {
         // Ce n'est PAS le cas de la pastille de provenance, restée à gauche : elle qualifie le
         // titre, et sa largeur varie avec un nom de projet — à droite, elle refaisait la colonne
         // en dents de scie qui l'avait fait déménager.
-        if !isEditing { dateTag }
+        //
+        // Le QUAND vit DANS `trailing`, après le résumé des sous-tâches : posé avant lui, il se
+        // décalait de toute la largeur de « N sous-tâches ⌄ » sur les seules lignes qui en ont, et
+        // la colonne de dates cessait d'en être une.
         if !isEditing { trailing(subtasks) }
       }
 
@@ -874,6 +877,9 @@ struct TaskRow: View {
   private func trailing(_ subtasks: SubtaskTally) -> some View {
     HStack(spacing: 8) {
       if !subtasks.isEmpty { subtasksSummary(subtasks) }
+      // APRÈS le résumé : la date est la dernière chose avant la colonne de survol, donc à la même
+      // abscisse sur toutes les lignes, avec ou sans sous-tâches.
+      dateTag
       HStack(spacing: 6) {
         subtaskHint
         dateHint
