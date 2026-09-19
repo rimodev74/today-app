@@ -339,11 +339,27 @@ extension View {
   /// publie toujours son cadre et le trou reste à sa place. **Sans valeur par défaut**, comme
   /// `reorder` et `newTask` du socle : l'oublier montrerait la rangée ET la pilule, sans un mot.
   func taskRowDragLayer(
-    _ reorder: TaskPageReorder, task: TaskItem, offset: CGSize, airborne: Bool
+    _ reorder: TaskPageReorder, task: TaskItem, airborne: Bool
   ) -> some View {
+    modifier(TaskRowDragLayer(reorder: reorder, task: task, airborne: airborne))
+  }
+}
+
+/// Cf. `View.taskRowDragLayer(_:task:airborne:)`.
+struct TaskRowDragLayer: ViewModifier {
+  let reorder: TaskPageReorder
+  let task: TaskItem
+  let airborne: Bool
+
+  /// Le décalage se lit ICI, dans le corps du modificateur — **jamais dans celui de la page**.
+  /// C'est toute la différence entre un glisser à 23 Hz et un glisser fluide : le corps d'une page
+  /// construit ses 22 rangées, celui-ci n'applique qu'un `.offset`. `content` est un jeton opaque,
+  /// donc `TaskRow.body` n'est pas rejoué (cf. l'en-tête de `TaskPageReorder`).
+  func body(content: Content) -> some View {
     let lifted = reorder.isDragging(task)
+    let offset = reorder.offset(of: task)
     return
-      self
+      content
       // AVANT le décalage, et c'est tout le sujet : voir `publishTaskDrag`.
       .publishTaskDrag(lifted: lifted)
       // `opacity` et pas un retrait de l'arbre : une rangée démontée ne publierait plus son cadre,
@@ -354,7 +370,9 @@ extension View {
       .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 10 : 0, y: lifted ? 5 : 0)
       .animation(lifted ? nil : taskDrop, value: offset)
   }
+}
 
+extension View {
   /// Dire à la FENÊTRE où en est la ligne qu'on tire : c'est ce qui permet de la ranger dans la
   /// barre latérale, et de l'y voir pendant qu'on l'y emmène.
   ///
@@ -385,8 +403,11 @@ extension View {
   /// Le trou d'insertion, DERRIÈRE la page : il n'est donc visible que dans le vide ouvert par
   /// l'écartement des voisines. Sans lui, aucun repère de dépôt — et l'écartement silencieux se
   /// lit comme une saccade.
+  /// Même règle que `TaskRowDragLayer`, d'où le passage par un `ViewModifier` : le rectangle du
+  /// trou se lit dans le corps de CELUI-CI, pas dans celui de la page — sinon la page se rejoue à
+  /// chaque image du geste et tout le bénéfice tombe.
   func taskReorderPlaceholder(_ reorder: TaskPageReorder) -> some View {
-    taskReorderPlaceholder(reorder.placeholder())
+    modifier(TaskReorderPlaceholder(reorder: reorder))
   }
 
   /// La même chose à partir d'un rectangle déjà calculé — `ListPageView` a son propre moteur de
@@ -410,6 +431,15 @@ extension View {
   }
 }
 
+/// Cf. `View.taskReorderPlaceholder(_:)`.
+struct TaskReorderPlaceholder: ViewModifier {
+  let reorder: TaskPageReorder
+
+  func body(content: Content) -> some View {
+    content.taskReorderPlaceholder(reorder.placeholder())
+  }
+}
+
 /// Le relâchement, écrit une fois pour toutes les pages. Deux règles y sont enfermées, et chacune
 /// s'est déjà payée à l'écran :
 ///
@@ -428,7 +458,7 @@ extension View {
 /// des trois pages qui glissent.
 @MainActor
 func dropTaskDrag(
-  _ reorder: inout TaskPageReorder, onto filing: SidebarDrop, lists: [TodoList],
+  _ reorder: TaskPageReorder, onto filing: SidebarDrop, lists: [TodoList],
   in context: ModelContext, write: ([TaskItem]) -> Void
 ) {
   let ordered = reorder.dropped()
@@ -492,7 +522,7 @@ struct TaskPageBase: ViewModifier {
   /// l'oubli de ce branchement compilait sans un mot et le glissement ne recevait aucun cadre. Une
   /// page doit se prononcer — c'est la même règle que la closure `rows` d'avant, dont l'oubli
   /// silencieux est à l'origine de tout ce chantier.
-  var reorder: Binding<TaskPageReorder>?
+  var reorder: TaskPageReorder?
 
   /// ⌘N sur cette page, ou `nil` si elle ne sait pas créer de tâche (« À venir », « Archives »).
   ///
@@ -513,7 +543,7 @@ struct TaskPageBase: ViewModifier {
   @State private var ownFrames: [TaskRowKey: CGRect] = [:]
 
   private var rowFrames: [TaskRowKey: CGRect] {
-    reorder?.wrappedValue.frames ?? ownFrames
+    reorder?.frames ?? ownFrames
   }
 
   private var rows: [TaskItem] { blocks().displayedRows }
@@ -563,10 +593,11 @@ struct TaskPageBase: ViewModifier {
           ownFrames = frames
           return
         }
-        // GEL. Pas seulement « on ignore la valeur » : on n'ÉCRIT pas. Écrire une valeur identique
-        // dans un `@State` invalide quand même la vue, et c'est l'invalidation qui boucle.
-        guard !reorder.wrappedValue.isDragging else { return }
-        reorder.wrappedValue.measured(frames)
+        // GEL. Pas seulement « on ignore la valeur » : on n'ÉCRIT pas. Une écriture, même d'une
+        // valeur identique, invalide les lecteurs de l'état observé — et c'est l'invalidation qui
+        // boucle (cf. `TaskPageReorder.measured`, qui porte la même garde).
+        guard !reorder.isDragging else { return }
+        reorder.measured(frames)
       }
       .background(LeftClickOutsideObserver(onClick: releaseSelectionIfOutside))
       .background(RightClickObserver(onRightClick: selectAtRightClick))
@@ -636,7 +667,7 @@ extension View {
     focus: Binding<TaskFocus>,
     blocks: @escaping () -> [TaskPageBlock],
     delete: @escaping (TaskItem) -> Void,
-    reorder: Binding<TaskPageReorder>?,
+    reorder: TaskPageReorder?,
     newTask: MenuAction?
   ) -> some View {
     modifier(

@@ -1,12 +1,31 @@
 import Foundation
+import Observation
 import SwiftData
 
 /// Le glissement en cours sur une page de tâches : où sont les lignes, laquelle est empoignée, de
 /// combien elle a bougé — et tout ce qui s'en déduit.
 ///
-/// Type de VALEUR, sans SwiftUI : un état de vue qui vit dans le `@State` de la page. C'est le
-/// pendant de `TaskFocus` pour le geste de la souris, et la même raison d'être — trois pages
-/// tenaient sinon les mêmes quatre `@State` nus, avec les mêmes cinq transitions recopiées.
+/// Un état de vue qui vit dans le `@State` de la page. C'est le pendant de `TaskFocus` pour le
+/// geste de la souris, et la même raison d'être — trois pages tenaient sinon les mêmes quatre
+/// `@State` nus, avec les mêmes cinq transitions recopiées.
+///
+/// ## Pourquoi une CLASSE observée, et pas une valeur comme `TaskFocus`
+///
+/// Parce que sa translation change à chaque image, et qu'une valeur dans un `@State` invalide le
+/// corps de sa page à chaque écriture. Or ce corps construit TOUTES les rangées : à chaque image
+/// du geste, les 22 `TaskRow` d'« Aujourd'hui » étaient reconstruites — menu contextuel compris —
+/// puis remises en page. **43,7 ms par image, soit 23 Hz** (mesuré le 19 septembre 2026, banc de
+/// glissement rejoué sans souris). Et c'est ce qui faisait REVENIR le défaut à chaque
+/// fonctionnalité : tout ce qu'on ajoutait à la page ou à la rangée tombait dans le chemin de
+/// l'image.
+///
+/// Observée, elle n'invalide que ce qui la LIT — c'est-à-dire le seul modificateur qui applique le
+/// décalage d'une rangée (`taskRowDragLayer`) et celui qui dessine le trou
+/// (`taskReorderPlaceholder`). Le corps de la page ne la lit plus du tout, donc il ne se rejoue
+/// plus pendant un geste, donc `TaskRow.body` non plus. **Règle à tenir : aucune page ne lit une
+/// propriété de ce type depuis son `body`** — elle passe la référence, et les modificateurs lisent.
+///
+/// `TaskFocus`, lui, reste une valeur : il change une fois par clic, pas 120 fois par seconde.
 ///
 /// ## Ce qu'il ne calcule pas lui-même
 ///
@@ -19,7 +38,8 @@ import SwiftData
 /// Ce qu'on ÉCRIT au relâchement ne le regarde pas. Il rend l'ordre obtenu (`dropped(in:)`) ; à la
 /// page d'en tirer sa règle — renuméroter `smartOrder`, et sur « Tâches » rattacher la tâche à la
 /// liste où elle a atterri. C'est la même frontière que celle posée en tête de `Reorder.swift`.
-struct TaskPageReorder {
+@MainActor @Observable
+final class TaskPageReorder {
   /// Cadres des lignes dans le repère `taskPageSpace`, publiés par `measureTaskRow`.
   ///
   /// Clés en `TaskRowKey` et non en identités de tâche : une page peut intercaler des rangées qui
@@ -93,6 +113,26 @@ struct TaskPageReorder {
     let collapse: CGFloat
   }
 
+  /// Le numéro de la mise en page courante. **C'est la SEULE chose qu'une vue observe de ce
+  /// type** : tout le reste se déduit, et un compteur unique évite d'abonner chaque rangée aux six
+  /// stockages qui la composent.
+  ///
+  /// Il monte à chaque mutation qui change vraiment quelque chose, et il sert de clé au cache
+  /// ci-dessous — une image, un calcul.
+  private(set) var revision = 0
+
+  /// Les décalages de l'image courante, calculés une fois et redemandés par chaque rangée.
+  ///
+  /// `@ObservationIgnored` : il est ÉCRIT pendant la lecture d'un `body` (la première rangée qui
+  /// demande son décalage le remplit). Observé, ce serait « Modifying state during view update »
+  /// à chaque image.
+  @ObservationIgnored private var cache: (revision: Int, offsets: [TaskRowKey: CGSize])?
+
+  private func bump() {
+    revision &+= 1
+    cache = nil
+  }
+
   init() {}
 
   var isDragging: Bool { !dragged.isEmpty }
@@ -133,9 +173,10 @@ struct TaskPageReorder {
   /// REPOS boucle (décalage → cadre → décalage…), ce que SwiftUI signale par « update multiple
   /// times per frame » et que l'œil voit comme une saccade. Le layout de repos, lui, ne bouge pas
   /// d'un glissement : les cadres pris avant l'empoignade restent valides jusqu'au relâchement.
-  mutating func measured(_ new: [TaskRowKey: CGRect]) {
-    guard !isDragging else { return }
+  func measured(_ new: [TaskRowKey: CGRect]) {
+    guard !isDragging, frames != new else { return }
     frames = new
+    bump()
   }
 
   /// **Le seul point d'entrée d'un glissement.** Empoigne au premier mouvement, puis suit.
@@ -143,13 +184,13 @@ struct TaskPageReorder {
   /// Les pages appelaient `begin` puis `drag` chacune de leur côté, avec le même `if` en tête.
   /// Deux lignes recopiées, c'est déjà deux occasions de diverger — et l'ordre des deux appels
   /// n'est pas anodin : empoigner APRÈS avoir suivi perdrait la première translation.
-  mutating func track(_ task: TaskItem, by translation: CGSize, in rows: [TaskItem]) {
+  func track(_ task: TaskItem, by translation: CGSize, in rows: [TaskItem]) {
     track([task], by: translation, in: rows)
   }
 
   /// La variante qui emporte un groupe (une en-tête et son bloc). `carrying.first` est la ligne
   /// empoignée ; un appel avec un groupe vide ne fait rien plutôt que d'armer un geste sans sujet.
-  mutating func track(
+  func track(
     _ carrying: [TaskItem], by translation: CGSize, in rows: [TaskItem],
     physical: [TaskRowKey] = [], blocks: BlockTargeting? = nil
   ) {
@@ -158,13 +199,13 @@ struct TaskPageReorder {
     drag(translation)
   }
 
-  mutating func begin(_ task: TaskItem, in rows: [TaskItem]) {
+  func begin(_ task: TaskItem, in rows: [TaskItem]) {
     begin([task], in: rows)
   }
 
   /// `physical` : la séquence complète des lignes qui occupent de la hauteur, champs compris. À
   /// omettre quand la page n'a que des tâches — les deux mises en page se confondent alors.
-  mutating func begin(
+  func begin(
     _ carrying: [TaskItem], in rows: [TaskItem], physical: [TaskRowKey] = [],
     blocks: BlockTargeting? = nil
   ) {
@@ -173,19 +214,22 @@ struct TaskPageReorder {
     self.rows = rows
     physicalRows = physical
     blockTargeting = blocks
+    bump()
   }
 
-  mutating func drag(_ translation: CGSize) {
-    guard isDragging else { return }
+  func drag(_ translation: CGSize) {
+    guard isDragging, self.translation != translation else { return }
     self.translation = translation
+    bump()
   }
 
-  mutating func end() {
+  func end() {
     dragged = []
     translation = .zero
     rows = []
     physicalRows = []
     blockTargeting = nil
+    bump()
   }
 
   /// La mise en page du glissement dans `rows`, l'ordre affiché. `nil` hors glissement, ou tant que
@@ -292,6 +336,23 @@ struct TaskPageReorder {
   /// Sur la mise en page PHYSIQUE : un champ « Nouvelle tâche » s'écarte comme une ligne de tâche,
   /// parce qu'il occupe de la hauteur comme elle (cf. `rowLayout`).
   func offsets() -> [TaskRowKey: CGSize] {
+    // La lecture de `revision` est ce qui ABONNE la rangée appelante : sans elle, un décalage servi
+    // depuis le cache ne déclencherait plus rien à l'image suivante.
+    let revision = self.revision
+    if let cache, cache.revision == revision { return cache.offsets }
+    let result = computeOffsets()
+    cache = (revision, result)
+    return result
+  }
+
+  /// Le décalage d'UNE rangée, demandé par elle-même (cf. `taskRowDragLayer`). Passe par le cache :
+  /// recalculer la mise en page par rangée referait le balayage quadratique par image que
+  /// `offsets()` existe justement pour éviter.
+  func offset(of task: TaskItem) -> CGSize {
+    offsets()[.task(task.persistentModelID)] ?? .zero
+  }
+
+  private func computeOffsets() -> [TaskRowKey: CGSize] {
     guard let layout = rowLayout() else { return [:] }
     var result = layout.offsets().mapValues { CGSize(width: 0, height: $0) }
     // Tout le groupe suit le curseur, pas seulement la ligne tirée. Une page qui estompe ses

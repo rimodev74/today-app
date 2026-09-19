@@ -39,6 +39,7 @@ en-tête AVANT d'écrire.
 | `Models/TaskFocus.swift`                                 | quelle ligne est sélectionnée, laquelle est en édition                       |
 | `Models/TaskPageRows.swift` (`TaskPageBlock`)            | ce qu'une page affiche : des pans de lignes, visibles ou repliés             |
 | `Models/TaskPageReorder.swift`                           | l'état d'un glissement : cadres, séquence figée, décalages, ordre obtenu     |
+| `Models/ListDragMotion.swift`                            | ce qu'un glissement de LISTE change par image, hors du corps de la page      |
 | `Models/SidebarDrop.swift`                               | lâcher une tâche sur la barre latérale + `TaskItem.move(to:)`                |
 | `Models/TodayPage.swift`, `AllTasksPage`, `UpcomingPage`, `ArchivePage` | ce que chaque page intelligente présente                       |
 | `Views/TaskList/TaskPageChrome.swift` (`TaskPageBase`)   | le socle de TOUTE page de tâches : ⌫, ↑/↓, clic dans le vide, cadres         |
@@ -100,6 +101,18 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
   une hauteur, 19 ms pour une liste repliée que personne ne regardait — sur 36 ms d'ouverture.
   Une `GeometryReader` posée dans une telle copie coûte en plus : sa préférence réécrit un `@State`
   à chaque passe de layout, et le body se rejouait **sept fois par frappe**. → `PIEGES.md`.
+- **Une valeur qui change à CHAQUE IMAGE ne se lit jamais depuis le corps d'une PAGE** — la
+  translation d'un glissement, les décalages qui en découlent, le trou d'insertion. Un `@State`
+  réécrit 120 fois par seconde invalide un corps qui construit toutes ses rangées ; c'est la cause
+  exacte du glisser saccadé, et **la raison pour laquelle il REVENAIT à chaque fonctionnalité** —
+  tout ce qu'on ajoute à la page ou à `TaskRow` tombe sinon dans le chemin de l'image. La règle :
+  un état observé (`TaskPageReorder`, `ListDragMotion`), ÉCRIT par le geste, LU par les seuls
+  modificateurs qui l'appliquent. Dans un `ViewModifier`, `content` est opaque : `TaskRow.body`
+  n'est pas rejoué. Mesuré : 43,7 ms par image contre ~3. → `PIEGES.md` § Layout.
+- **Une propriété dérivée d'un état observé partagé se STOCKE, elle ne se calcule pas.** Calculée,
+  elle abonne son lecteur à tout ce qu'elle lit — `SidebarDrop.isAirborne` abonnait ainsi trois
+  pages et toute la sidebar au cadre de la ligne en vol, réécrit à chaque image. Stockée et
+  réécrite seulement quand elle change, elle n'invalide plus rien pour rien.
 - **Le corps d'une vue qui porte un `@Query` se rejoue bien plus souvent qu'on ne le croit** :
   SwiftData l'invalide sans qu'AUCUNE écriture n'ait lieu. Il doit être **bon marché**, pas rare.
 - **Tout nouveau tri sur un `@Model` passe par `sortedByKey`**, jamais par `.sorted { }` — une
@@ -187,6 +200,7 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
 Une demande qui exige l'un de ces points ne s'implémente pas en l'état :
 
 - rétablir `LazyVStack` sur une page qui glisse ;
+- lire la translation d'un glissement (ou ce qui en découle) depuis le corps d'une page ;
 - lire un compteur de `@Model` par rangée « juste pour cette fois » ;
 - présenter un popover depuis un item de menu ;
 - poser un `.animation(value:)` sur une rangée dont la page pilote déjà l'état ;

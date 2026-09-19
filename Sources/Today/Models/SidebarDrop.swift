@@ -137,7 +137,9 @@ final class SidebarDrop {
   /// Le bord droit de la barre latérale, dans le repère global — c'est-à-dire le bord GAUCHE de la
   /// page, celui où le `ScrollView` rogne ce qui dépasse. Posé par la fenêtre, qui est la seule à
   /// connaître la largeur courante (elle se replie, elle se tire).
-  var sidebarEdge: CGFloat = 0
+  var sidebarEdge: CGFloat = 0 {
+    didSet { refresh() }
+  }
 
   /// Distance entre le bord avant de la ligne et le point où on l'a empoignée, constante sur tout
   /// le geste. Sans elle, `isAirborne` comparait le bord de la rangée au bord de la sidebar — juste
@@ -161,19 +163,35 @@ final class SidebarDrop {
   ///
   /// Comparé au CURSEUR (`draggedFrame.minX + grabOffsetX`), pas au seul bord de la rangée : voir
   /// `grabOffsetX`. Même correction que `hovered`, pour la même raison.
-  var isAirborne: Bool {
-    guard let draggedFrame else { return false }
-    return draggedFrame.minX + grabOffsetX < sidebarEdge
-  }
+  private(set) var isAirborne = false
 
-  /// La ligne survolée. Calculée à la lecture — un troisième état à tenir synchronisé avec les deux
-  /// autres est exactement la façon dont deux vues se mettent à diverger sans qu'on le voie.
+  /// La ligne survolée.
   ///
   /// Vise le cadre TRANSLATÉ de `grabOffsetX`, pas `draggedFrame` brut : cf. `SidebarFiling.anchor`.
-  var hovered: SidebarDropRow? {
-    guard let draggedFrame else { return nil }
-    let cursorFrame = draggedFrame.offsetBy(dx: grabOffsetX, dy: 0)
-    return SidebarFiling.target(at: SidebarFiling.anchor(of: cursorFrame), in: rows)
+  private(set) var hovered: SidebarDropRow?
+
+  /// **Ces deux-là sont STOCKÉS, et c'est toute la fluidité du glisser.** Calculés à la lecture —
+  /// ce qu'ils étaient — ils abonnaient leur lecteur à `draggedFrame`, réécrit à CHAQUE image du
+  /// geste. Or leurs lecteurs sont le corps des pages de tâches (`taskRowDragLayer`'s `airborne:`,
+  /// lu par rangée) et chaque ligne de la barre latérale : toute l'app se rejouait à la fréquence
+  /// du geste pour un booléen qui bascule une fois et un survol qui change tous les dix points.
+  /// Mesuré le 19 septembre 2026 : **deux** rendus complets de page par image, 44 corps de
+  /// `TaskRow` pour 22 lignes, 43,7 ms par image.
+  ///
+  /// Stockés, ils n'invalident que ce qui les lit, et seulement quand ils CHANGENT. Le risque que
+  /// la version calculée écartait — un troisième état à tenir synchronisé — est tenu par le fait
+  /// qu'il n'existe qu'UN endroit qui les écrit, appelé par toutes les entrées qui bougent leurs
+  /// ingrédients (`track`, `arm`, `measured`, `sidebarEdge`, `drop`).
+  private func refresh() {
+    let airborne = draggedFrame.map { $0.minX + grabOffsetX < sidebarEdge } ?? false
+    if isAirborne != airborne { isAirborne = airborne }
+
+    let target =
+      draggedFrame.map {
+        SidebarFiling.target(
+          at: SidebarFiling.anchor(of: $0.offsetBy(dx: grabOffsetX, dy: 0)), in: rows)
+      } ?? nil
+    if hovered != target { hovered = target }
   }
 
   /// Nouvelle mesure de la sidebar — publiée même PENDANT un geste, depuis que survoler un projet
@@ -188,11 +206,13 @@ final class SidebarDrop {
   func measured(_ new: [SidebarDropRow: CGRect]) {
     guard rows != new else { return }
     rows = new
+    refresh()
   }
 
   func track(_ frame: CGRect?) {
     guard draggedFrame != frame else { return }
     draggedFrame = frame
+    refresh()
   }
 
   /// Pose `grabOffsetX` pour le geste en cours. Appelable à chaque image du drag (le résultat est
@@ -201,6 +221,7 @@ final class SidebarDrop {
   func arm(grabOffsetX: CGFloat) {
     guard self.grabOffsetX != grabOffsetX else { return }
     self.grabOffsetX = grabOffsetX
+    refresh()
   }
 
   /// La même chose depuis ce que les pages ont sous la main : le point d'empoignade et le cadre de
@@ -222,6 +243,7 @@ final class SidebarDrop {
     defer {
       draggedFrame = nil
       grabOffsetX = 0
+      refresh()
     }
     // `list` vaut `nil` pour une ligne de PROJET : la survoler la déplie, elle ne range rien.
     guard let hovered, let listID = hovered.list else { return nil }

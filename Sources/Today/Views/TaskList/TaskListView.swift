@@ -110,7 +110,12 @@ private struct ListPageView: View {
   @State private var draggingID: PersistentIdentifier?
   // Décalage 2D sous le curseur : la ligne se soulève et suit la souris librement (X ET Y), façon
   // vrai drag. Seul `.height` sert au calcul d'insertion (l'ordre reste vertical).
-  @State private var dragOffset: CGSize = .zero
+  //
+  // Dans une CLASSE observée et pas dans un `@State` : c'est la seule valeur du geste qui change à
+  // chaque image, et un `@State` ferait rejouer ce corps — donc les 23 `TaskRow` de la page — 120
+  // fois par seconde. Le trou et l'écartement des voisines l'accompagnent, calculés au geste et
+  // lus par les seuls modificateurs qui les appliquent (cf. `ListDragMotion`).
+  @State private var motion = ListDragMotion()
   // Point empoigné (dans l'espace de la liste) : sert d'ancre au léger agrandissement du soulevé,
   // pour que ce point-là reste EXACTEMENT sous le curseur. Ancré au centre (défaut), l'échelle
   // éloigne du curseur les bords d'une ligne large → la ligne « dérive » sous la souris.
@@ -119,6 +124,11 @@ private struct ListPageView: View {
   // en-tête — TOUT son bloc (en-tête + ses tâches). Figé à l'empoignade (cf. `dragGroup`) : `blocks`
   // ne bouge pas d'un drag, et le recalculer par ligne/frame serait O(n²).
   @State private var draggedGroup: [TaskItem] = []
+  // Les séquences du CALCUL, figées à l'empoignade — même règle, et même raison, que
+  // `TaskPageReorder.rows` : elles se reconstruisent en traversant SwiftData (tri des tâches,
+  // découpage en blocs), et `dragState` les redemandait à chaque image. Rien ne les fait bouger
+  // pendant un geste : aucune écriture n'a lieu avant le relâchement.
+  @State private var dragSequences: DragSequences?
   // Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskDragCollapse`). Posée
   // AVANT `draggingID` — c'est lui qui gèle `rowFrames`, et le trou doit se calculer sur la
   // hauteur réduite.
@@ -155,16 +165,13 @@ private struct ListPageView: View {
   @State private var archivesExpanded = false
 
   var body: some View {
-    // Position de repos cible de chaque ligne pendant un drag (trou ouvert sous le curseur) — tâche,
-    // en-tête OU champ « Nouvelle tâche » (cf. `RowKey`) : les trois partagent le même calcul, donc
-    // la même table. Vide hors drag : chaque ligne reste alors à son offset 0.
-    let state = dragState()
-    // Calculés UNE fois par rendu et distribués aux lignes : chaque rangée devait sinon se chercher
-    // elle-même dans la séquence, soit un balayage quadratique à chaque image de glissement.
-    let offsets = state?.rows.offsets() ?? [:]
-    let placeholder = state.flatMap(dragPlaceholderRect)
-    // Même règle : le « Déplacer vers… » de TOUTES les rangées, filtré une fois. Les archivées en
-    // sortent ici et pas dans la requête : `allLists` sert aussi à `#Nom`, qui les garde.
+    // Les décalages et le trou ne se calculent PLUS ici : ils sont produits par le geste, une fois
+    // par image, et lus par les seuls modificateurs qui les appliquent (cf. `ListDragMotion`). Les
+    // lire ici ferait rejouer ce corps — et toutes ses rangées — à chaque image du glissement.
+    //
+    // Le « Déplacer vers… » de TOUTES les rangées, lui, se filtre bien une fois par rendu. Les
+    // archivées en sortent ici et pas dans la requête : `allLists` sert aussi à `#Nom`, qui les
+    // garde.
     let moveTargets = allLists.filter {
       !$0.isArchived && $0.persistentModelID != list.persistentModelID
     }
@@ -183,36 +190,13 @@ private struct ListPageView: View {
           // créer y insère la tâche à la fin de CE bloc, pas tout en bas de la liste.
           ForEach(blocks) { block in
             if let header = block.header {
-              draggableRow(for: header, offsets: offsets, moveTargets: moveTargets)
+              draggableRow(for: header, moveTargets: moveTargets)
             }
             ForEach(block.tasks) { task in
-              draggableRow(for: task, offsets: offsets, moveTargets: moveTargets)
+              draggableRow(for: task, moveTargets: moveTargets)
             }
             if showsNewTaskField(block) {
-              // Le champ s'efface pendant un drag, mais reste MONTÉ : `rowFrames` est gelé à
-              // l'empoignade, le retirer effondrerait sa hauteur et fausserait le trou d'insertion.
-              // Il se décale comme une ligne ordinaire (`fieldOffset` = `rowOffset`), donc rien ne
-              // saute au drop.
-              let blockLifted = block.header != nil && block.header?.persistentModelID == draggingID
-              newTaskRow(for: block)
-                .background {
-                  GeometryReader { g in
-                    Color.clear.preference(
-                      key: RowFrameKey.self,
-                      value: [.field(block.id): g.frame(in: .named(Self.dragSpace))])
-                  }
-                }
-                .opacity(draggingID != nil ? 0 : 1)
-                .offset(
-                  x: blockLifted ? dragOffset.width : 0,
-                  y: blockLifted ? dragOffset.height : fieldOffset(for: block, offsets: offsets)
-                )
-                .zIndex(blockLifted ? 1 : 0)
-                .animation(
-                  blockLifted ? nil : .snappy(duration: 0.22),
-                  value: fieldOffset(for: block, offsets: offsets)
-                )
-                .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
+              draggableNewTaskRow(for: block)
             }
           }
 
@@ -237,7 +221,7 @@ private struct ListPageView: View {
         // Placeholder du trou d'insertion, DERRIÈRE les lignes (il n'est donc visible que dans
         // le vide ouvert par l'écartement). Le DESSIN est partagé avec les pages intelligentes
         // (`taskReorderPlaceholder`) : seul le calcul du rectangle appartient à cette page.
-        .taskReorderPlaceholder(placeholder)
+        .modifier(ListReorderPlaceholder(motion: motion))
         // Même repère que le placeholder ci-dessus (posé au même point d'ancrage) : ses points
         // sont donc directement comparables à `rowFrames`, mesurées dans le même `Self.dragSpace`.
         .background(RightClickObserver(onRightClick: selectAtRightClick))
@@ -553,11 +537,32 @@ private struct ListPageView: View {
     return result
   }
 
+  /// Le champ « Nouvelle tâche » d'un bloc, participant au glissement comme une ligne ordinaire.
+  ///
+  /// Il s'efface pendant un drag, mais reste MONTÉ : `rowFrames` est gelé à l'empoignade, le
+  /// retirer effondrerait sa hauteur et fausserait le trou d'insertion. Il se décale par le MÊME
+  /// modificateur qu'une tâche — aucun traitement séparé, donc rien ne saute au drop.
+  private func draggableNewTaskRow(for block: TaskBlock) -> some View {
+    let blockLifted = block.header != nil && block.header?.persistentModelID == draggingID
+    return
+      newTaskRow(for: block)
+      .background {
+        GeometryReader { g in
+          Color.clear.preference(
+            key: RowFrameKey.self,
+            value: [.field(block.id): g.frame(in: .named(Self.dragSpace))])
+        }
+      }
+      .opacity(draggingID != nil ? 0 : 1)
+      // Le décalage se lit DANS le modificateur, jamais ici : cf. `ListDragMotion`.
+      .modifier(ListRowDragOffset(motion: motion, key: .field(block.id), lifted: blockLifted))
+      .zIndex(blockLifted ? 1 : 0)
+      .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
+  }
+
   /// Enveloppe drag/drop d'une ligne (en-tête ou tâche), mutualisée entre les deux : mesure de la
   /// position de repos, décalage/soulevé pendant le drag, et le geste unique de la page.
-  private func draggableRow(
-    for task: TaskItem, offsets: [RowKey: CGFloat], moveTargets: [TodoList]
-  ) -> some View {
+  private func draggableRow(for task: TaskItem, moveTargets: [TodoList]) -> some View {
     // `lifted` = cette ligne fait partie du groupe tiré (bloc entier pour une en-tête) → elle se
     // soulève. `grabbed` = c'est LA ligne empoignée → elle porte l'ancre du léger agrandissement.
     // `folding` = une tâche du bloc dont on tire l'en-tête : elle s'estompe (se replie dans le
@@ -594,7 +599,13 @@ private struct ListPageView: View {
       // se replient derrière elle. Et jamais une EN-TÊTE : elle emmène ses tâches, ce qu'un
       // rangement dans une liste ne saurait pas faire — *Déplacer vers…* reste son chemin.
       .publishTaskDrag(lifted: grabbed && !task.isHeader)
-      .offset(rowOffset(for: task, offsets: offsets))
+      // Décalage ET sa courbe dans le même modificateur, qui les lit lui-même : la page ne doit
+      // pas toucher à `motion` depuis son corps (cf. `ListDragMotion`). La courbe monte ici avec
+      // le décalage — elle ne couvrait de toute façon que lui, les changements d'échelle et
+      // d'ombre étant portés par `value: lifted` juste en dessous.
+      .modifier(
+        ListRowDragOffset(motion: motion, key: .task(task.persistentModelID), lifted: lifted)
+      )
       .scaleEffect(lifted ? 1.03 : 1, anchor: grabbed ? dragAnchor : .center)
       // Ombre de soulevé pour une TÂCHE tirée. Pas pour une tâche qui se replie (elle s'estompe), ni
       // pour une en-tête tirée : sa pile (en-tête + calques) porte ses propres ombres dans `HeaderRow`
@@ -605,11 +616,6 @@ private struct ListPageView: View {
         y: lifted && !folding && !task.isHeader ? 5 : 0
       )
       .zIndex(lifted ? 1 : 0)
-      // Les lignes tirées collent au curseur (aucune animation) ; les voisines glissent.
-      .animation(
-        lifted ? nil : .snappy(duration: 0.22),
-        value: rowOffset(for: task, offsets: offsets)
-      )
       .animation(.easeOut(duration: 0.15), value: lifted)
       .animation(.easeInOut(duration: 0.2), value: folding)
       // Rebond à la création (déclenché par le withAnimation de `createTask`), et au retour d'un
@@ -879,12 +885,20 @@ private struct ListPageView: View {
     let tasks: ReorderLayout<RowKey>
   }
 
-  private func dragState() -> DragState? {
+  /// Ce que `dragState` lit et qui ne bouge pas d'un geste (cf. `dragSequences`).
+  private struct DragSequences {
+    let ordered: [TaskItem]
+    let physical: [RowKey]
+    let blocks: [TaskBlock]
+  }
+
+  private func dragState(_ translation: CGSize) -> DragState? {
     guard draggingID != nil, let first = draggedGroup.first,
+      let sequences = dragSequences,
       let dragFrame = rowFrames[.task(first.persistentModelID)],
       let groupFrame = groupRect(draggedGroup)
     else { return nil }
-    let ordered = list.orderedTasks
+    let ordered = sequences.ordered
     let draggedIDs = Set(draggedGroup.map(\.persistentModelID))
     let others = ordered.filter { !draggedIDs.contains($0.persistentModelID) }
     guard
@@ -898,8 +912,8 @@ private struct ListPageView: View {
     if first.isHeader {
       let collapse = blockDelta ?? 0
       let insert = headerInsert(
-        center: dragFrame.midY + dragOffset.height, others: others, collapse: collapse,
-        origin: origin)
+        center: dragFrame.midY + translation.height, others: others, collapse: collapse,
+        origin: origin, blocks: sequences.blocks)
       let layout = ReorderLayout(
         others: otherKeys, origin: origin, insert: insert, unit: unit, collapse: collapse)
       return DragState(dragged: draggedGroup, others: others, rows: layout, tasks: layout)
@@ -910,13 +924,13 @@ private struct ListPageView: View {
     let tasks = ReorderLayout(
       others: otherKeys, origin: origin,
       insert: ReorderTarget.byBoundary(
-        center: groupFrame.midY + dragOffset.height,
+        center: groupFrame.midY + translation.height,
         centers: ordered.map { rowFrames[.task($0.persistentModelID)]?.midY }),
       unit: unit)
 
     // Le même dépôt, retraduit dans l'espace des lignes physiques : la tâche devant laquelle on se
     // pose y a simplement un autre rang, les champs comptant eux aussi.
-    let allRows = physicalRows
+    let allRows = sequences.physical
     let draggedKey = RowKey.task(first.persistentModelID)
     guard let rowOrigin = allRows.firstIndex(of: draggedKey) else { return nil }
     let rowOthers = allRows.filter { $0 != draggedKey }
@@ -933,7 +947,7 @@ private struct ListPageView: View {
   /// drag d'un projet dans la sidebar, d'où `ReorderTarget.byBlockStart` partagé avec elle. Ce qui
   /// reste ici est l'énumération des blocs, propre à cette page.
   private func headerInsert(
-    center: CGFloat, others: [TaskItem], collapse: CGFloat, origin: Int
+    center: CGFloat, others: [TaskItem], collapse: CGFloat, origin: Int, blocks: [TaskBlock]
   ) -> Int {
     guard let first = draggedGroup.first,
       let dragged = blocks.firstIndex(where: {
@@ -981,21 +995,6 @@ private struct ListPageView: View {
       width: dragFrame.width, height: state.tasks.unit - inset.top - inset.bottom)
   }
 
-  /// Décalage d'une ligne : le groupe tiré suit le curseur en 2D (soulevé), les autres rejoignent
-  /// verticalement la place qu'elles auront une fois l'ordre écrit.
-  private func rowOffset(for task: TaskItem, offsets: [RowKey: CGFloat]) -> CGSize {
-    if draggedGroup.contains(where: { $0.persistentModelID == task.persistentModelID }) {
-      return dragOffset
-    }
-    return CGSize(width: 0, height: offsets[.task(task.persistentModelID)] ?? 0)
-  }
-
-  /// Décalage d'un champ « Nouvelle tâche » : rigoureusement le même mécanisme que `rowOffset`,
-  /// aucun calcul qui lui soit propre — `offsets` contient déjà le sien s'il doit bouger.
-  private func fieldOffset(for block: TaskBlock, offsets: [RowKey: CGFloat]) -> CGFloat {
-    offsets[.field(block.id)] ?? 0
-  }
-
   /// Ancre du soulevé (agrandissement) : la position relative du point empoigné dans la ligne
   /// tirée. Scaler autour de CE point le laisse fixe sous le curseur ; `.center` par défaut le
   /// ferait dériver d'autant que le curseur est loin du milieu d'une ligne large.
@@ -1035,6 +1034,9 @@ private struct ListPageView: View {
           focus.select(task)
           draggingID = task.persistentModelID
           draggedGroup = dragGroup(for: task)
+          // Figées ICI, et pour tout le geste (cf. `dragSequences`).
+          dragSequences = DragSequences(
+            ordered: list.orderedTasks, physical: physicalRows, blocks: blocks)
           // Hauteur de la rangée « Nouvelle tâche » du bloc tiré, pour un repli sans trou résiduel.
           draggedFieldHeight =
             blocks.first { $0.header?.persistentModelID == task.persistentModelID }
@@ -1045,7 +1047,14 @@ private struct ListPageView: View {
           filing.arm(grabbedAt: dragStart, restingFrame: rowFrames[.task(task.persistentModelID)])
         }
         guard draggingID == task.persistentModelID else { return }
-        dragOffset = value.translation
+        // Le plan de l'image se calcule ICI, une fois, et part dans `motion` : c'est ce qui évite
+        // de le recalculer dans le corps de la page — donc de le rejouer en entier (cf.
+        // `ListDragMotion`).
+        let state = dragState(value.translation)
+        motion.update(
+          translation: value.translation,
+          offsets: state?.rows.offsets() ?? [:],
+          placeholder: state.flatMap(dragPlaceholderRect))
       }
       .onEnded { value in
         defer {
@@ -1071,7 +1080,7 @@ private struct ListPageView: View {
   /// bascule ordre↔offset ne produit aucun saut — révélation immédiate, sans exception.
   private func endDrag() {
     // `dragState` lit `draggingID`/`draggedGroup` : on capture le plan AVANT de désarmer.
-    let state = dragState()
+    let state = dragState(motion.translation)
     // La cible de la barre latérale se lit de même — avant, et sans condition : `drop` désarme
     // aussi le geste côté sidebar. Rien à tester sur l'en-tête ici : elle ne publie pas de cadre
     // en vol (cf. `publishTaskDrag` sur la rangée), donc rien ne peut être survolé quand on la tire.
@@ -1088,8 +1097,9 @@ private struct ListPageView: View {
         for (index, task) in newOrder.enumerated() { task.sortIndex = index }
       }
       draggingID = nil
-      dragOffset = .zero
+      motion.clear()
       draggedGroup = []
+      dragSequences = nil
     }
     try? modelContext.save()
   }
@@ -2200,4 +2210,35 @@ struct DraftTokens {
   /// Heure planifiée, en minutes depuis minuit (cf. `TaskItem.whenMinutes`).
   var minutes: Int?
   var target: String?
+}
+
+/// Le décalage d'une ligne de la page d'une liste, lu DANS le modificateur.
+///
+/// La différence avec un `.offset(…)` écrit dans le corps de la page est tout le sujet : ici
+/// `content` est un jeton opaque, donc `TaskRow.body` n'est pas rejoué quand le décalage change
+/// (cf. `ListDragMotion`, et l'en-tête de `TaskPageReorder` pour la mesure).
+private struct ListRowDragOffset: ViewModifier {
+  let motion: ListDragMotion
+  let key: TaskRowKey
+  /// La ligne fait partie du groupe tiré : elle colle au curseur, sans animation — une ligne qui
+  /// le « rattrape » avec 0,22 s de retard donne l'impression que le geste patine.
+  let lifted: Bool
+
+  func body(content: Content) -> some View {
+    let offset = motion.offset(of: key, lifted: lifted)
+    return
+      content
+      .offset(offset)
+      .animation(lifted ? nil : .snappy(duration: 0.22), value: offset)
+  }
+}
+
+/// Le trou d'insertion de la page d'une liste. Même règle que `ListRowDragOffset` : le rectangle
+/// se lit ici, pas dans le corps de la page. Le DESSIN, lui, reste celui du moteur partagé.
+private struct ListReorderPlaceholder: ViewModifier {
+  let motion: ListDragMotion
+
+  func body(content: Content) -> some View {
+    content.taskReorderPlaceholder(motion.placeholder)
+  }
 }

@@ -51,14 +51,13 @@ struct AllTasksPageView: View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture refiltrait et retriait
     // toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, retention: retention, now: tick)
-    let offsets = reorder.offsets()
     // Largeur EXPLICITE et pas `maxWidth: .infinity`, sans quoi le titre d'une tâche en édition
     // disparaît. Le pourquoi est dans `PIEGES.md` § Layout, avec la mesure.
     return GeometryReader { geo in
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           header
-          rowsView(of: page, offsets: offsets)
+          rowsView(of: page)
           if showsNewTaskField(page) { newTaskRow }
         }
         .frame(width: max(geo.size.width - 2 * gutter, 1), alignment: .leading)
@@ -74,7 +73,7 @@ struct AllTasksPageView: View {
       focus: $focus,
       blocks: { page.blocks },
       delete: delete,
-      reorder: $reorder,
+      reorder: reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
       newTask: MenuAction(id: "newTask.all", run: createTaskInEditMode)
     )
@@ -122,11 +121,10 @@ struct AllTasksPageView: View {
   /// Les lignes dans leur propre `VStack` plutôt que posées à même celui du `body` : c'est lui qui
   /// porte la largeur explicite, et l'intercaler garde les rangées à la largeur de la page (cf.
   /// `PIEGES.md` § Layout — un `VStack` laisse ses enfants se réduire à leur taille idéale).
-  private func rowsView(of page: AllTasksPage, offsets: [TaskRowKey: CGSize]) -> some View {
+  private func rowsView(of page: AllTasksPage) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(page.tasks) { task in
-        taskRow(
-          for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, rows: page.tasks)
+        taskRow(for: task, rows: page.tasks)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,9 +133,7 @@ struct AllTasksPageView: View {
   /// La MÊME `TaskRow` que partout ailleurs. La date compte (rien ne la rend implicite ici) ; le
   /// rattachement, non : toutes ces tâches sont dans l'Inbox, la pilule dirait la même chose à
   /// chaque ligne.
-  private func taskRow(
-    for task: TaskItem, offset: CGSize = .zero, rows: [TaskItem] = []
-  ) -> some View {
+  private func taskRow(for task: TaskItem, rows: [TaskItem] = []) -> some View {
     TaskRow(
       task: task,
       isSelected: focus.isSelected(task),
@@ -166,7 +162,7 @@ struct AllTasksPageView: View {
       },
       onDrop: { dropDraggedTask() }
     )
-    .taskRowDragLayer(reorder, task: task, offset: offset, airborne: filing.isAirborne)
+    .taskRowDragLayer(reorder, task: task, airborne: filing.isAirborne)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
     // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches.
@@ -185,7 +181,7 @@ struct AllTasksPageView: View {
       withAnimation(disclosureFlow) { dragCollapse.reset() }
     }
     guard reorder.draggedTask != nil else { return }
-    dropTaskDrag(&reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
+    dropTaskDrag(reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
       // Toutes comparables entre elles (même liste) : renuméroter la séquence entière est juste.
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()

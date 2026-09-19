@@ -8,6 +8,9 @@ import XCTest
 /// Ces règles ne se voient pas à l'écran quand elles sont justes, et se lisent comme « le glisser
 /// est cassé » quand elles ne le sont pas. Trois d'entre elles ont chacune coûté un aller-retour de
 /// vérification manuelle : le gel des cadres, le gel de la séquence, et la visée par frontières.
+/// `@MainActor` : le moteur est une classe observée isolée au fil principal depuis qu'il n'invalide
+/// plus le corps de sa page (cf. l'en-tête de `TaskPageReorder`).
+@MainActor
 final class TaskPageReorderTests: XCTestCase {
   /// Trois lignes de 20 pt de haut, empilées : centres à 10, 30 et 50.
   private func rows() -> [TaskItem] {
@@ -24,7 +27,7 @@ final class TaskPageReorderTests: XCTestCase {
   }
 
   private func armed(_ rows: [TaskItem], grabbing index: Int) -> TaskPageReorder {
-    var reorder = TaskPageReorder()
+    let reorder = TaskPageReorder()
     reorder.measured(frames(rows))
     reorder.begin(rows[index], in: rows)
     return reorder
@@ -40,7 +43,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// Un groupe part d'un bloc : la ligne empoignée EN TÊTE, ses passagères derrière. C'est ce que
   /// fait une en-tête de section, qui emporte les tâches qui la suivent.
   private func armedGroup(_ rows: [TaskItem], grabbing range: Range<Int>) -> TaskPageReorder {
-    var reorder = TaskPageReorder()
+    let reorder = TaskPageReorder()
     reorder.measured(frames(rows))
     reorder.begin(Array(rows[range]), in: rows)
     return reorder
@@ -62,7 +65,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// détacherait du bloc qu'elle est censée accompagner.
   func testEveryCarriedRowFollowsTheCursor() {
     let rows = longRows()
-    var reorder = armedGroup(rows, grabbing: 0..<2)
+    let reorder = armedGroup(rows, grabbing: 0..<2)
     reorder.drag(CGSize(width: 0, height: 45))
 
     let offsets = reorder.offsets()
@@ -75,7 +78,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// duplique ou la perd.
   func testTheWholeGroupIsRemovedFromTheRemainingRows() {
     let rows = longRows()
-    var reorder = armedGroup(rows, grabbing: 0..<2)
+    let reorder = armedGroup(rows, grabbing: 0..<2)
     // Assez bas pour viser après « d » : centres à 10, 30, 50, 70, 90.
     reorder.drag(CGSize(width: 0, height: 65))
 
@@ -88,7 +91,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// que pas de déplacement du tout.
   func testTheGroupStaysContiguousAndOrdered() {
     let rows = longRows()
-    var reorder = armedGroup(rows, grabbing: 2..<5)
+    let reorder = armedGroup(rows, grabbing: 2..<5)
     reorder.drag(CGSize(width: 0, height: -45))
 
     let dropped = reorder.dropped()?.map(\.title)
@@ -99,8 +102,8 @@ final class TaskPageReorderTests: XCTestCase {
   /// exactement comme avant la généralisation.
   func testASingleRowBehavesAsBefore() {
     let rows = longRows()
-    var solo = armedGroup(rows, grabbing: 1..<2)
-    var legacy = armed(rows, grabbing: 1)
+    let solo = armedGroup(rows, grabbing: 1..<2)
+    let legacy = armed(rows, grabbing: 1)
     solo.drag(CGSize(width: 0, height: 45))
     legacy.drag(CGSize(width: 0, height: 45))
 
@@ -135,7 +138,7 @@ final class TaskPageReorderTests: XCTestCase {
 
   private func armedPage() -> (TaskPageReorder, [TaskItem]) {
     let page = pageWithFields()
-    var reorder = TaskPageReorder()
+    let reorder = TaskPageReorder()
     reorder.measured(page.frames)
     reorder.begin([page.tasks[0]], in: page.tasks, physical: page.physical)
     // « a » descend sous « b » : centre 10 + 25 = 35, au-delà de la frontière a|b (20).
@@ -167,7 +170,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// deux mises en page sont la même. C'est ce qui leur permet d'ignorer complètement ce mécanisme.
   func testWithoutAPhysicalSequenceBothLayoutsAreTheSame() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
     reorder.drag(CGSize(width: 0, height: 25))
 
     XCTAssertEqual(reorder.rowLayout()?.others, reorder.layout()?.others)
@@ -194,7 +197,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// s'étend de 60 à 100, centre 80, dont on retire le repli du bloc tiré (60 − 20 = 40) puisqu'il
   /// est SOUS lui. Frontière effective : 40.
   private func armedBlock(_ rows: [TaskItem]) -> TaskPageReorder {
-    var reorder = TaskPageReorder()
+    let reorder = TaskPageReorder()
     reorder.measured(frames(rows))
     reorder.begin(
       Array(rows[0..<3]), in: rows,
@@ -206,7 +209,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// tenant : il ne peut pas s'insérer entre `hB` et `b1`.
   func testABlockLandsAtTheStartOfAnotherBlock() {
     let rows = blocks()
-    var reorder = armedBlock(rows)
+    let reorder = armedBlock(rows)
     reorder.drag(CGSize(width: 0, height: 45))  // centre 10 + 45 = 55, au-delà de 40
 
     XCTAssertEqual(reorder.dropped()?.map(\.title), ["hB", "b1", "hA", "a1", "a2"])
@@ -216,7 +219,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// C'est toute la différence avec une visée ligne à ligne.
   func testStayingAboveTheBlockBoundaryKeepsTheOrder() {
     let rows = blocks()
-    var reorder = armedBlock(rows)
+    let reorder = armedBlock(rows)
     reorder.drag(CGSize(width: 0, height: 20))  // centre 30, sous 40
 
     XCTAssertEqual(reorder.dropped()?.map(\.title), ["hA", "a1", "a2", "hB", "b1"])
@@ -226,7 +229,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// bougé d'un point : le bloc se réduit à son en-tête, les 40 pt de ses tâches sont rendus.
   func testFoldingAloneLiftsWhatWasBelow() {
     let rows = blocks()
-    var reorder = armedBlock(rows)
+    let reorder = armedBlock(rows)
     reorder.drag(.zero)
 
     XCTAssertEqual(reorder.offsets()[.task(rows[3].persistentModelID)]?.height, -40)
@@ -236,7 +239,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// d'une hauteur d'en-tête (20).
   func testFoldingAndSteppingAsideAddUp() {
     let rows = blocks()
-    var reorder = armedBlock(rows)
+    let reorder = armedBlock(rows)
     reorder.drag(CGSize(width: 0, height: 45))
 
     XCTAssertEqual(reorder.offsets()[.task(rows[3].persistentModelID)]?.height, -60)
@@ -250,7 +253,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// produit. La boucle se voit à l'écran comme une saccade.
   func testMeasurementsAreIgnoredWhileDragging() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
     let before = reorder.frames
 
     reorder.measured([:])
@@ -264,7 +267,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// pourrait changer sous lui.
   func testTheSequenceIsFrozenAtGrab() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
 
     XCTAssertEqual(reorder.rows.map(\.title), ["a", "b", "c"])
     reorder.end()
@@ -275,7 +278,7 @@ final class TaskPageReorderTests: XCTestCase {
 
   func testDroppingWithoutMovingKeepsTheOrder() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
     reorder.drag(.zero)
 
     XCTAssertEqual(reorder.dropped()?.map(\.title), ["a", "b", "c"])
@@ -285,7 +288,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// la suivante. Ici la ligne « a » (centre 10) doit dépasser 20 pour passer sous « b ».
   func testDraggingPastTheBoundaryMovesOneStep() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
 
     reorder.drag(CGSize(width: 0, height: 5))
     XCTAssertEqual(reorder.dropped()?.map(\.title), ["a", "b", "c"], "sous la frontière : rien")
@@ -296,7 +299,7 @@ final class TaskPageReorderTests: XCTestCase {
 
   func testDraggingToTheBottomPutsTheRowLast() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
     reorder.drag(CGSize(width: 0, height: 100))
 
     XCTAssertEqual(reorder.dropped()?.map(\.title), ["b", "c", "a"])
@@ -304,7 +307,7 @@ final class TaskPageReorderTests: XCTestCase {
 
   func testDraggingToTheTopPutsTheRowFirst() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 2)
+    let reorder = armed(rows, grabbing: 2)
     reorder.drag(CGSize(width: 0, height: -100))
 
     XCTAssertEqual(reorder.dropped()?.map(\.title), ["c", "a", "b"])
@@ -317,7 +320,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// relâchement.
   func testNeighboursStepAsideByOneRow() {
     let rows = rows()
-    var reorder = armed(rows, grabbing: 0)
+    let reorder = armed(rows, grabbing: 0)
     reorder.drag(CGSize(width: 0, height: 25))
 
     let offsets = reorder.offsets()
@@ -332,7 +335,7 @@ final class TaskPageReorderTests: XCTestCase {
   // MARK: Hors geste
 
   func testNothingIsComputedOutsideAGesture() {
-    var reorder = TaskPageReorder()
+    let reorder = TaskPageReorder()
     reorder.measured(frames(rows()))
 
     XCTAssertFalse(reorder.isDragging)
@@ -345,7 +348,7 @@ final class TaskPageReorderTests: XCTestCase {
   /// Elle ne doit pas pour autant faire échouer le reste : le geste se contente de ne rien faire.
   func testAnUnmeasuredRowComputesNothing() {
     let rows = rows()
-    var reorder = TaskPageReorder()
+    let reorder = TaskPageReorder()
     reorder.begin(rows[0], in: rows)
     reorder.drag(CGSize(width: 0, height: 30))
 

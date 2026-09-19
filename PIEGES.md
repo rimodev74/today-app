@@ -648,7 +648,51 @@ cette liste — chaque ligne a coûté un aller-retour de vérification manuelle
 5. **la page réaffiche sa séquence VIVANTE**, jamais la copie figée. Rendre l'une puis rebasculer sur
    l'autre au relâchement produit le même symptôme que le point 4, pour une autre raison : le
    `ForEach` réordonne ses identités au moment où les décalages retombent. Rien n'écrit pendant un
-   geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie.
+   geste, la séquence vivante ne bouge donc pas d'elle-même. Le CALCUL, lui, garde bien sa copie ;
+6. **rien de ce qui change à chaque image ne se lit depuis le corps de la PAGE** — ni la
+   translation, ni les décalages, ni le trou. C'est le point ci-dessous, et c'est celui qui
+   revenait.
+
+### Ce qui faisait REVENIR le glisser saccadé à chaque fonctionnalité
+
+(19 septembre 2026, banc de glissement rejoué sans souris, 22 lignes sur « Aujourd'hui ».) Les cinq
+règles ci-dessus étaient toutes tenues, et le glisser tournait quand même à **43,7 ms par image —
+23 Hz** sur un budget de 8,3. Corrigé, il revenait quelques fonctionnalités plus tard. Deux causes,
+et la même mécanique derrière les deux : **une valeur qui change 120 fois par seconde était lue dans
+un corps de vue qui construit toute la page.**
+
+**1. Les dérivés du rangement vers la sidebar étaient CALCULÉS.** `SidebarDrop.isAirborne` et
+`.hovered` se calculaient à la lecture, donc tout lecteur s'abonnait à `draggedFrame` — réécrit à
+chaque image par le calque en vol. Or leurs lecteurs sont le corps des trois pages qui glissent
+(`airborne:`, lu par rangée) et CHAQUE ligne de la barre latérale. Résultat : **deux** rendus
+complets de page par image (44 corps de `TaskRow` pour 22 lignes), plus toute la sidebar, badges
+recomptés compris. Les deux sont désormais STOCKÉS et réécrits seulement quand ils changent — un
+booléen qui bascule une fois par geste, un survol qui change tous les dix points. Mesure après :
+22 corps par image au lieu de 44, sidebar à zéro.
+
+**2. La translation vivait dans le `@State` de la page.** Une valeur dans un `@State` invalide le
+corps de sa page à chaque écriture, et ce corps construit ses 22 `TaskRow` — menu contextuel,
+résumé des sous-tâches et cluster de droite compris. **C'est ça, le mécanisme de la rechute** : tout
+ce qu'on ajoute à une page ou à `TaskRow` tombe dans le chemin de l'image, et le défaut réapparaît
+sans que rien de « la liste des cinq » n'ait été violé.
+
+La cure est la même des deux côtés de l'app, avec deux types observés (`TaskPageReorder` pour le
+moteur partagé, `ListDragMotion` pour celui de la page d'une liste) : **la page ÉCRIT depuis le
+geste, elle ne LIT jamais depuis son `body`.** Seuls deux modificateurs lisent — celui qui décale
+une rangée, celui qui dessine le trou — et dans un `ViewModifier`, `content` est un jeton opaque :
+`TaskRow.body` n'est pas rejoué. Un cache par numéro de révision garde une seule mise en page par
+image, la rangée qui la demande en premier la remplissant pour les autres.
+
+| | avant | après |
+| --- | --- | --- |
+| « Aujourd'hui », 22 lignes | 43,7 ms / image | ~3 ms |
+| page d'une liste, 23 lignes | 14,8 ms / image | 6,2 ms |
+| corps de `TaskRow` par image | 44, puis 23 | **0** |
+
+Les séquences du calcul de la page d'une liste (`list.orderedTasks`, `physicalRows`, `blocks`) sont
+en plus figées à l'empoignade, comme celles du moteur partagé l'étaient déjà : elles se
+reconstruisaient en traversant SwiftData à chaque image. Invisible à 23 lignes, c'est le terme qui
+grandit avec la liste.
 
 ### Une mesure posée APRÈS un `.offset` ne bouge pas
 

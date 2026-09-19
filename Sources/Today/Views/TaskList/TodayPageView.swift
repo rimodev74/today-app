@@ -95,9 +95,6 @@ struct TodayPageView: View {
     // Le geste, lui, garde bien sa copie figée pour son calcul (cf. `TaskPageReorder`) : ce qui est
     // rendu et ce qui est calculé n'ont pas les mêmes contraintes.
     let rows = page.tasks
-    // Calculés UNE fois et distribués aux rangées : les interroger par ligne referait le même
-    // balayage à chaque rangée, à chaque image du glissement (cf. `ReorderLayout.offsets`).
-    let offsets = reorder.offsets()
     // Champ de création : journée vide seulement — ou focalisé, pour ne pas se dérober en pleine
     // saisie enchaînée. Cf. `ListPageView.showsNewTaskField`. Lu aussi par le ⊕ de la barre du bas,
     // qui ne peut donc pas viser un champ absent.
@@ -113,9 +110,7 @@ struct TodayPageView: View {
             eventsSection(apple.events)
 
             ForEach(rows) { task in
-              taskRow(
-                for: task, offset: offsets[.task(task.persistentModelID)] ?? .zero, draggable: true,
-                rows: rows)
+              taskRow(for: task, draggable: true, rows: rows)
             }
             if showsNewTaskField { newTaskRow }
             remindersSection(apple.reminders)
@@ -135,7 +130,7 @@ struct TodayPageView: View {
     // le socle range les cadres chez lui et le glissement n'en voit aucun.
     .taskPageBase(
       focus: $focus, blocks: { page.blocks }, delete: delete,
-      reorder: $reorder,
+      reorder: reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
       newTask: MenuAction(id: "newTask.today", run: createTaskInEditMode)
     )
@@ -186,7 +181,7 @@ struct TodayPageView: View {
   /// sous-tâches viennent avec, sans une ligne de plus ici.
   private func taskRow(
     for task: TaskItem, showsParent: Bool = true,
-    offset: CGSize = .zero, draggable: Bool = false, rows: [TaskItem] = []
+    draggable: Bool = false, rows: [TaskItem] = []
   ) -> some View {
     // Typés ici : un ternaire entre une closure et `nil` ne s'infère pas au milieu d'une chaîne de
     // modificateurs, et le compilateur n'en dit rien d'utile.
@@ -229,7 +224,7 @@ struct TodayPageView: View {
     )
     // Rien n'est capturé en image : c'est la vraie rangée qui se déplace, donc rien ne disparaît
     // ni ne réapparaît au relâchement.
-    .taskRowDragLayer(reorder, task: task, offset: offset, airborne: filing.isAirborne)
+    .taskRowDragLayer(reorder, task: task, airborne: filing.isAirborne)
     // La même entrée que sur une page de liste : créée, ou revenue par ⌘Z.
     .taskRowInsertion()
     // Ce qui permet au socle de savoir qu'un clic est tombé À CÔTÉ des tâches, et au glissement de
@@ -240,7 +235,7 @@ struct TodayPageView: View {
   /// Relâchement. La mécanique (lire le plan avant de désarmer, tout écrire en une transaction)
   /// est dans `dropTaskDrag` ; ici il ne reste que ce qui appartient à cette page — le rang.
   private func dropDraggedTask() {
-    dropTaskDrag(&reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
+    dropTaskDrag(reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
     }
