@@ -81,7 +81,10 @@ struct PageHeaderIcon: View {
 /// `taskFlow` = la Material standard de l'index.html de référence.
 // Internes et non `private` : « Aujourd'hui » pilote les mêmes transitions sur les mêmes
 // `TaskRow` — deux courbes distinctes se verraient au passage d'une page à l'autre.
-let taskFlow = Animation.timingCurve(0.4, 0, 0.2, 1, duration: 0.2)
+let taskFlow = Animation.timingCurve(0.4, 0, 0.2, 1, duration: taskFlowDuration)
+/// Nommée à part parce qu'une `Animation` ne dit pas sa durée : `TaskRow` attend la fin de
+/// l'ouverture pour poser le focus, et doit donc la connaître.
+let taskFlowDuration: TimeInterval = 0.2
 let taskSelectFade = Animation.easeOut(duration: 0.05)
 /// Apparition (création) ET disparition (suppression) d'une ligne, dans les deux sens. Le
 /// réordonnancement, lui, passe par des offsets et pas des insertions/suppressions — la

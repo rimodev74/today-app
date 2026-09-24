@@ -2122,16 +2122,6 @@ private struct TaskBlock: Identifiable {
   var items: [TaskItem] { (header.map { [$0] } ?? []) + tasks }
 }
 
-/// Hauteur naturelle du corps d'édition d'une tâche (notes + rangée d'actions), pour animer sa
-/// RÉVÉLATION — la fenêtre qui s'ouvre — sans faire bouger le contenu. Une seule tâche est éditée à
-/// la fois, donc une seule valeur en vol ; `max` par prudence si deux mesures se chevauchent.
-struct EditorHeightKey: PreferenceKey {
-  static let defaultValue: CGFloat = 0
-  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-    value = max(value, nextValue())
-  }
-}
-
 /// Position de repos de chaque ligne physique — tâche/en-tête RÉELLE ou champ « Nouvelle tâche »
 /// VIRTUEL, cf. `ListPageView.RowKey` — dans le même espace de coordonnées. Une seule clé pour les
 /// deux : un champ participe au MÊME calcul de décalage qu'une tâche (cf. `dragState`), jamais un

@@ -1352,7 +1352,7 @@ private struct QuickEntryView: View {
   private var destinationBox: some View {
     // Monté sur `showsDestinations` et non sur `picking` : le contenu survit à la fermeture, le
     // temps que la hauteur retombe à zéro. Démonté d'un coup, le bloc se viderait sous les yeux
-    // avant d'avoir fini de se replier — même motif que `TaskRow.showEditor`.
+    // avant d'avoir fini de se replier.
     ScrollView {
       if showsDestinations { destinationList.transition(.identity) }
     }

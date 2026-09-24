@@ -797,6 +797,27 @@ Ce focus décalé va dans `taskFlow`, pas hors transaction : posé nu, le petit 
 le field editor en prenant le relais (quelques points) sautait sans s'animer. Imperceptible sur un
 titre seul, visible en à-coup sur une carte haute.
 
+### Ouvrir une carte : ce qui coûte ne doit pas tomber DANS l'animation
+
+(24 septembre 2026, double-clic rejoué sans souris, horloge d'affichage à 120 Hz.) Le glisser était
+fluide, l'ouverture d'une carte saccadait. Les corps ne se rejouaient presque pas (7 `TaskRow`,
+2 pages) : le coût était ailleurs, concentré sur UNE ou DEUX images de 30 à 60 ms au début d'une
+animation de 0,2 s — un quart de l'ouverture mangé d'un coup. Trois causes :
+
+1. **La prise de focus du titre** (~40 ms) : field editor, fenêtre de Writing Tools, et la
+   sur-notification SwiftData ci-dessus qui fait refetcher la sidebar. Vérifié : sans focus, la
+   sidebar ne se rejoue plus ; ni l'écriture du `Binding` à l'identique ni l'`UndoManager` n'y sont
+   pour rien. Le focus est donc posé à la FIN de l'ouverture (`taskFlowDuration`), pas au tick
+   suivant — l'image lourde tombe hors de l'animation, qui tourne à 8,3 ms partout.
+2. **Les sous-tâches basculaient `Text` ↔ `TextField`** : deux identités en fondu croisé (titre
+   dédoublé au ralenti) et un `NSTextField` créé par sous-tâche sur la première image. Même règle
+   que le titre de `TaskRow` : un seul `TextField`, inerte au repos.
+3. **La note et la rangée d'actions partaient APRÈS la carte** : l'une après une passe de mesure
+   (`onPreferenceChange`), l'autre à son `onAppear`, chacune dans son `withAnimation`. Trois départs
+   décalés pour une ouverture. Montées sur `isEditing` avec une transition de révélation, elles
+   partent dans la transaction de la page. Au RETRAIT, une vue ne suit plus la mise en page : elle
+   reste à sa place pendant que la carte se referme sous elle — d'où un fondu de retrait très court.
+
 ### Une page de tâches a DEUX colonnes, et cinq endroits l'ont oublié
 
 `taskContentColumn` (les repères de section : bandeau de page, encadré toujours affiché, pilule

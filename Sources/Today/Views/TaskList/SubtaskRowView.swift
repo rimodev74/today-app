@@ -29,25 +29,37 @@ struct SubtaskRowView: View {
       // coche restent animés par la transaction de la carte, pas par la case.
       .buttonStyle(PressBounceButtonStyle())
 
-      if isEditing {
-        TextField("Sous-tâche", text: $subtask.title)
-          .textFieldStyle(.plain)
-          .foregroundStyle(.secondary)
-          .focused($focus, equals: subtask.uuid)
-          // Intercepté AVANT le field editor, pas en `onSubmit` : un `NSTextField` qui valide
-          // re-sélectionne tout son texte, et ce surlignage restait visible le temps que le focus
-          // rejoigne la nouvelle sous-tâche. Même geste que le titre de `TaskRow`.
-          // `\u{03}` : l'Entrée du pavé numérique (et fn+↩), que `onSubmit` couvrait aussi.
-          .onKeyPress(phases: .down) { press in
-            guard press.key == .return || press.characters == "\u{03}" else { return .ignored }
-            onEnter()
-            return .handled
+      // UN SEUL `TextField`, au repos comme en édition — même règle que le titre de `TaskRow`, et
+      // pour la même raison. Un `if isEditing` entre un `Text` et un `TextField` échangeait deux
+      // identités à l'ouverture de la carte : l'ancien texte restait à sa place pendant que la
+      // rangée descendait, la copie neuve fondait par-dessus (titre dédoublé à l'écran), et chaque
+      // sous-tâche créait son `NSTextField` sur la PREMIÈRE image de l'animation — celle qui
+      // décrochait déjà.
+      TextField("Sous-tâche", text: $subtask.title)
+        .textFieldStyle(.plain)
+        .foregroundStyle(.secondary)
+        .focused($focus, equals: subtask.uuid)
+        // Au repos, ni clic ni clavier : le clic va à la ligne, et AppKit ne doit pas pouvoir y
+        // reposer le premier répondeur tout seul (cf. `TaskRow.titleView`).
+        .allowsHitTesting(isEditing)
+        .focusable(isEditing)
+        // Intercepté AVANT le field editor, pas en `onSubmit` : un `NSTextField` qui valide
+        // re-sélectionne tout son texte, et ce surlignage restait visible le temps que le focus
+        // rejoigne la nouvelle sous-tâche. Même geste que le titre de `TaskRow`.
+        // `\u{03}` : l'Entrée du pavé numérique (et fn+↩), que `onSubmit` couvrait aussi.
+        .onKeyPress(phases: .down) { press in
+          guard press.key == .return || press.characters == "\u{03}" else { return .ignored }
+          onEnter()
+          return .handled
+        }
+        // Le barré, qu'un `TextField` ne rend pas : le champ s'efface derrière un `Text` barré,
+        // il ne disparaît pas (même identité, même hauteur).
+        .opacity(isStruck ? 0 : 1)
+        .overlay(alignment: .leading) {
+          if isStruck {
+            Text(subtask.title).strikethrough().foregroundStyle(.secondary)
           }
-      } else {
-        Text(subtask.title)
-          .strikethrough(subtask.isDone)
-          .foregroundStyle(.secondary)
-      }
+        }
 
       Spacer(minLength: 0)
 
@@ -70,6 +82,9 @@ struct SubtaskRowView: View {
       Button("Supprimer", role: .destructive, action: onDelete)
     }
   }
+
+  /// Barrée au repos seulement : on édite un titre lisible, comme celui d'une tâche.
+  private var isStruck: Bool { subtask.isDone && !isEditing }
 
   /// Case carrée mais NETTEMENT plus arrondie que celle d'une tâche (rayon 5,5 sur 14 vs 4,5 sur 16).
   /// Cochée : contour + ✓ à la couleur de la page sur fond léger — assez marqué pour se lire d'un

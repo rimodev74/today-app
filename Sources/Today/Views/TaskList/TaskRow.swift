@@ -1,7 +1,7 @@
 // La ligne d'une tâche : au repos, en sélection, en édition. Sortie de `TaskListView.swift`, qui
 // mélangeait le routage des pages, la ligne, l'en-tête de section et la case à cocher dans un seul
-// fichier de 2 750 lignes. Rien n'a changé de comportement — seuls `HeaderRow` et
-// `EditorHeightKey` ont dû passer de `private` à interne pour rester atteignables.
+// fichier de 2 750 lignes. Rien n'a changé de comportement — seul `HeaderRow` a dû passer de
+// `private` à interne pour rester atteignable.
 
 import AppKit
 import SwiftData
@@ -10,8 +10,8 @@ import SwiftUI
 /// Une tâche dans la liste. Deux modes :
 /// - **affichage** : case à cocher + titre. Double-clic pour éditer.
 /// - **édition** (double-clic) : carte détachée avec titre, notes, sous-tâches, et une rangée
-///   d'actions en bas (date, priorité), façon Things. Une sous-tâche s'ajoute depuis le SURVOL de
-///   la ligne (`subtaskHint`), pas depuis cette rangée.
+///   d'actions en bas (sous-tâche, date, priorité), façon Things. Au repos, la sous-tâche s'ajoute
+///   aussi depuis le SURVOL de la ligne (`subtaskHint`), qui ouvre la carte.
 ///
 /// Le double-clic est un simple `.onTapGesture(count: 2)` — possible parce qu'on n'est plus sur
 /// une `List`/NSTableView (qui avalait ses clics). C'est tout le bénéfice de la refonte.
@@ -92,19 +92,8 @@ struct TaskRow: View {
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
-  // Révélation du corps d'édition. `editorHeight` = sa hauteur naturelle mesurée (cache, sert de
-  // cible d'ouverture) ; `editorReveal` = la hauteur RÉELLEMENT dévoilée (animée), 0 = fermé. On
-  // anime la fenêtre qui découvre le contenu, jamais le contenu lui-même — il reste figé à sa place.
-  @State private var editorHeight: CGFloat = 0
-  @State private var editorReveal: CGFloat = 0
-  /// Même rôle qu'`editorReveal`, pour la rangée d'actions posée sous les sous-tâches. Pas de
-  /// hauteur mesurée à côté : la sienne est connue (`actionRowHeight`).
-  @State private var actionsReveal: CGFloat = 0
-  // Le corps d'édition survit à la sortie de `isEditing` : `showEditor` le garde monté pendant la
-  // fermeture animée (la fenêtre rétrécit, le clipping ravale le contenu), puis on le démonte pour
-  // ne pas garder son NSTextView en vie. `editSession` annule un démontage programmé si une nouvelle
-  // session d'édition démarre entre-temps (réouverture rapide).
-  @State private var showEditor = false
+  /// Numéro de la session d'édition : le focus du titre, posé en fin d'ouverture, ne se pose que si
+  /// la session qui l'a demandé est toujours la bonne (fermeture ou réouverture rapide entre-temps).
   @State private var editSession = 0
   @State private var showReminderSheet = false
   /// L'édition a été ouverte par l'icône « sous-tâche » du survol : le focus doit atterrir sur une
@@ -189,52 +178,26 @@ struct TaskRow: View {
       // corps d'édition ci-dessous prend le relais avec la note complète et modifiable.
       if !isEditing && !task.notes.isEmpty { notePreview }
 
-      // Montée sur `showEditor`, pas `isEditing` : le corps reste affiché pendant la fermeture animée.
-      if showEditor {
-        // OUVERTURE **ET** FERMETURE PAR RÉVÉLATION, jamais par translation ni disparition sèche. Le
-        // champ de notes est posé UNE fois à sa place définitive sous le titre — `fixedSize` lui garde
-        // sa hauteur naturelle — et ne bouge JAMAIS : c'est la fenêtre qui le découvre
-        // (`frame(height: editorReveal)` + `clipped`, ancrée en haut) qui grandit puis rapetisse.
-        // Ouverture : `editorReveal` 0 → hauteur mesurée (le contenu se dévoile du haut vers le bas).
-        // Fermeture : hauteur → 0, le clipping ravale la note (tout reste affiché, on ne masque rien à
-        // la main). Une fois refermée et hors édition, le corps est démonté (cf.
-        // `.onChange(of: isEditing)`) pour libérer son NSTextView.
+      // OUVERTURE PAR RÉVÉLATION, jamais par translation ni apparition sèche : la note est posée à
+      // sa place définitive — `fixedSize` lui garde sa hauteur naturelle — et c'est la fenêtre qui
+      // la découvre qui grandit (`editorReveal`). La fermeture, elle, l'efface (cf. ce type).
+      //
+      // Montée sur `isEditing` et rien d'autre, pour une raison de TEMPS. Elle l'était sur un
+      // `@State` posé depuis `onChange(of: isEditing)`, avec une hauteur MESURÉE puis animée dans
+      // un second `withAnimation` : trois départs (la carte, la note une passe de mesure plus tard,
+      // la rangée d'actions à son `onAppear`), trois animations décalées sur une seule ouverture —
+      // la note tombait à côté du reste. Une transition insérée par `isEditing` part dans la
+      // transaction de la PAGE : même courbe, même image que la carte. Au retrait, SwiftUI garde la
+      // note le temps de sa transition, NSTextView compris, puis la libère : plus de démontage à la
+      // main.
+      if isEditing {
         notesField
           .padding(.top, 12)
           // Respiration sous la note, DANS la fenêtre révélée : elle n'est plus le bas de la carte
           // (sous-tâches et rangée d'actions suivent), inutile d'y porter toute la marge basse.
           .padding(.bottom, 4)
           .fixedSize(horizontal: false, vertical: true)
-          .background {
-            GeometryReader { g in
-              Color.clear.preference(key: EditorHeightKey.self, value: g.size.height)
-            }
-          }
-          .frame(height: editorReveal, alignment: .top)
-          .clipped()
-          // Pas d'interaction hors édition : pendant la fermeture le contenu est encore là mais inerte.
-          .allowsHitTesting(isEditing)
-          .onPreferenceChange(EditorHeightKey.self) { h in
-            guard h > 0 else { return }
-            editorHeight = h
-            // Ne (re)déployer QUE si l'on édite : sinon la mesure du contenu encore monté pendant la
-            // fermeture rouvrirait la fenêtre. En édition : 1re mesure → déploie ; sinon suit le
-            // contenu (notes multi-lignes tapées).
-            guard isEditing else { return }
-            if editorReveal == 0 {
-              withAnimation(taskFlow) { editorReveal = h }
-            } else {
-              editorReveal = h
-            }
-          }
-          .onAppear {
-            // Réouverture (hauteur déjà en cache) : déployer tout de suite. Sinon la 1re mesure
-            // ci-dessus s'en charge — l'un OU l'autre déclenche l'animation, jamais un saut.
-            if isEditing, editorHeight > 0 {
-              withAnimation(taskFlow) { editorReveal = editorHeight }
-            }
-          }
-          .transition(.identity)
+          .transition(.editorReveal)
       }
 
       // Sous-tâches : montées au repos comme en édition, APRÈS l'éditeur de notes pour respecter
@@ -244,13 +207,8 @@ struct TaskRow: View {
 
       // La rangée d'actions ferme la carte, SOUS les sous-tâches. Elle était entre la note et
       // elles — donc au milieu, détachée des deux blocs qu'elle séparait. En bas et au bord droit,
-      // elle se lit comme la barre d'outils de la carte.
-      //
-      // Hors de la fenêtre de révélation des notes, qui se MESURE : celle-ci a une hauteur connue
-      // (une rangée d'icônes de 22 pt), on la clippe donc sur un nombre plutôt que d'ajouter une
-      // seconde machinerie de mesure. Même séquence pour le reste : montée à 0, déployée d'un tick,
-      // ravalée à la fermeture.
-      if showEditor { actionRow }
+      // elle se lit comme la barre d'outils de la carte. Même révélation que la note, même départ.
+      if isEditing { actionRow.transition(.editorReveal) }
     }
     // Ajout/suppression d'une sous-tâche : `withAnimation` autour de la mutation ne suffit PAS —
     // SwiftData notifie le changement de relation hors de la transaction, la carte sautait donc à sa
@@ -263,8 +221,7 @@ struct TaskRow: View {
     // d'icônes de survol change la largeur utile au passage, le texte se replie autrement — et le
     // clip COUPAIT ce qui dépassait pendant toute l'animation. Le seul contenu qui a vraiment besoin
     // d'être borné, c'est la fenêtre de révélation de l'éditeur, et elle porte déjà son propre
-    // `.clipped()` sur son `frame(height: editorReveal)` (cf. plus haut). Celui-ci n'ajoutait que
-    // le défaut.
+    // `.clipped()` (cf. `EditorReveal`). Celui-ci n'ajoutait que le défaut.
     // Décrue : une tâche que personne ne réveille s'efface. Posé sur le CONTENU seulement (avant
     // `.background`), pour que le fond de sélection reste franc — c'est la tâche qui pâlit, pas
     // le fait qu'elle soit sélectionnée. Pleine opacité dès qu'on l'édite : on la touche, elle
@@ -350,9 +307,6 @@ struct TaskRow: View {
     // poser à son .onAppear. On le pose/retire au basculement d'état — sauf si l'édition a été
     // ouverte depuis l'icône « note » (`focusNotesOnAppear`), auquel cas le focus doit atterrir dans
     // les notes, pas dans le titre.
-    // Tâche qui naît déjà en édition (création, insertion d'en-tête) : `onChange` ne se déclenche pas
-    // (pas de transition false→true observée), on monte donc le corps ici.
-    .onAppear { if isEditing { showEditor = true } }
     // Pas de sous-tâche vide : dès que le focus quitte une sous-tâche restée sans texte, on la
     // supprime (annule une création vide). Couvre aussi la fermeture de la tâche — le focus retombe
     // alors à `nil`, ce qui déclenche la vérification sur la dernière sous-tâche éditée.
@@ -366,22 +320,23 @@ struct TaskRow: View {
     }
     .onChange(of: isEditing) { _, editing in
       if editing {
-        // Nouvelle session : (ré)affiche le corps et invalide un démontage en attente (réouverture
-        // pendant la fermeture animée). `stillMounted` retient lequel des deux cas on est AVANT
-        // d'écraser le drapeau.
-        let stillMounted = showEditor
         editSession += 1
-        showEditor = true
         // Le titre, SAUF si l'édition part de l'icône « sous-tâche » du survol : le geste promet un
         // champ de sous-tâche prêt, le focus doit y aller. (Même exception qu'avait l'icône
         // « note », retirée depuis — la différence est que celle-ci ouvre un champ qui n'existait
         // pas encore, d'où la création DANS le même tick que le focus.)
         //
-        // DÉCALÉ D'UN TICK, et dans `taskFlow` : les deux sont délibérés, et un `titleFocused = true`
-        // posé nu ici fige la hauteur du champ à 0 pour toute la session d'édition. Le mécanisme et
-        // la mesure sont dans `PIEGES.md` § Layout.
+        // DÉCALÉ, et dans `taskFlow` : les deux sont délibérés. Un `titleFocused = true` posé nu ici
+        // fige la hauteur du champ à 0 pour toute la session d'édition (`PIEGES.md` § Layout).
+        //
+        // Et décalé jusqu'à la FIN de l'ouverture, pas d'un seul tick : prendre le focus coûte
+        // ~40 ms sur le fil principal (field editor, fenêtre de Writing Tools, et la sur-notification
+        // SwiftData qui fait refetcher la sidebar). Au tick suivant, cette image tombait au début
+        // d'une animation de 0,2 s et en mangeait le quart — c'était l'à-coup du double-clic.
+        // Mesuré le 24 septembre 2026 : 40–60 ms en 2ᵉ image, contre 8,3 ms partout une fois
+        // décalé. Le curseur arrive quand la carte a fini de s'ouvrir, comme dans Things.
         let session = editSession
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + taskFlowDuration) {
           guard session == editSession else { return }
           if pendingSubtask {
             pendingSubtask = false
@@ -390,31 +345,14 @@ struct TaskRow: View {
             withAnimation(taskFlow) { titleFocused = true }
           }
         }
-        // Réouverture alors que le corps est encore monté (fermeture en cours) : `onAppear` ne
-        // rejoue pas, on redéploie ici. La 1re ouverture passe, elle, par la mesure (onPreferenceChange).
-        if editorHeight > 0 { withAnimation(taskFlow) { editorReveal = editorHeight } }
-        // Même cas pour la rangée d'actions. Sur une ouverture franche elle n'est PAS encore montée :
-        // la déployer ici la ferait naître à pleine hauteur, d'un coup — c'est son `onAppear` qui
-        // s'en charge, depuis 0.
-        if stillMounted { withAnimation(taskFlow) { actionsReveal = Self.actionRowHeight } }
       } else {
         titleFocused = false
         // Le drapeau ne survit pas à la session : le tick qui le consomme est gardé par
         // `editSession`, donc une fermeture arrivée entre-temps le laisserait armé — et la
         // réouverture suivante de CETTE ligne s'ouvrirait sur une sous-tâche vide.
         pendingSubtask = false
-        // Fermeture ANIMÉE : les deux fenêtres rétrécissent (le clipping ravale la note et la rangée
-        // d'actions, laissées affichées), puis on démonte le corps une fois à 0 — sauf si une
-        // nouvelle session a redémarré.
+        // Invalide un focus encore en attente : il viserait une carte déjà refermée.
         editSession += 1
-        let token = editSession
-        withAnimation(taskFlow) {
-          editorReveal = 0
-          actionsReveal = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
-          if token == editSession { showEditor = false }
-        }
       }
     }
     // Les transitions d'ÉTAT (normal ↔ select ↔ édition) sont déclenchées en explicite
@@ -507,33 +445,23 @@ struct TaskRow: View {
 
   // MARK: Rangée d'actions
 
-  /// Hauteur de la rangée d'actions : ses icônes font 22 pt, plus les 10 pt qui la détachent des
-  /// sous-tâches.
-  /// ponytail: figée parce que la rangée ne contient que des icônes d'une seule taille. Si elle
-  /// gagne du texte ou une seconde ligne, repasser par une mesure comme `EditorHeightKey`.
-  private static let actionRowHeight: CGFloat = 32
-
-  /// Les actions de la carte : date et priorité. PAS de bouton « sous-tâche » — il faisait doublon
-  /// avec l'icône du survol (même glyphe, même geste), et chaque clic de plus posait une sous-tâche
-  /// vide de plus. Une sous-tâche s'ajoute au survol de la ligne, et s'enchaîne à l'Entrée depuis la
-  /// précédente (`enterOnSubtask`).
+  /// Les actions de la carte : sous-tâche, date et priorité — la sous-tâche À GAUCHE du
+  /// calendrier, dans le même ordre qu'au survol. Retirée un temps parce que chaque clic posait une
+  /// sous-tâche vide de plus ; c'est `addNewSubtask` qui est devenu idempotent, pas le bouton qui
+  /// devait disparaître : la carte ouverte masque la colonne du survol, il n'y avait donc plus
+  /// AUCUN moyen visible d'ajouter une première sous-tâche une fois dedans.
   private var actionRow: some View {
     HStack(spacing: 16) {
       // Collée au bord DROIT de la carte, comme avant son déménagement en bas : à gauche elle
       // s'alignait sur la colonne du contenu et se lisait comme une troisième sous-tâche.
       Spacer(minLength: 0)
+      Button(action: addNewSubtask) { actionIcon("checklist") }
+        .buttonStyle(.plain)
+        .help("Ajouter une sous-tâche")
       dateControl
       priorityControl
     }
     .padding(.top, 10)
-    .frame(height: actionsReveal, alignment: .top)
-    .clipped()
-    // Pendant la fermeture la rangée est encore là, mais inerte (cf. la fenêtre des notes).
-    .allowsHitTesting(isEditing)
-    .onAppear {
-      guard isEditing else { return }
-      withAnimation(taskFlow) { actionsReveal = Self.actionRowHeight }
-    }
   }
 
   // MARK: Notes
@@ -754,7 +682,16 @@ struct TaskRow: View {
   /// Ajoute une sous-tâche vide, déplie le dépliant (pour la voir) et pose le focus dessus.
   /// `withAnimation` : sans lui la carte saute à sa nouvelle hauteur (la mutation SwiftData tombe
   /// hors transaction animée) — cf. `removeSubtask`/`deleteIfEmpty`, même raison.
+  ///
+  /// Une sous-tâche encore VIDE reprend le focus au lieu d'en poser une deuxième : deux clics ne
+  /// laissent qu'un champ à remplir, jamais une pile de lignes blanches.
   private func addNewSubtask() {
+    if let blank = task.subtasks.first(where: {
+      $0.title.trimmingCharacters(in: .whitespaces).isEmpty
+    }) {
+      focusedSubtask = blank.uuid
+      return
+    }
     withAnimation(taskFlow) {
       subtasksExpanded = true
       focusedSubtask = task.addSubtask().uuid
@@ -1059,5 +996,36 @@ struct TaskRow: View {
       )
       .frame(width: 22, height: 22)
       .contentShape(Rectangle())
+  }
+}
+
+/// La révélation du corps d'édition (note, rangée d'actions) : une fenêtre ancrée en haut qui
+/// passe de 0 à la hauteur naturelle de son contenu, et le contenu qui fond avec elle.
+///
+/// Le contenu ne bouge JAMAIS (`fixedSize` en amont lui garde sa hauteur) : c'est le clip qui le
+/// découvre, du haut vers le bas — sans translation, qui ferait glisser la note sous les
+/// sous-tâches, ni fondu seul, qui la poserait d'un coup à pleine hauteur par-dessus elles. Le
+/// fondu du contenu est EXPLICITE, comme pour tout dépliant (cf. `CLAUDE.md` § Animations).
+private struct EditorReveal: ViewModifier {
+  let shown: Bool
+
+  func body(content: Content) -> some View {
+    content
+      .frame(height: shown ? nil : 0, alignment: .top)
+      .clipped()
+      .opacity(shown ? 1 : 0)
+      // Inerte tant qu'il n'est pas entièrement découvert.
+      .allowsHitTesting(shown)
+  }
+}
+
+extension AnyTransition {
+  /// Asymétrique : une vue RETIRÉE ne suit plus la mise en page, elle reste à sa dernière place
+  /// pendant que la carte se referme sous elle — vérifié au ralenti, la rangée d'actions passait
+  /// sur la ligne suivante. Elle s'efface donc bien avant que la carte ne l'ait rattrapée.
+  fileprivate static var editorReveal: AnyTransition {
+    .asymmetric(
+      insertion: .modifier(active: EditorReveal(shown: false), identity: EditorReveal(shown: true)),
+      removal: .opacity.animation(.easeOut(duration: 0.08)))
   }
 }
