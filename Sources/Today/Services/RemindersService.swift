@@ -100,37 +100,44 @@ final class RemindersService {
     existingIdentifier: String? = nil
   ) async throws -> String {
     try await requestAccess()
+    // Relire puis enregistrer : deux allers-retours XPC SYNCHRONES, sur un autre fil (cf.
+    // `setCompleted`). La passe qui appelle les attend sans geler celui qui dessine.
+    let store = UncheckedBox(store)
+    let preferred = UncheckedBox(list)
+    let fallback = UncheckedBox(defaultList)
+    return try await Task.detached(priority: .userInitiated) {
+      let store = store.value
+      // Réutilise le rappel existant si on le retrouve, sinon en crée un neuf
+      // (couvre le cas où l'utilisateur l'aurait supprimé côté Rappels).
+      let reminder =
+        existingIdentifier
+        .flatMap { store.calendarItem(withIdentifier: $0) as? EKReminder }
+        ?? EKReminder(eventStore: store)
 
-    // Réutilise le rappel existant si on le retrouve, sinon en crée un neuf
-    // (couvre le cas où l'utilisateur l'aurait supprimé côté Rappels).
-    let reminder =
-      existingIdentifier
-      .flatMap { store.calendarItem(withIdentifier: $0) as? EKReminder }
-      ?? EKReminder(eventStore: store)
+      guard let destination = preferred.value ?? reminder.calendar ?? fallback.value else {
+        throw RemindersError.noWritableList
+      }
 
-    guard let destination = list ?? reminder.calendar ?? defaultList else {
-      throw RemindersError.noWritableList
-    }
+      let calendar = Calendar.current
+      let fields: Set<Calendar.Component> = [.year, .month, .day, .hour, .minute]
 
-    let calendar = Calendar.current
-    let fields: Set<Calendar.Component> = [.year, .month, .day, .hour, .minute]
+      reminder.title = title
+      reminder.calendar = destination
+      reminder.startDateComponents = calendar.dateComponents(fields, from: start)
+      reminder.dueDateComponents = calendar.dateComponents(fields, from: due)
 
-    reminder.title = title
-    reminder.calendar = destination
-    reminder.startDateComponents = calendar.dateComponents(fields, from: start)
-    reminder.dueDateComponents = calendar.dateComponents(fields, from: due)
+      // Une échéance datée ne déclenche pas de notification seule : on pose une alarme à l'heure
+      // d'échéance. On purge d'abord les anciennes pour ne pas les empiler lors d'une mise à jour.
+      reminder.alarms?.forEach(reminder.removeAlarm)
+      reminder.addAlarm(EKAlarm(absoluteDate: due))
 
-    // Une échéance datée ne déclenche pas de notification seule : on pose une alarme à l'heure
-    // d'échéance. On purge d'abord les anciennes pour ne pas les empiler lors d'une mise à jour.
-    reminder.alarms?.forEach(reminder.removeAlarm)
-    reminder.addAlarm(EKAlarm(absoluteDate: due))
-
-    do {
-      try store.save(reminder, commit: true)
-    } catch {
-      throw RemindersError.saveFailed(underlying: error)
-    }
-    return reminder.calendarItemIdentifier
+      do {
+        try store.save(reminder, commit: true)
+      } catch {
+        throw RemindersError.saveFailed(underlying: error)
+      }
+      return reminder.calendarItemIdentifier
+    }.value
   }
 
   // MARK: Écriture — les tâches à DURÉE, qui partent en événements et non en rappels
@@ -155,24 +162,31 @@ final class RemindersService {
     existingIdentifier: String? = nil
   ) async -> String? {
     guard await requestEventAccess() else { return nil }
+    // Hors du fil principal, comme `schedule` : relire et enregistrer sont synchrones.
+    let store = UncheckedBox(store)
+    let preferred = UncheckedBox(calendar)
+    return await Task.detached(priority: .userInitiated) { () -> String? in
+      let store = store.value
+      let calendar = preferred.value
 
-    // `existing` est distinct de `event` parce que c'est LUI qui dit où écrire : un événement
-    // retrouvé garde son calendrier (déplacé à la main, il y reste), un événement neuf prend celui
-    // des Réglages. L'appelant passe donc toujours le calendrier désigné — sans cette distinction,
-    // un événement supprimé côté Calendrier se recréait dans le calendrier PAR DÉFAUT du système
-    // au lieu de celui qu'on avait choisi.
-    let existing = existingIdentifier.flatMap { store.event(withIdentifier: $0) }
-    let event = existing ?? EKEvent(eventStore: store)
-    guard let destination = existing?.calendar ?? calendar ?? store.defaultCalendarForNewEvents
-    else { return nil }
+      // `existing` est distinct de `event` parce que c'est LUI qui dit où écrire : un événement
+      // retrouvé garde son calendrier (déplacé à la main, il y reste), un événement neuf prend celui
+      // des Réglages. L'appelant passe donc toujours le calendrier désigné — sans cette distinction,
+      // un événement supprimé côté Calendrier se recréait dans le calendrier PAR DÉFAUT du système
+      // au lieu de celui qu'on avait choisi.
+      let existing = existingIdentifier.flatMap { store.event(withIdentifier: $0) }
+      let event = existing ?? EKEvent(eventStore: store)
+      guard let destination = existing?.calendar ?? calendar ?? store.defaultCalendarForNewEvents
+      else { return nil }
 
-    event.title = title
-    event.calendar = destination
-    event.startDate = start
-    event.endDate = start.addingTimeInterval(TimeInterval(minutes) * 60)
+      event.title = title
+      event.calendar = destination
+      event.startDate = start
+      event.endDate = start.addingTimeInterval(TimeInterval(minutes) * 60)
 
-    guard (try? store.save(event, span: .thisEvent, commit: true)) != nil else { return nil }
-    return event.eventIdentifier
+      guard (try? store.save(event, span: .thisEvent, commit: true)) != nil else { return nil }
+      return event.eventIdentifier
+    }.value
   }
 
   /// Ce que portent les événements liés, relus en UNE requête sur la fenêtre qui les contient.
@@ -187,19 +201,27 @@ final class RemindersService {
   /// va le chercher, une lecture à l'unité pour ce seul cas. Sans elle, « absent de la fenêtre »
   /// se lisait « pas d'événement », donc « réécrire », et déplacer un créneau de plus de deux
   /// jours dans Calendrier le ramenait au jour de sa tâche.
+  ///
+  /// Et cet aller-retour unique est encore SYNCHRONE (`events(matching:)` n'a pas de variante
+  /// asynchrone) : il part sur un autre fil, la passe l'attend sans geler celui qui dessine.
   func linkedEventTimes(
     _ identifiers: Set<String>, from start: Date, to end: Date, in calendar: EKCalendar
-  ) -> [String: DateInterval] {
+  ) async -> [String: DateInterval] {
     guard eventAuthorizationStatus == .fullAccess, !identifiers.isEmpty, start < end else {
       return [:]
     }
-    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: [calendar])
-    return store.events(matching: predicate).reduce(into: [:]) { times, event in
-      guard let id = event.eventIdentifier, identifiers.contains(id),
-        let from = event.startDate, let to = event.endDate, from <= to
-      else { return }
-      times[id] = DateInterval(start: from, end: to)
-    }
+    let store = UncheckedBox(store)
+    let calendar = UncheckedBox(calendar)
+    return await Task.detached(priority: .userInitiated) {
+      let predicate = store.value.predicateForEvents(
+        withStart: start, end: end, calendars: [calendar.value])
+      return store.value.events(matching: predicate).reduce(into: [:]) { times, event in
+        guard let id = event.eventIdentifier, identifiers.contains(id),
+          let from = event.startDate, let to = event.endDate, from <= to
+        else { return }
+        times[id] = DateInterval(start: from, end: to)
+      }
+    }.value
   }
 
   /// Ce que l'app sait de l'événement lié, et le NIVEAU DE PREUVE qui va avec.
@@ -317,12 +339,32 @@ final class RemindersService {
   ///
   /// La lecture à l'unité est l'aller-retour synchrone qu'on refuse de payer PAR TÂCHE (cf.
   /// `passSnapshot`) ; ici, elle ne se paie que pour un titre qui a réellement changé.
+  ///
+  /// Et elle part dans la FILE (`enqueueWrite`) : la passe la déclenche pendant qu'on tape un titre,
+  /// une seconde après chaque enregistrement automatique — sur le fil principal, c'était un
+  /// accroc dans la frappe toutes les secondes.
   func renameReminder(_ identifier: String, to title: String) {
-    guard authorizationStatus == .fullAccess,
-      let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder
-    else { return }
-    reminder.title = title
-    try? store.save(reminder, commit: true)
+    guard authorizationStatus == .fullAccess else { return }
+    let store = UncheckedBox(store)
+    enqueueWrite {
+      guard let reminder = store.value.calendarItem(withIdentifier: identifier) as? EKReminder
+      else { return }
+      reminder.title = title
+      try? store.value.save(reminder, commit: true)
+    }
+  }
+
+  /// Les écritures EventKit que personne n'attend, hors du fil principal et À LA FILE : deux
+  /// renommages lancés coup sur coup ne doivent pas arriver dans le désordre. `withSyncLock` vide la
+  /// file avant de relire quoi que ce soit — une passe ne voit jamais un état d'avant ses écritures.
+  @ObservationIgnored private var pendingWrite: Task<Void, Never>?
+
+  private func enqueueWrite(_ write: @escaping @Sendable () -> Void) {
+    let previous = pendingWrite
+    pendingWrite = Task.detached(priority: .userInitiated) {
+      await previous?.value
+      write()
+    }
   }
 
   /// Efface les événements dont la tâche n'a plus de durée (ou plus de date), et ceux des tâches
@@ -330,10 +372,15 @@ final class RemindersService {
   /// utilisable APRÈS que SwiftData a effacé les objets (cf. sa doc, et le plantage du 6 août 2026).
   func forgetEvents(_ identifiers: [String]) {
     guard eventAuthorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
-    for identifier in identifiers {
-      lastAgreed.removeValue(forKey: identifier)
-      guard let event = store.event(withIdentifier: identifier) else { continue }
-      try? store.remove(event, span: .thisEvent, commit: true)
+    for identifier in identifiers { lastAgreed.removeValue(forKey: identifier) }
+    // Allers-retours synchrones, un par identifiant, en pleine animation de suppression : dans la
+    // file (cf. `enqueueWrite`). Toujours APRÈS SwiftData — plus tard encore, même.
+    let store = UncheckedBox(store)
+    enqueueWrite {
+      for identifier in identifiers {
+        guard let event = store.value.event(withIdentifier: identifier) else { continue }
+        try? store.value.remove(event, span: .thisEvent, commit: true)
+      }
     }
   }
 
@@ -391,7 +438,7 @@ final class RemindersService {
   ///
   /// `fetchReminders` rend la main tout de suite et rappelle hors du fil principal : le coût
   /// devient une requête par passe, et elle ne bloque plus personne.
-  private var passSnapshot: [String: EKReminder]?
+  @ObservationIgnored private var passSnapshot: [String: EKReminder]?
 
   /// Le rappel d'identifiant donné : dans l'instantané si une passe est en cours, sinon relu au
   /// coup par coup. Le repli garde EXACTEMENT le comportement d'avant hors passe — c'est ce qui
@@ -410,13 +457,16 @@ final class RemindersService {
     // plus grosse pour qui a des milliers de rappels — mais hors du fil qui dessine, ce qui est
     // tout le sujet. La borner le jour où ça se mesure.
     let predicate = store.predicateForReminders(in: nil)
-    let fetched = await withCheckedContinuation { continuation in
+    // Indexé DANS le rappel d'EventKit, donc sur son fil : lire `calendarItemIdentifier` de chaque
+    // rappel du compte n'a rien à faire sur le fil qui dessine.
+    return await withCheckedContinuation { continuation in
       store.fetchReminders(matching: predicate) { reminders in
-        continuation.resume(returning: UncheckedBox(reminders ?? []))
+        let byID = Dictionary(
+          (reminders ?? []).map { ($0.calendarItemIdentifier, $0) },
+          uniquingKeysWith: { first, _ in first })
+        continuation.resume(returning: UncheckedBox(byID))
       }
     }.value
-    return Dictionary(
-      fetched.map { ($0.calendarItemIdentifier, $0) }, uniquingKeysWith: { first, _ in first })
   }
 
   // MARK: Lecture — page « Aujourd'hui » (rappels + événements Apple, affichage seul)
@@ -651,10 +701,15 @@ final class RemindersService {
     for identifier in identifiers {
       lastAgreed.removeValue(forKey: identifier)
       lastAgreedTitle.removeValue(forKey: identifier)
-      guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
-        continue
+    }
+    // Même raison que `forgetEvents` : dans la file, hors du fil qui anime la suppression.
+    let store = UncheckedBox(store)
+    enqueueWrite {
+      for identifier in identifiers {
+        guard let reminder = store.value.calendarItem(withIdentifier: identifier) as? EKReminder
+        else { continue }
+        try? store.value.remove(reminder, commit: true)
       }
-      try? store.remove(reminder, commit: true)
     }
   }
 
@@ -719,9 +774,17 @@ final class RemindersService {
   func withSyncLock(_ body: () async -> Void) async -> Bool {
     guard !isSyncing else { return false }
     isSyncing = true
+    await pendingWrite?.value
     let snapshot = await fetchedSnapshot()
     passSnapshot = snapshot.isEmpty ? nil : snapshot
     await body()
+    // Libéré HORS du fil principal : l'instantané porte TOUS les rappels du compte, complétés
+    // compris, et les désallouer coûtait ~14 ms de fil principal à chaque passe — une image perdue
+    // une seconde après chaque geste (mesuré au `sample` le 8 octobre 2026). La tâche détachée
+    // détient la dernière référence ; c'est elle qui les rend.
+    Task.detached(priority: .utility) { [spent = UncheckedBox(passSnapshot)] in
+      withExtendedLifetime(spent) {}
+    }
     passSnapshot = nil
     isSyncing = false
     return true
@@ -731,20 +794,24 @@ final class RemindersService {
 
   /// Reporte l'état de complétion de la tâche sur le rappel associé (app → Rappels).
   /// Sans effet si aucun rappel n'existe encore, ou s'il a été supprimé côté Rappels.
+  ///
+  /// Les deux appels sont des allers-retours XPC SYNCHRONES vers le démon Rappels. Sur le fil
+  /// principal, ils tombaient dans les premières images de l'animation de la coche — la tâche
+  /// descendait par à-coups, et seulement celles liées à un rappel, ce qui brouillait la piste.
+  /// `EKEventStore` s'emploie depuis n'importe quel fil ; le rappel relu naît et meurt ici.
   func setCompleted(_ completed: Bool, identifier: String) async throws {
     try await requestAccess()
-
-    guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
-      return
-    }
-
-    reminder.isCompleted = completed  // met aussi à jour completionDate automatiquement
-
-    do {
-      try store.save(reminder, commit: true)
-    } catch {
-      throw RemindersError.saveFailed(underlying: error)
-    }
+    let store = UncheckedBox(store)
+    try await Task.detached(priority: .userInitiated) {
+      guard let reminder = store.value.calendarItem(withIdentifier: identifier) as? EKReminder
+      else { return }
+      reminder.isCompleted = completed  // met aussi à jour completionDate automatiquement
+      do {
+        try store.value.save(reminder, commit: true)
+      } catch {
+        throw RemindersError.saveFailed(underlying: error)
+      }
+    }.value
   }
 }
 

@@ -20,7 +20,7 @@ import SwiftData
 /// de SwiftData, qu'on ne peut pas empêcher depuis ici. Ce qu'on peut, c'est rendre bon marché ce
 /// qu'elle relance : une reconstruction de sidebar coûtait ~13 ms, soit plus d'une image entière à
 /// 120 Hz, pile au démarrage de l'animation d'ouverture.
-struct SidebarCounts {
+struct SidebarCounts: Equatable {
   /// Ce qu'une rangée de liste a besoin de savoir, et rien de plus. `Equatable` à dessein : une
   /// rangée qui reçoit la même valeur n'a aucune raison de se redessiner.
   struct Row: Equatable {

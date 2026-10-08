@@ -149,6 +149,8 @@ struct AllTasksPageView: View {
       onCompletionChanged: scheduleRetentionRefresh,
       collapsedForDrag: dragCollapse.isCollapsed(task)
     )
+    // Sans ses fermetures : cf. `TaskRow: Equatable`.
+    .equatable()
     .rowPressGesture(
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),

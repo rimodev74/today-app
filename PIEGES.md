@@ -627,6 +627,21 @@ ce serait effacer la durée sur un hoquet iCloud.
 
 ---
 
+### Une écriture EventKit sur le fil principal tombe DANS l'animation du geste
+
+(8 octobre 2026.) La lecture groupée (`passSnapshot`) avait réglé la passe AU REPOS ; restaient les
+ÉCRITURES, toutes synchrones et toutes sur le fil principal : `setCompleted` (relire + `save`
+commit) partait à chaque coche d'une tâche liée — 145 sur 249 dans la vraie base —, donc dans les
+premières images de la descente de la ligne. Idem pour `schedule`, `scheduleEvent`, le renommage
+(une seconde après chaque enregistrement automatique, PENDANT la frappe) et l'effacement des
+rappels d'une tâche supprimée. Tout part désormais sur un autre fil (`Task.detached`, l'
+`EKEventStore` s'emploie depuis n'importe lequel) ; les écritures que personne n'attend passent par
+`enqueueWrite`, une FILE, et `withSyncLock` la vide avant de relire quoi que ce soit.
+
+Même passe, autre coût caché : LIBÉRER l'instantané. Il porte tous les rappels du compte, complétés
+compris ; les désallouer coûtait ~14 ms de fil principal, une seconde après chaque geste. Il est
+indexé dans le rappel d'EventKit et rendu par une tâche détachée.
+
 ## Layout, gestes et glissement
 
 ### Un glisser qui saccade n'est presque jamais le calcul
@@ -1097,6 +1112,62 @@ Elles avaient déjà toutes les tâches sous la main — un `SidebarCounts` en t
 les rangées ne lisent plus rien.
 
 ---
+
+### Un ressort se paie bien après la fin de ce qu'on voit
+
+(8 octobre 2026, banc rejoué sans souris avec le temps CPU du fil principal.) Une coche coûtait
+~300 ms de fil principal, sur une page de QUATRE lignes. Ni les corps de vue (2 par coche), ni la
+barre latérale (masquée : même coût). Le fil restait occupé jusqu'à **950 ms** après le clic, à
+~7 ms par image : chaque image d'animation re-rend la fenêtre. Or le mouvement visible était fini
+à 0,35 s. Le reste, c'était la TRAÎNE des ressorts : `taskInsert` (critiquement amorti) approche sa
+cible sans l'atteindre et SwiftUI l'anime jusqu'à un seuil infime ; `ringFlow` (0,5 s) traînait
+~1,5 s ; le rebond de la case (`PressBounceButtonStyle`, sous-amorti) oscillait sous le seuil de
+visibilité ~0,8 s à CHAQUE clic. Et tout ce qui tombe dans cette fenêtre — un enregistrement, la
+synchro — se paie en images perdues.
+
+Les trois sont devenus des `timingCurve` AJUSTÉES numériquement sur le ressort d'origine (écart
+max 1,3 % du trajet ; 0,25 pt pour le rebond) : même mouvement à l'œil, fin nette. Un ressort
+critiquement amorti a la même forme à toutes les vitesses, d'où une seule courbe étirée pour
+`taskInsert` et `ringFlow`. Mesuré : fil occupé 950 → 420–615 ms, CPU par coche −15 à −35 %.
+
+**La règle :** pas de `spring` pour une animation qui se joue à chaque geste courant. Il reste
+légitime là où sa reprise de vitesse en cours de geste se voit (glissement, `taskDrop`).
+
+### Ce qu'une coche, un ajout, un dépôt relançaient pour rien
+
+Même banc, quatre causes, toutes du même genre — du travail rejoué à chaque écriture :
+
+1. **La barre latérale entière** se reconstruisait (refetch de toutes les tâches compris, ~15 ms) :
+   son corps lisait `allTasks`. Le `@Query` vit maintenant dans `SidebarTallySource`, invisible, qui
+   ne publie qu'un compte CHANGÉ. Essayé à la place : lire les tâches par les relations des listes
+   — **huit fois plus cher** que le refetch (801 échantillons contre 94). Rejeté.
+2. **`TaskRow` porte des fermetures**, donc n'est jamais « égale » : chaque rendu de page rejouait
+   toutes ses rangées, trois fois par geste (mutation, notification SwiftData, enregistrement).
+   `TaskRow: Equatable` les ignore, `.equatable()` aux trois sites : 20 corps de rangée par coche → 1.
+3. **`TaskPageReorder.measured` incrémentait `revision`** à chaque cadre republié — donc à chaque
+   image de TOUTE animation qui déplace des lignes, glissement ou pas : le modificateur de
+   glissement de chaque rangée se rejouait pour rien.
+4. **Les renumérotations réécrivaient tous les rangs**, même inchangés (le setter d'un `@Model` ne
+   compare rien) : `TodoList.renumber` n'écrit que ce qui change, et `makeRoom` décale le côté le
+   moins peuplé — 7 tâches au lieu de 135 pour un ajout dans la vraie boîte de réception.
+
+Plus, sur la page d'une liste, cinq traversées de `list.tasks` par rendu ramenées à une, et le menu
+`•••` (une vue AppKit par rangée) monté au survol seulement.
+
+**Mesurés ensuite, et ÉCARTÉS parce qu'ils ne rapportent rien** (même banc, même jour) :
+
+- un `Text` au repos à la place du `TextField` de chaque rangée — aucun écart mesurable. Le champ
+  natif par ligne n'est PAS le coût par image ; la bascule `Text` ↔ `TextField` reste donc rejetée
+  pour les raisons de `TaskRow.titleView` ;
+- retirer les ombres « éteintes » des rangées — aucun écart ;
+- un store unique alimenté par un seul fetch à la place des `@Query` par page : les corps de page
+  et les refetchs ne pèsent que ~8 % d'une coche (130 échantillons sur 1 654). Au mieux ~15 ms par
+  geste, imperceptible, au prix d'un risque réel — une page relisant une tâche supprimée dans un
+  tableau pas encore rafraîchi.
+
+Le plancher, lui, est bas : animer UN point coûte moins de 1,5 ms par image. Ce qui reste d'une
+coche (~170 ms de fil principal sur 0,4 s) est le rendu SwiftUI de ce qui change dans la ligne,
+diffus, sans poste unique à attaquer.
 
 ## L'anneau de progression
 

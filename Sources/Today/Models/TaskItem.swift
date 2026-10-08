@@ -101,11 +101,14 @@ final class TaskItem {
   /// Fige l'ordre manuel d'une séquence, telle qu'elle doit s'afficher : 1…n.
   ///
   /// Jamais 0 — c'est la valeur de « jamais posée à la main », et la rendre à une tâche qu'on vient
-  /// justement de poser la renverrait au tri automatique. Toute la séquence est réécrite, pas la
+  /// justement de poser la renverrait au tri automatique. Toute la séquence est renumérotée, pas la
   /// seule tâche déplacée : c'est ce qui donne à ses voisines des rangs comparables au sien (même
   /// principe que la renumérotation 0…n d'une liste, cf. `TodoList`).
   static func stampSmartOrder(_ tasks: [TaskItem]) {
-    for (index, task) in tasks.enumerated() { task.smartOrder = index + 1 }
+    // N'écrit que ce qui change : cf. `TodoList.renumber`, même coût, même remède.
+    for (index, task) in tasks.enumerated() where task.smartOrder != index + 1 {
+      task.smartOrder = index + 1
+    }
   }
 
   // Stocké en Int : SwiftData persiste les propriétés stockées, pas les calculées.

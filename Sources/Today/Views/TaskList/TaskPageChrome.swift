@@ -90,7 +90,16 @@ let taskSelectFade = Animation.easeOut(duration: 0.05)
 /// réordonnancement, lui, passe par des offsets et pas des insertions/suppressions — la
 /// transition des rangées n'y répond donc jamais.
 /// Interne pour la même raison que `gutter` : `ArchivePageView` anime ses sorties de ligne avec.
-let taskInsert = Animation.spring(response: 0.32, dampingFraction: 1)
+///
+/// C'ÉTAIT `spring(response: 0.32, dampingFraction: 1)`, et c'est toujours lui à l'œil : cette
+/// courbe le suit à 1,3 % près sur tout son trajet (ajustée numériquement le 8 octobre 2026). Ce
+/// qu'elle n'a plus, c'est sa TRAÎNE. Un ressort critiquement amorti approche sa cible sans jamais
+/// l'atteindre, et SwiftUI l'anime jusqu'à un seuil infime : ~950 ms d'images après une coche, dont
+/// la seconde moitié à moins d'un pixel du but. Or chaque image d'animation re-rend la fenêtre sur
+/// le fil principal (~7 ms ici) : la traîne coûtait 40 % du temps d'une coche, et tout ce qui
+/// tombait dedans (enregistrement, synchro) se payait en images perdues. Mesuré : 300 → 185 ms de
+/// fil principal par coche, fin d'activité à 455 ms au lieu de 950.
+let taskInsert = Animation.timingCurve(0.2, 0.1, 0.15, 1, duration: 0.35)
 /// Même ressort, CRITIQUEMENT amorti : le tableau de cartes d'un projet (`ProjectPageView`).
 ///
 /// Le rebond de `taskInsert` est juste sur une RANGÉE — un objet fin, qui parcourt quelques points
@@ -98,7 +107,10 @@ let taskInsert = Animation.spring(response: 0.32, dampingFraction: 1)
 /// le même dépassement devient un ballottement : la carte arrive, repart, revient. La distance
 /// parcourue change ce qu'on lit du même ressort, d'où deux amortissements et pas deux courbes
 /// inventées séparément. Même raisonnement que `ProgressRing.ringFlow`.
-let boardFlow = Animation.spring(response: 0.32, dampingFraction: 1)
+///
+/// Aujourd'hui les deux amortissements sont égaux (1), et c'est la même courbe : celle de
+/// `taskInsert`, qui rend ce ressort sans sa traîne (cf. son commentaire).
+let boardFlow = taskInsert
 /// L'entrée des cartes, à chaque ouverture d'un projet. Elle rebondit, ELLE,
 /// et ça ne contredit pas `boardFlow` : la carte ne traverse rien, elle grandit de quelques
 /// points SUR PLACE — le dépassement se lit comme un « pop », pas comme un ballottement.

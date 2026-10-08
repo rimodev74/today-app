@@ -161,4 +161,46 @@ final class TodoListTests: XCTestCase {
     XCTAssertFalse(list.needsDeleteConfirmation)
     XCTAssertEqual(list.deleteConfirmationMessage, "« Courses » sera supprimée.")
   }
+
+  // MARK: Renumérotation sans écriture inutile
+
+  private func ranked(_ ranks: [Int]) -> [TaskItem] {
+    ranks.enumerated().map { i, rank in
+      let task = TaskItem(title: "t\(i)")
+      task.sortIndex = rank
+      return task
+    }
+  }
+
+  /// Une tâche insérée près de la FIN fait reculer ce qui la suit — le cas d'une liste vide de
+  /// cochées.
+  func testMakeRoom_poussePeuDeSuivantes() {
+    let tasks = ranked([0, 1, 2, 3])
+    let rank = TodoList.makeRoom(after: 2, in: tasks)
+    XCTAssertEqual(rank, 3)
+    XCTAssertEqual(tasks.map(\.sortIndex), [0, 1, 2, 4])
+  }
+
+  /// Une tâche insérée avant une longue traîne de cochées fait reculer ce qui la PRÉCÈDE, et
+  /// l'ordre obtenu est le même.
+  func testMakeRoom_reculeLesPrecedentesQuandLaTraineEstLongue() {
+    let tasks = ranked([0, 1, 2, 3, 4, 5])
+    let rank = TodoList.makeRoom(after: 1, in: tasks)
+    XCTAssertEqual(rank, 1)
+    XCTAssertEqual(tasks.map(\.sortIndex), [-1, 0, 2, 3, 4, 5])
+    XCTAssertTrue(tasks[1].sortIndex < rank && rank < tasks[2].sortIndex)
+  }
+
+  /// `-1` = tout en tête : rien ne bouge, la neuve passe devant.
+  func testMakeRoom_enTete() {
+    let tasks = ranked([0, 1, 2])
+    XCTAssertEqual(TodoList.makeRoom(after: -1, in: tasks), -1)
+    XCTAssertEqual(tasks.map(\.sortIndex), [0, 1, 2])
+  }
+
+  func testRenumber_rendLaSequence0aN() {
+    let tasks = ranked([-1, 0, 2, 5])
+    TodoList.renumber(tasks)
+    XCTAssertEqual(tasks.map(\.sortIndex), [0, 1, 2, 3])
+  }
 }

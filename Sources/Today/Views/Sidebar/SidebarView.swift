@@ -17,7 +17,8 @@ struct SidebarView: View {
   /// survole. Elle n'écrit RIEN au relâchement — c'est la page qui tire qui conclut son geste
   /// (cf. `dropTaskDrag`), comme c'est elle qui l'a commencé.
   @Environment(SidebarDrop.self) private var filing
-  @Query private var allTasks: [TaskItem]
+  /// Les anneaux et les badges, tenus HORS de ce corps (cf. `SidebarTally`).
+  @State private var tally = SidebarTally()
   @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
   private var projects: [Project]
 
@@ -156,6 +157,7 @@ struct SidebarView: View {
       }
     }
     .safeAreaInset(edge: .bottom) { bottomBar }
+    .background { SidebarTallySource(tally: tally) }
     // Ce que le menu *Fichier* atteint ici. Les deux créations n'existaient qu'en bas de la
     // sidebar et au clic droit : rien ne les annonçait, et aucune n'avait de raccourci.
     .focusedSceneValue(\.newProject, MenuAction(id: "newProject", run: addProject))
@@ -261,22 +263,13 @@ struct SidebarView: View {
               Image(systemName: list.systemImage).foregroundStyle(list.color)
             }
             Spacer(minLength: 0)
-            if let count = badge(for: list) {
-              Text("\(count)").foregroundStyle(.secondary)
-            }
+            if list == .today { TodayBadge(tally: tally) }
           }
           .font(.system(size: 14, weight: .medium))
         }
       }
       pomodoroRow
     }
-  }
-
-  // Compteur seulement là où il aide à décider quoi faire maintenant.
-  private func badge(for list: SmartList) -> Int? {
-    guard list == .today else { return nil }
-    let count = list.filter(allTasks).count
-    return count > 0 ? count : nil
   }
 
   private var pomodoroRow: some View {
@@ -300,10 +293,6 @@ struct SidebarView: View {
     // recherchés ligne par ligne : chaque rangée devait sinon balayer la séquence pour se trouver,
     // soit un coût quadratique à chaque image de glissement.
     let offsets = layout?.offsets() ?? [:]
-    // Même raison que les décalages juste au-dessus, et le même remède : les compteurs de TOUTES
-    // les listes en UNE passe, distribués aux rangées. Chaque rangée traversait sinon la relation
-    // `TodoList.tasks` trois fois pour elle seule (cf. `SidebarCounts`).
-    let counts = SidebarCounts(tasks: allTasks)
     return VStack(alignment: .leading, spacing: 6) {
       if projects.isEmpty {
         Text("Aucun projet")
@@ -321,7 +310,7 @@ struct SidebarView: View {
           // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
           Group {
             ForEach(project.activeLists) { list in
-              listRow(list, offsets: offsets, counts: counts)
+              listRow(list, offsets: offsets)
             }
             addListRow(project, offsets: offsets)
           }
@@ -523,43 +512,31 @@ struct SidebarView: View {
     withAnimation(disclosureFlow) { palettePickerID = nil }
   }
 
-  /// `counts` arrive d'en haut, calculé une fois pour toutes les rangées : lire `list.progress` et
-  /// `list.remainingCount` ici traversait la relation `TodoList.tasks` trois fois par rangée
-  /// (cf. `SidebarCounts`).
-  private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat], counts: SidebarCounts)
-    -> some View
-  {
+  /// L'anneau, le badge et « Archiver » lisent `tally` dans leurs PROPRES vues, jamais ici : lu
+  /// dans cette fonction, le compte abonnerait tout le corps de la sidebar (cf. `SidebarTally`).
+  private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat]) -> some View {
     let id = list.persistentModelID
-    let count = counts[list]
     let row = sidebarRow(id: id, isSelected: { selection == .list(list) }) {
       navigate(to: .list(list))
     } label: {
       HStack(spacing: 8) {
         // Trait seul (pas de camembert plein) : une liste vide reste un anneau GRIS ; le bleu
         // n'apparaît qu'avec la progression, disque plein bleu quand tout est fait.
-        ProgressRing(progress: count.progress)
-          .tint(list.project?.color?.color)
+        TallyRing(list: list, tally: tally)
         editableTitle(id: id, text: Bindable(list).title, placeholder: "Nom de la liste") {
           if list.title.trimmingCharacters(in: .whitespaces).isEmpty {
             list.title = "Nouvelle liste"
           }
         }
         .font(.system(size: 14, weight: .medium))
-        if count.remaining > 0 {
-          Text("\(count.remaining)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.secondary)
-        }
+        TallyBadge(list: list, tally: tally)
       }
     }
     .contextMenu {
       Button("Renommer") { startRename(id) }
       // Seulement une liste FINIE : c'est la seule qui encombre sans plus rien demander.
-      // `count` vient de la passe unique d'en haut — rien n'est relu ici.
-      if count.isFinished {
-        Button("Archiver la liste") {
-          withAnimation(disclosureFlow) { list.archive(from: $selection, in: modelContext) }
-        }
+      ArchiveListButton(list: list, tally: tally) {
+        withAnimation(disclosureFlow) { list.archive(from: $selection, in: modelContext) }
       }
       Divider()
       Button("Supprimer la liste", role: .destructive) { requestDelete(list) }
@@ -1222,5 +1199,88 @@ struct SidebarView: View {
 extension View {
   fileprivate func hoverBordered() -> some View {
     modifier(SidebarView.HoverBorder())
+  }
+}
+
+/// Les compteurs de la barre latérale — anneaux, badges, « Aujourd'hui » —, tenus HORS de son corps.
+///
+/// Ce corps construit TOUTES les rangées, et il lisait `allTasks` : chaque écriture sur n'importe
+/// quelle tâche — une coche, un ajout, un dépôt, un `sortIndex` renuméroté — le rejouait en entier,
+/// refetch du `@Query` compris. Mesuré au `sample` le 8 octobre 2026 : le premier poste de l'app
+/// à chaque geste, ~15 ms, pile sur la première image de son animation. Le `@Query` vit désormais
+/// dans `SidebarTallySource`, invisible, qui ne publie qu'un compte qui a CHANGÉ ; et seules les
+/// petites vues qui l'affichent le lisent.
+@Observable
+@MainActor
+private final class SidebarTally {
+  var counts = SidebarCounts(tasks: [])
+  var today = 0
+}
+
+/// Le seul lecteur de `allTasks` de la barre latérale. Son corps se rejoue à chaque écriture, comme
+/// avant celui de toute la sidebar — mais il ne construit rien, et `onChange` n'écrit dans `tally`
+/// que ce qui a bougé.
+///
+/// Un `@Query` et pas les tâches de chaque liste par la relation : essayé et mesuré le 8 octobre
+/// 2026, la relation coûte huit fois le refetch (801 échantillons contre 94 sur le même banc).
+private struct SidebarTallySource: View {
+  let tally: SidebarTally
+  @Query private var allTasks: [TaskItem]
+
+  var body: some View {
+    let counts = SidebarCounts(tasks: allTasks)
+    // Compteur seulement là où il aide à décider quoi faire maintenant.
+    let today = SmartList.today.filter(allTasks).count
+    return Color.clear
+      .onChange(of: counts, initial: true) { _, new in tally.counts = new }
+      .onChange(of: today, initial: true) { _, new in tally.today = new }
+  }
+}
+
+private struct TallyRing: View {
+  let list: TodoList
+  let tally: SidebarTally
+
+  var body: some View {
+    // Trait seul (pas de camembert plein) : une liste vide reste un anneau GRIS ; le bleu
+    // n'apparaît qu'avec la progression, disque plein bleu quand tout est fait.
+    ProgressRing(progress: tally.counts[list].progress)
+      .tint(list.project?.color?.color)
+  }
+}
+
+private struct TallyBadge: View {
+  let list: TodoList
+  let tally: SidebarTally
+
+  var body: some View {
+    let remaining = tally.counts[list].remaining
+    if remaining > 0 {
+      Text("\(remaining)")
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(.secondary)
+    }
+  }
+}
+
+private struct TodayBadge: View {
+  let tally: SidebarTally
+
+  var body: some View {
+    if tally.today > 0 {
+      Text("\(tally.today)").foregroundStyle(.secondary)
+    }
+  }
+}
+
+private struct ArchiveListButton: View {
+  let list: TodoList
+  let tally: SidebarTally
+  let action: () -> Void
+
+  var body: some View {
+    if tally.counts[list].isFinished {
+      Button("Archiver la liste", action: action)
+    }
   }
 }

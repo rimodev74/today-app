@@ -173,10 +173,15 @@ final class TaskPageReorder {
   /// REPOS boucle (décalage → cadre → décalage…), ce que SwiftUI signale par « update multiple
   /// times per frame » et que l'œil voit comme une saccade. Le layout de repos, lui, ne bouge pas
   /// d'un glissement : les cadres pris avant l'empoignade restent valides jusqu'au relâchement.
+  ///
+  /// Et elle ne touche PAS à `revision`. Hors glissement, les décalages sont nuls quels que soient
+  /// les cadres — rien à recalculer. Or toute animation qui déplace des lignes (une coche qui
+  /// descend, un ajout, une suppression) republie les cadres à CHAQUE image : avec `bump()` ici,
+  /// chaque rangée de la page rejouait son modificateur de glissement à chaque image, sans qu'aucun
+  /// glissement n'existe. `begin` relance le calcul au moment où il redevient utile.
   func measured(_ new: [TaskRowKey: CGRect]) {
     guard !isDragging, frames != new else { return }
     frames = new
-    bump()
   }
 
   /// **Le seul point d'entrée d'un glissement.** Empoigne au premier mouvement, puis suit.

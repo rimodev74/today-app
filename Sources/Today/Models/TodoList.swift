@@ -63,7 +63,13 @@ final class TodoList {
   /// Troisième version de cette règle ; les deux précédentes et ce qui les a tuées sont dans
   /// `PIEGES.md` § L'anneau de progression. À lire avant d'y toucher une quatrième fois.
   func progress(bounds: DayBounds = DayBounds()) -> Double {
-    let countable = countableTasks.filter { $0.countsTowardProgress(bounds) }
+    Self.progress(of: tasks, bounds: bounds)
+  }
+
+  /// La même règle sur des tâches DÉJÀ lues : une page qui vient de parcourir la relation n'a pas
+  /// à la retraverser pour son anneau.
+  static func progress(of tasks: [TaskItem], bounds: DayBounds = DayBounds()) -> Double {
+    let countable = tasks.filter { !$0.isHeader && $0.countsTowardProgress(bounds) }
     guard !countable.isEmpty else { return 0 }
     return Double(countable.filter(\.isCompleted).count) / Double(countable.count)
   }
@@ -93,7 +99,7 @@ final class TodoList {
     guard nextHeaderIndex > taskIndex + 1 else { return }
     let moved = ordered.remove(at: taskIndex)
     ordered.insert(moved, at: nextHeaderIndex - 1)
-    for (index, t) in ordered.enumerated() { t.sortIndex = index }
+    Self.renumber(ordered)
   }
 
   /// Symétrique de `moveToEndOfSection` : une tâche qu'on DÉCOCHE remonte en TÊTE de sa section.
@@ -115,7 +121,37 @@ final class TodoList {
     guard sectionStart < taskIndex else { return }  // déjà en tête de section
     let moved = ordered.remove(at: taskIndex)
     ordered.insert(moved, at: sectionStart)
-    for (index, t) in ordered.enumerated() { t.sortIndex = index }
+    Self.renumber(ordered)
+  }
+
+  /// Renumérote `ordered` en 0…n, en n'ÉCRIVANT que les rangs qui changent.
+  ///
+  /// Une écriture SwiftData n'est jamais gratuite, même à l'identique : le setter d'un `@Model` ne
+  /// compare rien, il notifie chaque vue qui lit la propriété et marque la tâche à enregistrer. Une
+  /// coche renumérotait ainsi toute la liste — la boîte de réception réelle en porte 142 — pour en
+  /// déplacer une seule, et le `save()` qui suit réécrivait autant de lignes.
+  static func renumber(_ ordered: [TaskItem]) {
+    for (index, task) in ordered.enumerated() where task.sortIndex != index {
+      task.sortIndex = index
+    }
+  }
+
+  /// Libère dans `tasks` le rang qui suit `anchor` (`-1` = tout en tête) et le rend : c'est celui
+  /// de la tâche qu'on insère.
+  ///
+  /// Les rangs se décalent du côté le MOINS peuplé. Pousser d'un cran tout ce qui suit l'ancre
+  /// était juste mais coûteux : une tâche notée dans la boîte de réception s'insère avant les
+  /// cochées, soit 7 tâches avant elle et 135 après dans la base réelle — 135 écritures, 135
+  /// notifications, 135 lignes réenregistrées pour une seule tâche ajoutée. Reculer d'un cran ce
+  /// qui PRÉCÈDE donne le même ordre ; un rang négatif ne gêne rien (`SidebarDrop` en pose déjà).
+  static func makeRoom(after anchor: Int, in tasks: [TaskItem]) -> Int {
+    let following = tasks.filter { $0.sortIndex > anchor }
+    guard following.count > tasks.count - following.count else {
+      for task in following { task.sortIndex += 1 }
+      return anchor + 1
+    }
+    for task in tasks where task.sortIndex <= anchor { task.sortIndex -= 1 }
+    return anchor
   }
 
   /// Où une tâche NEUVE doit s'accrocher dans `tasks` (déjà triées par `sortIndex`) : la dernière

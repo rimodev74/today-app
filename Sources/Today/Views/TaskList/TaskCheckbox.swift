@@ -45,8 +45,8 @@ struct TaskCheckbox: View {
             .stroke(.white, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
             .frame(width: size * 0.52, height: size * 0.52)
             // L'opacité EN PLUS du tracé, et c'est le correctif du 17 septembre 2026. `taskInsert`
-            // est un ressort critiquement amorti : il approche sa cible sans jamais l'atteindre
-            // franchement — ~2 % de trajet restant 0,3 s après le décochage. Sur un fond
+            // imite un ressort critiquement amorti : il approche sa cible très lentement — ~2 % de
+            // trajet restant 0,3 s après le décochage du temps où c'en était un vrai. Sur un fond
             // (`opacity`) 2 % ne se voit pas ; sur une GÉOMÉTRIE si : 2 % du chemin avec un bout
             // rond de 1,7 pt, c'est un point blanc en pleine opacité sur la ligne sélectionnée,
             // qui traîne puis saute. La coche se retire donc comme le fond, à la même courbe.
@@ -112,9 +112,16 @@ private struct Checkmark: Shape {
 /// ressorts réglés séparément, c'est exactement la façon dont deux cases se mettent à ne plus
 /// répondre pareil sans que personne ne le voie.
 struct PressBounceButtonStyle: ButtonStyle {
+  /// C'ÉTAIT `spring(response: 0.3, dampingFraction: 0.45)`. Cette courbe en garde le dépassement
+  /// (le même +20 % du trajet, au même instant) à 0,25 pt près sur une case de 17 — moins qu'un
+  /// demi-pixel —, et s'arrête à 0,36 s. Le ressort, lui, oscillait sous le seuil de visibilité
+  /// pendant ~0,8 s, et chaque image re-rendait toute la fenêtre — à CHAQUE clic sur une case,
+  /// pile pendant que la tâche cochée descend (cf. `taskInsert`, même diagnostic).
+  static let bounce = Animation.timingCurve(0.6, 1.6, 0.05, 1.2, duration: 0.36)
+
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .scaleEffect(configuration.isPressed ? 0.8 : 1)
-      .animation(.spring(response: 0.3, dampingFraction: 0.45), value: configuration.isPressed)
+      .animation(Self.bounce, value: configuration.isPressed)
   }
 }

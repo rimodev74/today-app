@@ -1647,14 +1647,14 @@ private struct QuickEntryView: View {
     // qu'on ait lu son ancre. À la fin de ce qui reste à faire, avant les cochées — sans quoi une
     // tâche notée depuis la capsule atterrirait sous des tâches déjà terminées.
     let anchor = TodoList.appendAnchor(among: list.orderedTasks)?.sortIndex ?? -1
-    for t in list.tasks where t.sortIndex > anchor { t.sortIndex += 1 }
+    let rank = TodoList.makeRoom(after: anchor, in: list.tasks)
     // Le jeton resté dans le titre l'emporte sur la pastille, pour l'heure comme pour la date ; une
     // heure sans jour se complète par aujourd'hui (cf. `QuickEntry.day`).
     let minutes = entry.minutes ?? pending.minutes
     let task = TaskItem(
       title: text, when: QuickEntry.day(entry.when ?? pending.when, minutes: minutes),
       whenMinutes: minutes, list: list)
-    task.sortIndex = anchor + 1
+    task.sortIndex = rank
     // Avant l'insertion : SwiftData propage la relation, les sous-tâches entrent avec la tâche.
     for line in pending.subtasks {
       let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)

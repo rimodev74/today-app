@@ -57,14 +57,17 @@ struct ProgressRing: View {
     .animation(Self.ringFlow, value: progress)
   }
 
-  /// Ressort de la MÊME famille que `taskInsert` (cocher une tâche), mais plus lent et
-  /// CRITIQUEMENT amorti.
+  /// De la MÊME famille que `taskInsert` (cocher une tâche), mais plus lente : c'est le même
+  /// ressort CRITIQUEMENT amorti (`response: 0.5`), rendu par une courbe qui s'arrête. Un ressort
+  /// critique a la même forme à toutes les vitesses — la courbe de `taskInsert`, étirée de
+  /// 0,5 / 0,32, le suit donc à 1,3 % près. Le ressort, lui, animait ~1,5 s après chaque coche,
+  /// et chaque image re-rendait la fenêtre (cf. `taskInsert`).
   ///
   /// Amortissement à 1 et non 0,62 : un ressort qui rebondit fait dépasser `progress` hors de
   /// 0…1 à chaque extrémité. `PieWedge` borne désormais son tracé, donc le rebond ne peut plus
   /// rien casser — mais sur une jauge, le dépassement se lit quand même comme un mensonge
   /// (l'anneau annonce « terminé » avant de l'être). Une jauge se pose, elle ne rebondit pas.
-  private static let ringFlow = Animation.spring(response: 0.5, dampingFraction: 1)
+  private static let ringFlow = Animation.timingCurve(0.2, 0.1, 0.15, 1, duration: 0.55)
 }
 
 /// Part de camembert de 0 à `progress` (0…1), partant de 3 h ; l'appelant tourne de -90° pour
@@ -82,7 +85,7 @@ struct PieWedge: Shape {
 
   func path(in rect: CGRect) -> Path {
     // BORNÉ à 0…1 avant tout tracé. `progress` est ici une valeur ANIMÉE, pas une donnée : rien ne
-    // garantit qu'elle reste dans ses bornes en chemin. Un ressort peu amorti (`taskInsert`,
+    // garantit qu'elle reste dans ses bornes en chemin. Un ressort peu amorti (`taskInsert` l'a été,
     // amortissement 0,62) dépasse volontairement sa cible — au-delà de 1 l'arc repart au-delà du
     // tour complet, et sous 0 il s'ouvre à l'envers, où le remplissage par indice non nul peint le
     // COMPLÉMENT de la part. Passer d'une liste avancée à une liste vide faisait donc osciller le

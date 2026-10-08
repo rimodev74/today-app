@@ -817,27 +817,38 @@ struct TaskRow: View {
       // APRÈS le résumé : la date est la dernière chose avant la colonne de survol, donc à la même
       // abscisse sur toutes les lignes, avec ou sans sous-tâches.
       dateTag
-      HStack(spacing: 6) {
-        subtaskHint
-        dateHint
-        Menu {
-          taskMenu
-        } label: {
-          Image(systemName: "ellipsis")
-            .font(.app(14, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 22, height: 22)
-            .contentShape(Rectangle())
+      // MONTÉE au survol seulement, pas cachée par une opacité nulle. Une vue invisible coûte
+      // plein tarif (cf. `CLAUDE.md`), et celle-ci plus que toute autre : le `•••` est un menu
+      // AppKit, une vraie vue native par rangée — créée à chaque ligne qui apparaît, replacée à
+      // chaque image d'une animation qui déplace les rangées. Une seule rangée est survolée à la
+      // fois : c'est la seule qui en a besoin.
+      if hovering {
+        HStack(spacing: 6) {
+          subtaskHint
+          dateHint
+          Menu {
+            taskMenu
+          } label: {
+            Image(systemName: "ellipsis")
+              .font(.app(14, weight: .semibold))
+              .foregroundStyle(.secondary)
+              .frame(width: 22, height: 22)
+              .contentShape(Rectangle())
+          }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
+          .fixedSize()
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        // Largeur FIXE, pas la largeur réelle du contenu : sans elle la colonne vaudrait 54 pt sur
+        // une tâche sans notes et 26 sur une tâche qui en a, et le résumé ne serait plus aligné
+        // d'une ligne à l'autre.
+        .frame(width: Self.hoverActionsWidth, alignment: .trailing)
+        // Le fondu d'avant, explicite : la colonne entre et sort au lieu de changer d'opacité.
+        .transition(.opacity)
+      } else {
+        // Sa place reste réservée : rien ne bouge à droite quand la souris entre dans la ligne.
+        Color.clear.frame(width: Self.hoverActionsWidth, height: 22)
       }
-      // Largeur FIXE, pas la largeur réelle du contenu : sans elle la colonne vaudrait 54 pt sur
-      // une tâche sans notes et 26 sur une tâche qui en a, et le résumé ne serait plus aligné
-      // d'une ligne à l'autre.
-      .frame(width: Self.hoverActionsWidth, alignment: .trailing)
-      .opacity(hovering ? 1 : 0)
     }
     .animation(.easeOut(duration: 0.15), value: hovering)
   }
@@ -996,6 +1007,27 @@ struct TaskRow: View {
       )
       .frame(width: 22, height: 22)
       .contentShape(Rectangle())
+  }
+}
+
+/// Comparée SANS ses fermetures — c'est tout l'objet. Une vue qui porte des fermetures n'est jamais
+/// « égale » pour SwiftUI : chaque rendu de page rejouait donc TOUTES ses rangées, menu `•••`,
+/// champ du titre et menu contextuel compris, même celles que rien n'avait touchées. Or une coche
+/// ou un ajout rend la page trois fois de suite (la mutation, la notification de SwiftData, puis
+/// l'enregistrement) : trois reconstructions complètes dans les premières images de l'animation.
+///
+/// Ignorer les fermetures est sûr ici : elles ne capturent que la tâche et des états de page
+/// adossés à un stockage (`@State`, `@Environment`), donc elles font la même chose d'un rendu à
+/// l'autre. Et ce que la rangée lit de la tâche, elle l'observe elle-même — un titre ou une coche
+/// la redessine sans passer par cette égalité.
+extension TaskRow: Equatable {
+  nonisolated static func == (a: TaskRow, b: TaskRow) -> Bool {
+    MainActor.assumeIsolated {
+      a.task === b.task && a.isSelected == b.isSelected && a.isEditing == b.isEditing
+        && a.showsDate == b.showsDate && a.parentTag == b.parentTag
+        && a.collapsedForDrag == b.collapsedForDrag
+        && a.moveTargets.map(\.persistentModelID) == b.moveTargets.map(\.persistentModelID)
+    }
   }
 }
 

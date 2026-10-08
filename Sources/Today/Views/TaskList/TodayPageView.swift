@@ -211,6 +211,8 @@ struct TodayPageView: View {
       onCompletionChanged: {},
       collapsedForDrag: dragCollapse.isCollapsed(task)
     )
+    // Sans ses fermetures : cf. `TaskRow: Equatable`.
+    .equatable()
     // Un geste unique, comme dans `ListPageView` — pas deux `.onTapGesture` : le tap simple aurait
     // attendu la fin de la fenêtre de double-clic avant d'être délivré (cf. `RowPressGesture`,
     // qui documente la demi-seconde que ça coûtait ici).

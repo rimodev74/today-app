@@ -117,6 +117,12 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
   SwiftData l'invalide sans qu'AUCUNE écriture n'ait lieu. Il doit être **bon marché**, pas rare.
 - **Tout nouveau tri sur un `@Model` passe par `sortedByKey`**, jamais par `.sorted { }` — une
   comparaison ordinaire relit ses clés à travers SwiftData. (Inutile sur des types de valeur.)
+- **Pas de `spring` pour une animation qui se joue à chaque geste courant** (coche, ajout, anneau,
+  rebond de case) : sa traîne sub-pixel garde le fil principal occupé deux fois plus longtemps que
+  ce qu'on voit, chaque image re-rendant la fenêtre. Une `timingCurve` ajustée sur le ressort.
+  → `PIEGES.md` § Animations.
+- **Une vue qui reçoit des fermetures n'est jamais « égale »** : chaque rendu de page la rejoue.
+  `TaskRow` est `Equatable` sans ses fermetures — toute nouvelle prop entre dans son `==`.
 - Pour savoir QUI invalide : `Self._printChanges()`. Un `sample` dit où part le temps, jamais quelle
   dépendance a bougé.
 
@@ -162,7 +168,8 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
 
 ### 5. Le fil principal
 
-- **Rien de synchrone vers un service système sur le fil qui dessine.** EventKit interrogé par
+- **Rien de synchrone vers un service système sur le fil qui dessine** — écritures EventKit
+  comprises (`Task.detached`, ou `RemindersService.enqueueWrite` quand personne n'attend). EventKit interrogé par
   identifiant est un aller-retour XPC bloquant : 97 échantillons de fil principal gelés, app AU
   REPOS. Une passe qui interroge N éléments fait UNE requête asynchrone, pas N.
 
