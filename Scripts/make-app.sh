@@ -8,7 +8,7 @@ set -euo pipefail
 # qu'ad-hoc (`--sign -`) : une signature ad-hoc change à chaque build, donc macOS considère
 # l'app comme "nouvelle" et redemande l'accès Rappels/Calendrier à CHAQUE lancement, même déjà
 # autorisé. Signer toujours avec la même identité garde l'autorisation d'un build à l'autre.
-SIGN_IDENTITY="Today Local Dev"
+SIGN_IDENTITY="Ryan Local Dev"
 
 cd "$(dirname "$0")/.."
 
