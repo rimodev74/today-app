@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import SwiftData
 import XCTest
 
@@ -143,6 +144,82 @@ final class MCPServerTests: XCTestCase {
       try await Task.sleep(nanoseconds: 20_000_000)
     }
     XCTAssertEqual(second.state, .failed("Port \(port) déjà utilisé par un autre programme."))
+  }
+
+  @MainActor
+  private func listeningServer(timeout: TimeInterval = 10) async throws -> (MCPServer, UInt16) {
+    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let container = try ModelContainer(
+      for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+    let server = MCPServer(
+      container: container, effects: MCPEffects(forgetAppleItems: { _ in }, removeCover: { _ in }),
+      connectionTimeout: timeout)
+    server.start(port: 0, key: "k")
+    for _ in 0..<100 {
+      if case .listening(let p) = server.state { return (server, p) }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    XCTFail("pas d'écoute : \(server.state)")
+    return (server, 0)
+  }
+
+  /// Ouvre une connexion, envoie une requête INCOMPLÈTE, et rend vrai si le serveur la ferme
+  /// avant `deadline` secondes.
+  private func closesHalfOpenConnection(port: UInt16, within deadline: TimeInterval, after: @escaping () -> Void = {}) async -> Bool {
+    let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    let queue = DispatchQueue(label: "test")
+    connection.start(queue: queue)
+    connection.send(content: Data("POST /mcp HTTP/1.1\r\nContent-Length: 50\r\n\r\n{".utf8), completion: .idempotent)
+    after()
+    return await withCheckedContinuation { continuation in
+      let once = OnceFlag()
+      connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { _, _, isComplete, error in
+        if once.take() { continuation.resume(returning: isComplete || error != nil) }
+      }
+      queue.asyncAfter(deadline: .now() + deadline) {
+        if once.take() { continuation.resume(returning: false) }
+        connection.cancel()
+      }
+    }
+  }
+
+  @MainActor
+  func testIdleConnectionIsCutAfterTimeout() async throws {
+    let (server, port) = try await listeningServer(timeout: 0.2)
+    defer { server.stop() }
+    let closed = await closesHalfOpenConnection(port: port, within: 2)
+    XCTAssertTrue(closed)
+  }
+
+  @MainActor
+  func testStopCutsOpenConnections() async throws {
+    let (server, port) = try await listeningServer()
+    let closed = await closesHalfOpenConnection(port: port, within: 2) {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { server.stop() }
+    }
+    XCTAssertTrue(closed)
+  }
+
+  @MainActor
+  func testRestartingKeepsTheNewListener() async throws {
+    let (server, port) = try await listeningServer()
+    defer { server.stop() }
+    server.start(port: port, key: "k2")
+    try await Task.sleep(nanoseconds: 500_000_000)
+    XCTAssertEqual(server.state, .listening(port: port))
+  }
+}
+
+/// Garantit qu'une continuation ne reprend qu'une fois.
+private final class OnceFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var taken = false
+  func take() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if taken { return false }
+    taken = true
+    return true
   }
 }
 

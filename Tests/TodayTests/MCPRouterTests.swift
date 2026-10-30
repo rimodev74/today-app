@@ -253,4 +253,48 @@ final class MCPRouterTests: XCTestCase {
     XCTAssertTrue(selection.pointsAtDeletedModel)
     XCTAssertFalse(SidebarSelection.projects.pointsAtDeletedModel)
   }
+
+  // MARK: - Relecture finale
+
+  func testWritesDoNotRegisterUndo() {
+    context.undoManager = UndoManager()
+    let list = makeList(makeProject())
+    call("create_task", ["list_id": .string(list), "title": .string("T")])
+    XCTAssertFalse(context.undoManager!.canUndo)
+  }
+
+  func testNotesUseTheNoteFont() {
+    let list = makeList(makeProject())
+    call("create_task", ["list_id": .string(list), "title": .string("T"), "notes": .string("x")])
+    let notes = NotesCodec.decode(try! context.fetch(FetchDescriptor<TaskItem>()).first!.notes)
+    // La référence : une note tapée dans l'éditeur, qui traverse le même RTF (où la police
+    // système devient Helvetica Neue).
+    let typed = NotesCodec.decode(
+      NotesCodec.encode(NSAttributedString(string: "x", attributes: [.font: NSFont.app()])))
+    let font = notes.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+    let reference = typed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+    XCTAssertEqual(font?.fontName, reference?.fontName)
+    XCTAssertEqual(font?.pointSize, NSFont.app().pointSize)
+  }
+
+  func testRecreatingTaskMergesNewSubtasks() {
+    let list = makeList(makeProject())
+    call("create_task", ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("a")])])
+    let (again, _) = call(
+      "create_task",
+      ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("A"), .string("b")])])
+    XCTAssertEqual(again["created"], .bool(false))
+    let task = try! context.fetch(FetchDescriptor<TaskItem>()).first!
+    XCTAssertEqual(task.orderedSubtasks.map(\.title), ["a", "b"])
+  }
+
+  func testListProjectsReportsProjectProgress() {
+    let project = makeProject()
+    let list = makeList(project)
+    call("create_task", ["list_id": .string(list), "title": .string("A"), "completed": .bool(true)])
+    call("create_task", ["list_id": .string(list), "title": .string("B")])
+    let first = call("list_projects").0["projects"]?.arrayValue?.first
+    XCTAssertEqual(first?["done"], .number(1))
+    XCTAssertEqual(first?["total"], .number(2))
+  }
 }

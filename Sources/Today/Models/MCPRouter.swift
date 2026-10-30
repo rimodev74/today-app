@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import SwiftData
 
 /// Ce que le MCP déclenche HORS de SwiftData, après un enregistrement réussi. Passé de l'extérieur
@@ -27,6 +27,12 @@ struct MCPRouter {
   /// `nil` pour une notification (pas d'`id`) : rien à répondre.
   func handle(_ request: JSONValue) -> JSONValue? {
     guard let id = request["id"] else { return nil }
+    // Ce que fait Claude n'entre pas dans la pile d'annulation de la fenêtre : un ⌘Z de
+    // l'utilisateur défaisait sinon, sans un mot, la dernière écriture de Claude. Le gestionnaire
+    // est capturé : `deleteCascadeAndSave` peut le laisser débranché du contexte en cas d'échec.
+    let undo = context.undoManager
+    undo?.disableUndoRegistration()
+    defer { undo?.enableUndoRegistration() }
     let method = request["method"]?.stringValue ?? ""
     let params = request["params"] ?? .object([:])
     switch method {
@@ -117,9 +123,17 @@ struct MCPRouter {
       "projects": .array(
         ordered.map { project in
           let lists = project.orderedLists.map(listSummary)
+          let sum = { (key: String) in
+            lists.reduce(0.0) { total, list in
+              if case .number(let n) = list[key] { return total + n }
+              return total
+            }
+          }
           return .object([
             "id": .string(project.uuid.uuidString),
             "title": .string(project.title),
+            "done": .number(sum("done")),
+            "total": .number(sum("total")),
             "lists": .array(lists),
           ])
         })
@@ -207,18 +221,30 @@ struct MCPRouter {
   private func createTask(_ args: JSONValue) throws -> JSONValue {
     let list = try fetchList(try uuid(args, "list_id"))
     let title = try nonEmpty(args, "title")
+    // Tâche déjà là : on ne la recrée pas, mais une resynchro qui apporte de NOUVEAUX sous-points
+    // les ajoute — sinon ils se perdaient derrière un `created: false`. Rien d'autre n'est touché.
     if let existing = list.tasks.first(where: { !$0.isHeader && Self.sameTitle($0.title, title) }) {
-      return created(existing.uuid, false)
+      appendMissingSubtasks(args, to: existing)
+      return try saved(created(existing.uuid, false))
     }
     let task = TaskItem(title: title, notes: notes(args) ?? Data(), list: list)
     task.sortIndex = (list.tasks.map(\.sortIndex).max() ?? -1) + 1
     context.insertAndSave(task)
-    for case .string(let subtitle) in args["subtasks"]?.arrayValue ?? [] {
-      let trimmed = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !trimmed.isEmpty { task.addSubtask().title = trimmed }
-    }
+    appendMissingSubtasks(args, to: task)
     if args["completed"]?.boolValue == true { task.toggleCompletion() }
     return try saved(created(task.uuid, true))
+  }
+
+  private func appendMissingSubtasks(_ args: JSONValue, to task: TaskItem) {
+    var titles = task.subtasks.map(\.title)
+    for case .string(let subtitle) in args["subtasks"]?.arrayValue ?? [] {
+      let trimmed = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, !titles.contains(where: { Self.sameTitle($0, trimmed) }) else {
+        continue
+      }
+      task.addSubtask().title = trimmed
+      titles.append(trimmed)
+    }
   }
 
   private func addSubtask(_ args: JSONValue) throws -> JSONValue {
@@ -331,7 +357,13 @@ struct MCPRouter {
   }
 
   private func notes(_ args: JSONValue) -> Data? {
-    args["notes"]?.stringValue.map { NotesCodec.encode(NSAttributedString(string: $0)) }
+    // La police et la couleur que pose l'éditeur à la frappe (`RichTextEditor`) : sans elles, le
+    // RTF retombe en Helvetica 12 noir, une autre police que les notes tapées à la main.
+    args["notes"]?.stringValue.map {
+      NotesCodec.encode(
+        NSAttributedString(
+          string: $0, attributes: [.font: NSFont.app(), .foregroundColor: NSColor.labelColor]))
+    }
   }
 
   private func fetch<T: PersistentModel>(_ type: T.Type, _ predicate: Predicate<T>) -> T? {
@@ -417,7 +449,8 @@ struct MCPRouter {
       required: ["project_id", "title"]),
     tool(
       "create_task",
-      "Crée une tâche en fin de liste, avec ses sous-tâches. Idempotent par titre dans la liste.",
+      "Crée une tâche en fin de liste, avec ses sous-tâches. Idempotent par titre dans la liste : "
+        + "si elle existe déjà, seules les sous-tâches manquantes sont ajoutées.",
       [
         "list_id": property("string", "id de la liste"),
         "title": property("string", "titre"),

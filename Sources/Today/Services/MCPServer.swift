@@ -21,11 +21,15 @@ final class MCPServer {
   @ObservationIgnored private let container: ModelContainer
   @ObservationIgnored private let effects: MCPEffects
   @ObservationIgnored private var listener: NWListener?
+  @ObservationIgnored private var connections: OpenConnections?
   @ObservationIgnored private let queue = DispatchQueue(label: "today.mcp")
 
-  init(container: ModelContainer, effects: MCPEffects) {
+  @ObservationIgnored private let connectionTimeout: TimeInterval
+
+  init(container: ModelContainer, effects: MCPEffects, connectionTimeout: TimeInterval = 10) {
     self.container = container
     self.effects = effects
+    self.connectionTimeout = connectionTimeout
   }
 
   /// `port: 0` laisse le système choisir (tests) ; l'état donne alors le port réel.
@@ -43,40 +47,62 @@ final class MCPServer {
       state = .failed(Self.describe(error, port: port))
       return
     }
-    let route: @Sendable (JSONValue) async -> JSONValue? = { [weak self] request in
-      await self?.route(request)
+    // Une requête déjà décodée quand l'écoute s'arrête (bascule décochée, clé régénérée) ne
+    // s'exécute pas : elle a été admise par un serveur qui n'existe plus.
+    let route: @Sendable (JSONValue) async -> JSONValue? = { [weak self, weak listener] request in
+      await self?.route(request, admittedBy: listener)
     }
     let queue = queue
+    let timeout = connectionTimeout
+    let pool = OpenConnections()
     listener.newConnectionHandler = { connection in
+      guard pool.admit(connection) else {
+        connection.start(queue: queue)
+        return Self.respond(connection, status: 503)
+      }
+      connection.stateUpdateHandler = { state in
+        switch state {
+        case .cancelled, .failed: pool.forget(connection)
+        default: break
+        }
+      }
       connection.start(queue: queue)
+      // Une connexion qui n'envoie jamais la fin de sa requête ne garde pas un descripteur à vie :
+      // l'app les partage avec SQLite.
+      queue.asyncAfter(deadline: .now() + timeout) { connection.cancel() }
       Self.receive(on: connection, buffer: Data(), key: key, route: route)
     }
     listener.stateUpdateHandler = { [weak self, weak listener] update in
       // Le port réel n'est connu qu'une fois lié (`port: 0`) ; en échec, `listener.port` vaut 0.
       let bound = listener?.port?.rawValue ?? 0
-      Task { @MainActor in self?.apply(update, port: bound == 0 ? port : bound) }
+      Task { @MainActor in self?.apply(update, port: bound == 0 ? port : bound, from: listener) }
     }
     self.listener = listener
+    self.connections = pool
     listener.start(queue: queue)
   }
 
-  /// ponytail: n'annule que l'écoute. Chaque connexion se ferme d'elle-même après SA réponse
-  /// (`Connection: close`) ; une requête en vol au moment de l'arrêt finit son tour.
+  /// Coupe l'écoute ET les connexions ouvertes : une connexion admise avant l'arrêt enverrait
+  /// sinon sa requête plus tard, avec l'ancienne clé.
   func stop() {
     listener?.stateUpdateHandler = nil
     listener?.cancel()
     listener = nil
+    if let pool = connections { queue.async { pool.cancelAll() } }
+    connections = nil
     state = .off
   }
 
-  private func apply(_ update: NWListener.State, port: UInt16) {
-    guard listener != nil else { return }
+  /// `from` : l'écouteur qui parle. Un `.failed` de l'ANCIEN, mis en file juste avant un
+  /// redémarrage (« Régénérer la clé »), coupait sinon le nouveau.
+  private func apply(_ update: NWListener.State, port: UInt16, from origin: NWListener?) {
+    guard let listener, origin === listener else { return }
     switch update {
     case .ready: state = .listening(port: port)
     case .failed(let error):
       state = .failed(Self.describe(error, port: port))
-      listener?.cancel()
-      listener = nil
+      listener.cancel()
+      self.listener = nil
     default: break
     }
   }
@@ -89,8 +115,16 @@ final class MCPServer {
     return "Port \(port) indisponible : \(error.localizedDescription)"
   }
 
-  private func route(_ request: JSONValue) -> JSONValue? {
-    MCPRouter(context: container.mainContext, effects: effects).handle(request)
+  private func route(_ request: JSONValue, admittedBy origin: NWListener?) -> JSONValue? {
+    guard let listener, origin === listener else {
+      return .object([
+        "jsonrpc": .string("2.0"), "id": request["id"] ?? .null,
+        "error": .object([
+          "code": .number(-32000), "message": .string("Today a coupé l'accès de Claude Code."),
+        ]),
+      ])
+    }
+    return MCPRouter(context: container.mainContext, effects: effects).handle(request)
   }
 
   // MARK: - Connexions (hors fil principal)
@@ -137,6 +171,7 @@ final class MCPServer {
     let reasons = [
       200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
       404: "Not Found", 405: "Method Not Allowed", 413: "Payload Too Large",
+      503: "Service Unavailable",
     ]
     var head = "HTTP/1.1 \(status) \(reasons[status] ?? "Error")\r\n"
     head += "Connection: close\r\nContent-Length: \(body?.count ?? 0)\r\n"
@@ -146,5 +181,36 @@ final class MCPServer {
     connection.send(
       content: Data(head.utf8) + (body ?? Data()),
       completion: .contentProcessed { _ in connection.cancel() })
+  }
+}
+
+/// Les connexions ouvertes d'UN écouteur. Touché seulement sur la file du serveur.
+/// ponytail: `@unchecked Sendable` + verrou plutôt qu'un acteur — les rappels de `Network` sont
+/// synchrones, un acteur forcerait un saut asynchrone à chaque admission.
+private final class OpenConnections: @unchecked Sendable {
+  /// Au-delà, 503 : Claude Code n'ouvre qu'une poignée de connexions à la fois.
+  static let limit = 16
+  private let lock = NSLock()
+  private var open: [ObjectIdentifier: NWConnection] = [:]
+
+  func admit(_ connection: NWConnection) -> Bool {
+    lock.withLock {
+      guard open.count < Self.limit else { return false }
+      open[ObjectIdentifier(connection)] = connection
+      return true
+    }
+  }
+
+  func forget(_ connection: NWConnection) {
+    lock.withLock { _ = open.removeValue(forKey: ObjectIdentifier(connection)) }
+  }
+
+  func cancelAll() {
+    let all = lock.withLock {
+      let all = Array(open.values)
+      open.removeAll()
+      return all
+    }
+    all.forEach { $0.cancel() }
   }
 }
