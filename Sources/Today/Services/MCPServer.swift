@@ -22,6 +22,8 @@ final class MCPServer {
   @ObservationIgnored private let effects: MCPEffects
   @ObservationIgnored private var listener: NWListener?
   @ObservationIgnored private var connections: OpenConnections?
+  @ObservationIgnored private var key: SharedKey?
+  @ObservationIgnored private var requestedPort: UInt16?
   @ObservationIgnored private let queue = DispatchQueue(label: "today.mcp")
 
   @ObservationIgnored private let connectionTimeout: TimeInterval
@@ -34,7 +36,18 @@ final class MCPServer {
 
   /// `port: 0` laisse le système choisir (tests) ; l'état donne alors le port réel.
   func start(port: UInt16, key: String) {
+    // Même port, clé neuve (« Régénérer la clé ») : on garde l'écoute et on change la clé. Arrêter
+    // puis relier le port échouait une fois sur trois — macOS ne l'a pas encore rendu, et le
+    // relancement répondait « Port déjà utilisé ». Une connexion déjà ouverte est jugée sur la
+    // NOUVELLE clé : la porte la lit au moment de trancher.
+    if listener != nil, port != 0, requestedPort == port || state == .listening(port: port),
+      let shared = self.key
+    {
+      shared.set(key)
+      return
+    }
     stop()
+    let shared = SharedKey(key)
     let parameters = NWParameters.tcp
     // 127.0.0.1 et rien d'autre : rien n'atteint ce port depuis le réseau.
     parameters.requiredLocalEndpoint = .hostPort(
@@ -70,7 +83,7 @@ final class MCPServer {
       // Une connexion qui n'envoie jamais la fin de sa requête ne garde pas un descripteur à vie :
       // l'app les partage avec SQLite.
       queue.asyncAfter(deadline: .now() + timeout) { connection.cancel() }
-      Self.receive(on: connection, buffer: Data(), key: key, route: route)
+      Self.receive(on: connection, buffer: Data(), key: shared, route: route)
     }
     listener.stateUpdateHandler = { [weak self, weak listener] update in
       // Le port réel n'est connu qu'une fois lié (`port: 0`) ; en échec, `listener.port` vaut 0.
@@ -79,6 +92,8 @@ final class MCPServer {
     }
     self.listener = listener
     self.connections = pool
+    self.key = shared
+    self.requestedPort = port
     listener.start(queue: queue)
   }
 
@@ -90,6 +105,8 @@ final class MCPServer {
     listener = nil
     if let pool = connections { queue.async { pool.cancelAll() } }
     connections = nil
+    key = nil
+    requestedPort = nil
     state = .off
   }
 
@@ -130,7 +147,7 @@ final class MCPServer {
   // MARK: - Connexions (hors fil principal)
 
   private nonisolated static func receive(
-    on connection: NWConnection, buffer: Data, key: String,
+    on connection: NWConnection, buffer: Data, key: SharedKey,
     route: @escaping @Sendable (JSONValue) async -> JSONValue?
   ) {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
@@ -148,7 +165,7 @@ final class MCPServer {
       case .malformed: respond(connection, status: 400)
       case .tooLarge: respond(connection, status: 413)
       case .complete(let request):
-        if let refusal = MCPGate.status(for: request, key: key) {
+        if let refusal = MCPGate.status(for: request, key: key.value) {
           return respond(connection, status: refusal)
         }
         guard let json = try? JSONDecoder().decode(JSONValue.self, from: request.body) else {
@@ -213,4 +230,14 @@ private final class OpenConnections: @unchecked Sendable {
     }
     all.forEach { $0.cancel() }
   }
+}
+
+/// La clé en vigueur, lue par la porte au moment de trancher : la changer n'exige pas de relier
+/// le port. Touchée depuis le fil principal (écriture) et la file du serveur (lecture).
+private final class SharedKey: @unchecked Sendable {
+  private let lock = NSLock()
+  private var current: String
+  init(_ key: String) { current = key }
+  var value: String { lock.withLock { current } }
+  func set(_ key: String) { lock.withLock { current = key } }
 }

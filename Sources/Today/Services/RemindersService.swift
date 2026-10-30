@@ -287,6 +287,11 @@ final class RemindersService {
 
   func lastSeenEvent(_ identifier: String) -> DateInterval? { lastAgreed[identifier] }
 
+  /// Quand la complétion de chaque rappel a été écrite d'ici pour la dernière fois (cf.
+  /// `RemindersSync.acceptsAppleCompletion`). En mémoire seule : au lancement, rien n'est en vol.
+  @ObservationIgnored private var completionWrites: [String: Date] = [:]
+  func completionWrittenAt(_ identifier: String) -> Date? { completionWrites[identifier] }
+
   /// `nil` OUBLIE l'accord (l'affectation d'un `nil` retire la clé) : c'est ce qu'on veut d'un
   /// élément devenu illisible — au retour, on ne prétendra pas savoir ce qu'il portait avant.
   func rememberEvent(_ identifier: String, _ interval: DateInterval?) {
@@ -873,6 +878,7 @@ final class RemindersService {
 
   @discardableResult
   private func writeCompletion(_ completed: Bool, identifier: String) -> Task<Void, Never> {
+    completionWrites[identifier] = Date()
     let store = UncheckedBox(store)
     return enqueueWrite {
       guard let reminder = store.value.calendarItem(withIdentifier: identifier) as? EKReminder

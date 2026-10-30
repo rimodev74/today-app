@@ -95,7 +95,14 @@ private struct ProjectCardView: View {
   @State private var hovering = false
 
   /// La carte est une vitrine, pas un inventaire : au-delà, « + N autres ».
-  private static let maxLists = 5
+  private static let maxLists = 3
+  private static let lineHeight: CGFloat = 26
+  private static let lineSpacing: CGFloat = 2
+  private static let moreHeight: CGFloat = 18
+  /// La place des listes est RÉSERVÉE, pleine ou pas : toutes les cartes ont ainsi la hauteur de la
+  /// plus grande, sans mesure. Les lignes sont de hauteur fixe (`listLine`), le calcul est exact.
+  private static let listsHeight =
+    CGFloat(maxLists) * (lineHeight + lineSpacing) + moreHeight
   private static let radius: CGFloat = 16
 
   var body: some View {
@@ -119,34 +126,40 @@ private struct ProjectCardView: View {
           }
           .padding(.horizontal, 14)
           .padding(.top, 12)
-          .padding(.bottom, card.lists.isEmpty ? 14 : 8)
+          .padding(.bottom, 8)
           .frame(maxWidth: .infinity, alignment: .leading)
         }
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
 
-      if !card.lists.isEmpty {
-        VStack(alignment: .leading, spacing: 2) {
-          ForEach(shown) { line in
-            Button {
-              openList(line.list)
-            } label: {
-              listLine(line, tint: tint)
-            }
-            .buttonStyle(.plain)
-          }
-          if hidden > 0 {
-            Text("+ \(hidden) autre\(hidden > 1 ? "s" : "")")
-              .font(.app(.caption))
-              .foregroundStyle(.tertiary)
-              .padding(.horizontal, 8)
-              .padding(.top, 2)
-          }
+      VStack(alignment: .leading, spacing: Self.lineSpacing) {
+        if card.lists.isEmpty {
+          Text("Aucune liste")
+            .font(.app(.callout))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 8)
+            .frame(height: Self.lineHeight)
         }
-        .padding(.horizontal, 6)
-        .padding(.bottom, 10)
+        ForEach(shown) { line in
+          Button {
+            openList(line.list)
+          } label: {
+            listLine(line, tint: tint)
+          }
+          .buttonStyle(.plain)
+        }
+        if hidden > 0 {
+          Text("+ \(hidden) autre\(hidden > 1 ? "s" : "")")
+            .font(.app(.caption))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 8)
+            .frame(height: Self.moreHeight)
+        }
       }
+      .frame(maxWidth: .infinity, minHeight: Self.listsHeight, alignment: .topLeading)
+      .padding(.horizontal, 6)
+      .padding(.bottom, 10)
     }
     // Même voile que les cartes d'un projet : il compose avec le verre de la page dans les deux
     // thèmes (cf. `ListCardView.cardFill`).
@@ -176,7 +189,7 @@ private struct ProjectCardView: View {
         .frame(width: 44)
     }
     .padding(.horizontal, 8)
-    .frame(height: 26)
+    .frame(height: Self.lineHeight)
     .contentShape(Rectangle())
   }
 
@@ -259,6 +272,12 @@ struct ToolbarBreadcrumb: View {
   var body: some View {
     if let steps = Breadcrumb.steps(for: selection) {
       Breadcrumb(steps: steps, selection: $selection)
+        .padding(.horizontal, 4)
+        // Sa propre pastille de verre dépoli : la barre est transparente, et le contenu qui
+        // défile dessous (un titre, une page claire) rendait le fil illisible. Le matériau natif
+        // floute ce qui passe derrière et suit le thème tout seul.
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .padding(.leading, max(0, leading))
     }
   }

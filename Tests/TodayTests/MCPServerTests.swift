@@ -213,6 +213,19 @@ final class MCPServerTests: XCTestCase {
     server.start(port: port, key: "k2")
     try await Task.sleep(nanoseconds: 500_000_000)
     XCTAssertEqual(server.state, .listening(port: port))
+
+    func status(_ key: String) async throws -> Int {
+      var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/mcp")!)
+      request.httpMethod = "POST"
+      request.httpBody = Data(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.utf8)
+      request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+      let (_, response) = try await URLSession.shared.data(for: request)
+      return (response as! HTTPURLResponse).statusCode
+    }
+    let fresh = try await status("k2")
+    let stale = try await status("k")
+    XCTAssertEqual(fresh, 200)
+    XCTAssertEqual(stale, 401)
   }
 }
 

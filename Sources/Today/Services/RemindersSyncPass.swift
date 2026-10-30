@@ -533,7 +533,9 @@ final class RemindersSyncPass {
       guard !isGone(task), let id = task.reminderIdentifier, let done = states[id],
         task.isCompleted != done,
         // Absente de `before` = liée pendant la passe : on ne sait pas ce qui précédait.
-        before[id] == task.isCompleted
+        before[id] == task.isCompleted,
+        // Écrite d'ici il y a peu : ce que renvoie Rappels peut être un état intermédiaire.
+        RemindersSync.acceptsAppleCompletion(writtenAt: service.completionWrittenAt(id))
       else { continue }
       task.isCompleted = done
       task.completedAt = done ? Date() : nil

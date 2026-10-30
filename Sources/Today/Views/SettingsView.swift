@@ -77,6 +77,7 @@ private struct ClaudeCodeSettingsTab: View {
   @Environment(MCPServer.self) private var server
   @AppStorage(MCPSettings.enabledKey) private var enabled = false
   @State private var key = MCPSettings.key()
+  @State private var copied = false
 
   private var command: String {
     MCPSettings.command(name: MCPSettings.serverName(), port: MCPSettings.port(), key: key)
@@ -98,9 +99,16 @@ private struct ClaudeCodeSettingsTab: View {
             .font(.system(.caption, design: .monospaced))
             .textSelection(.enabled)
           HStack {
-            Button("Copier la commande") {
+            Button(copied ? "Copié !" : "Copier la commande") {
               NSPasteboard.general.clearContents()
               NSPasteboard.general.setString(command, forType: .string)
+              copied = true
+            }
+            // Le libellé revient seul : un « Copié ! » figé ne dirait plus rien au clic suivant.
+            .task(id: copied) {
+              guard copied else { return }
+              try? await Task.sleep(nanoseconds: 1_500_000_000)
+              copied = false
             }
             Button("Régénérer la clé") {
               key = MCPSettings.regenerateKey()

@@ -298,6 +298,21 @@ enum RemindersSync {
   ///
   /// ponytail: un rappel renommé dans Rappels PENDANT que l'app est fermée est réécrit au lancement.
   /// Trancher demanderait une date de modification côté tâche, donc un champ de plus au schéma.
+  /// Combien de temps la complétion relue dans Rappels est ignorée après l'avoir écrite d'ici.
+  ///
+  /// Cocher-décocher en rafale une tâche liée : chaque coche part dans Rappels, et iCloud peut
+  /// renvoyer brièvement l'état d'une coche PRÉCÉDENTE. La passe d'une seconde plus tard le prenait
+  /// pour un geste fait dans Rappels et l'appliquait — la case s'inversait toute seule (rapporté le
+  /// 30 octobre 2026, intermittent). `before` ne protège que d'une coche tombée PENDANT la passe.
+  /// Un vrai changement dans Rappels dans cette fenêtre attend la passe suivante (retour au premier
+  /// plan compris) : il n'est pas perdu.
+  static let completionSettle: TimeInterval = 10
+
+  static func acceptsAppleCompletion(writtenAt: Date?, now: Date = Date()) -> Bool {
+    guard let writtenAt else { return true }
+    return now.timeIntervalSince(writtenAt) >= completionSettle
+  }
+
   static func titleVerdict(task: String, apple: String?, lastSeen: String?) -> Verdict {
     guard let apple, apple != task else { return .agreed }
     // Un titre vidé là-bas ne se reprend pas : une tâche sans titre sort du pont (`isPushable`).

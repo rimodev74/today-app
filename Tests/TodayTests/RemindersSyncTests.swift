@@ -636,3 +636,20 @@ final class RemindersSyncTests: XCTestCase {
       RemindersSync.titleVerdict(task: "Courses", apple: " ", lastSeen: "Courses"), .push)
   }
 }
+
+/// La complétion relue dans Rappels juste après l'avoir écrite d'ici ne fait pas foi : iCloud peut
+/// renvoyer un état intermédiaire d'une coche précédente (cases cochées en rafale).
+final class CompletionSettleTests: XCTestCase {
+  func testAppleCompletionIgnoredRightAfterOwnWrite() {
+    let now = Date()
+    XCTAssertFalse(
+      RemindersSync.acceptsAppleCompletion(writtenAt: now.addingTimeInterval(-2), now: now))
+  }
+
+  func testAppleCompletionAcceptedOnceSettled() {
+    let now = Date()
+    XCTAssertTrue(
+      RemindersSync.acceptsAppleCompletion(writtenAt: now.addingTimeInterval(-11), now: now))
+    XCTAssertTrue(RemindersSync.acceptsAppleCompletion(writtenAt: nil, now: now))
+  }
+}

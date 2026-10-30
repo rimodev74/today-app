@@ -357,6 +357,9 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   l'APP qui fait foi** — l'inverse des dates. Le rappel part en pleine frappe (autosave → `didSave`),
   donc Rappels porte souvent un titre tronqué : le reprendre détruirait le titre complet. Dix rappels
   « Inves… » en vraie base le 14 septembre 2026, avant que le titre ne traverse.
+  **La COCHE relue dans Rappels ne fait pas foi pendant 10 s après l'avoir écrite d'ici**
+  (`RemindersSync.acceptsAppleCompletion`) : cochée-décochée en rafale, iCloud renvoyait l'état
+  d'une coche précédente, et la passe suivante l'appliquait — la case s'inversait seule.
   **Et le miroir tient aussi pour la suppression** : un événement supprimé dans le Calendrier retire
   la DURÉE de la tâche (`RemindersSync.shouldDropDuration`), qui redevient un rappel — la tâche,
   elle, reste. Mêmes preuves que `shouldDelete`, tenues par `VanishEvidence` : vu vivant dans la
