@@ -279,10 +279,15 @@ final class MCPRouterTests: XCTestCase {
 
   func testRecreatingTaskMergesNewSubtasks() {
     let list = makeList(makeProject())
-    call("create_task", ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("a")])])
+    call(
+      "create_task",
+      ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("a")])])
     let (again, _) = call(
       "create_task",
-      ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("A"), .string("b")])])
+      [
+        "list_id": .string(list), "title": .string("T"),
+        "subtasks": .array([.string("A"), .string("b")]),
+      ])
     XCTAssertEqual(again["created"], .bool(false))
     let task = try! context.fetch(FetchDescriptor<TaskItem>()).first!
     XCTAssertEqual(task.orderedSubtasks.map(\.title), ["a", "b"])
@@ -291,7 +296,8 @@ final class MCPRouterTests: XCTestCase {
   func testListProjectsReportsProjectProgress() {
     let project = makeProject()
     let list = makeList(project)
-    call("create_task", ["list_id": .string(list), "title": .string("A"), "completed": .bool(true)])
+    call(
+      "create_task", ["list_id": .string(list), "title": .string("A"), "completed": .bool(true)])
     call("create_task", ["list_id": .string(list), "title": .string("B")])
     let first = call("list_projects").0["projects"]?.arrayValue?.first
     XCTAssertEqual(first?["done"], .number(1))

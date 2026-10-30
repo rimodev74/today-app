@@ -30,3 +30,4 @@ landing-page/
 
 # Traces Instruments : produites à la demande, jamais versionnées (`quick.sh` fait `git add -A`).
 *.trace/
+/public/

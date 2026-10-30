@@ -165,15 +165,21 @@ final class MCPServerTests: XCTestCase {
 
   /// Ouvre une connexion, envoie une requête INCOMPLÈTE, et rend vrai si le serveur la ferme
   /// avant `deadline` secondes.
-  private func closesHalfOpenConnection(port: UInt16, within deadline: TimeInterval, after: @escaping () -> Void = {}) async -> Bool {
-    let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+  private func closesHalfOpenConnection(
+    port: UInt16, within deadline: TimeInterval, after: @escaping () -> Void = {}
+  ) async -> Bool {
+    let connection = NWConnection(
+      host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
     let queue = DispatchQueue(label: "test")
     connection.start(queue: queue)
-    connection.send(content: Data("POST /mcp HTTP/1.1\r\nContent-Length: 50\r\n\r\n{".utf8), completion: .idempotent)
+    connection.send(
+      content: Data("POST /mcp HTTP/1.1\r\nContent-Length: 50\r\n\r\n{".utf8),
+      completion: .idempotent)
     after()
     return await withCheckedContinuation { continuation in
       let once = OnceFlag()
-      connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { _, _, isComplete, error in
+      connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) {
+        _, _, isComplete, error in
         if once.take() { continuation.resume(returning: isComplete || error != nil) }
       }
       queue.asyncAfter(deadline: .now() + deadline) {
