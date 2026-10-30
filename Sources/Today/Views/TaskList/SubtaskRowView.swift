@@ -35,7 +35,7 @@ struct SubtaskRowView: View {
       // rangée descendait, la copie neuve fondait par-dessus (titre dédoublé à l'écran), et chaque
       // sous-tâche créait son `NSTextField` sur la PREMIÈRE image de l'animation — celle qui
       // décrochait déjà.
-      TextField("Sous-tâche", text: $subtask.title)
+      TextField("Sous-tâche", text: $subtask.title.changesOnly)
         .textFieldStyle(.plain)
         .foregroundStyle(.secondary)
         .focused($focus, equals: subtask.uuid)

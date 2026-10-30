@@ -16,7 +16,7 @@ import SwiftUI
 /// qui traînerait une heure ferait sortir la tâche des pages qui la cherchent par son jour.
 struct WhenPicker: View {
   @Bindable var task: TaskItem
-  /// Referme le popover. Posé par l'appelant, qui seul sait ce qui le présente.
+  /// Referme le panneau. Posé par l'appelant, qui seul sait ce qui le présente (cf. `PagePanel`).
   var onClose: () -> Void
 
   /// L'heure proposée quand on en ajoute une : celle des Réglages (9 h par défaut, cf.
@@ -69,16 +69,18 @@ struct WhenPicker: View {
   /// tient — la grille rend un jour, la tâche exige un début de journée.
   ///
   /// **Et le panneau se REFERME derrière le choix**, comme les raccourcis « Aujourd'hui » et
-  /// « Demain » au-dessus. Ce n'est pas qu'une préférence : écrire `when` retrie la liste
-  /// (`SmartList.sort`), donc la RANGÉE qui sert d'ancre à ce panneau se déplace ou se démonte sous
-  /// lui. Un popover est une fenêtre accrochée à une vue ; quand cette vue s'en va, macOS le
-  /// ré-affiche en plein calcul de mise en page et lève une exception dans `NSRemoteView` — deux
-  /// plantages mesurés le 5 août 2026, pile à l'appui. Fermer d'abord, laisser le tri se faire
-  /// ensuite : il n'y a plus de fenêtre accrochée à quoi que ce soit quand la ligne bouge.
+  /// « Demain » au-dessus. Écrire `when` retrie la liste (`SmartList.sort`), donc la RANGÉE qui
+  /// sert d'ancre à ce panneau se déplace ou se démonte sous lui : resté ouvert, il sauterait avec
+  /// elle à l'autre bout de la page, ou disparaîtrait d'un coup.
   ///
-  /// ponytail: l'heure demande donc de rouvrir le panneau. Poser jour ET heure d'une traite
-  /// supposerait d'ancrer le panneau ailleurs que sur la rangée — un chantier sur le socle des cinq
-  /// pages, à faire si l'aller-retour se sent à l'usage.
+  /// La raison d'origine était plus grave, et elle est partie avec le popover : une fenêtre
+  /// accrochée à une vue qui s'en va, ré-affichée en plein calcul de mise en page, levait une
+  /// exception dans `NSRemoteView` (deux plantages le 5 août 2026). Le panneau vit désormais DANS
+  /// la fenêtre (cf. `PagePanel`) — il n'y a plus de fenêtre à ré-afficher.
+  ///
+  /// ponytail: l'heure demande donc de rouvrir le panneau. Poser jour ET heure d'une traite n'est
+  /// plus un risque de plantage, seulement la question du panneau qui suit sa rangée — à trancher
+  /// si l'aller-retour se sent à l'usage.
   private func pick(_ day: Date) {
     task.when = calendar.startOfDay(for: day)
     onClose()
@@ -162,13 +164,15 @@ struct WhenPicker: View {
   /// Sur macOS ce `DatePicker` est un `NSDatePicker` en style champ+incrémenteur : un CHAMP DE
   /// TEXTE. Le focaliser fait créer la liste de complétion d'AppKit, qui vit hors process
   /// (`SPCompletionListServiceViewController`, via ViewBridge) et s'abonne à « une fenêtre va
-  /// s'afficher ». Ce panneau étant un popover, donc une fenêtre JETÉE à chaque fermeture, chaque
-  /// heure réglée laissait un abonné sans fenêtre conteneur — et la prochaine fenêtre ordonnée à
+  /// s'afficher ». Ce panneau étant alors un popover, donc une fenêtre JETÉE à chaque fermeture,
+  /// chaque heure réglée laissait un abonné sans fenêtre conteneur — et la prochaine fenêtre ordonnée à
   /// l'écran (ici le réveil de l'icône de barre de menus) faisait lever l'assertion dans
   /// `-[NSRemoteView containingWindowWillOrderOnScreen:]` : « Abort trap: 6 ». D'où le décalage qui
   /// égare — l'app meurt à la 5e heure réglée, pas à la 1re. Pile :
   /// `Today-2026-08-10-115358.ips`, même famille que les 27 plantages d'août 2026
   /// (→ `PIEGES.md` § Fenêtres). Un menu déroulant, lui, ne prend jamais le premier répondeur texte.
+  /// Depuis que le panneau vit dans la fenêtre principale (cf. `PagePanel`), le champ d'heure n'y
+  /// serait plus un danger ; les menus restent parce qu'ils marchent, pas par précaution.
   ///
   /// ponytail: minutes au pas de 5, plus la valeur courante si elle tombe ailleurs (une heure venue
   /// des Rappels). Passer au pas de 1 si le besoin se fait sentir — c'est une liste plus longue,

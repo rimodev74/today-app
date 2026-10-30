@@ -36,13 +36,12 @@ struct TodayPageView: View {
   /// sont écartées par la requête, pas par rangée (cf. `TodoList.archivedAt`).
   @Query(filter: #Predicate<TodoList> { $0.archivedAt == nil }) private var activeLists: [TodoList]
   // Ce que la page appelle « aujourd'hui » ne doit pas être figé à l'ouverture : `startOfToday`
-  // en dépend (la date posée à une tâche créée ici), et le rafraîchissement EventKit aussi. Sans
-  // re-rendu régulier, une page laissée ouverte à travers minuit daterait d'hier.
+  // en dépend (la date posée à une tâche créée ici), et le rafraîchissement EventKit aussi. Une
+  // page laissée ouverte à travers minuit daterait d'hier : `.NSCalendarDayChanged` (cf. `body`)
+  // le remet à jour. Tout ce qui en dépend se compte en JOURS — rien dans cette page ne change à la
+  // minute — donc un minuteur à 60 s ne ferait que rejouer le corps (et toutes ses rangées) 1 440
+  // fois par jour pour rien.
   @State private var now = Date()
-  // `@State` et pas un `let` construit dans le body : le tick change `now`, donc le body se
-  // ré-évalue, donc un publisher construit là serait remplacé à chaque minute — `onReceive` se
-  // réabonnerait, invalidant puis recréant un Timer à chaque fois. Ici il est créé une seule fois.
-  @State private var ticker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
   /// Brouillon de la tâche libre (sans liste ni projet) créable depuis cette page.
   @State private var draft = ""
   @FocusState private var draftFocused: Bool
@@ -55,8 +54,9 @@ struct TodayPageView: View {
   /// Ligne dont les sous-tâches sont repliées le temps du geste (cf. `TaskDragCollapse`).
   @State private var dragCollapse = TaskDragCollapse()
 
-  /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, que le ticker
-  /// rafraîchit : une fenêtre laissée ouverte toute la nuit date bien du bon jour au matin.
+  /// La date posée par la page (création et ⊕ de la réserve). Adossée à `now`, rafraîchi au
+  /// changement de jour (`NSCalendarDayChanged`) : une fenêtre laissée ouverte toute la nuit date
+  /// bien du bon jour au matin.
   private var startOfToday: Date { Calendar.current.startOfDay(for: now) }
 
   /// Ce que les sections Apple montrent : tout SAUF ce qui est déjà à l'écran sous forme de tâche.
@@ -95,6 +95,8 @@ struct TodayPageView: View {
     // Le geste, lui, garde bien sa copie figée pour son calcul (cf. `TaskPageReorder`) : ce qui est
     // rendu et ce qui est calculé n'ont pas les mêmes contraintes.
     let rows = page.tasks
+    // Les cibles du « Déplacer vers… », lues UNE fois pour toutes les rangées (cf. `MoveTargetIndex`).
+    let moveIndex = MoveTargetIndex(activeLists)
     // Champ de création : journée vide seulement — ou focalisé, pour ne pas se dérober en pleine
     // saisie enchaînée. Cf. `ListPageView.showsNewTaskField`. Lu aussi par le ⊕ de la barre du bas,
     // qui ne peut donc pas viser un champ absent.
@@ -110,7 +112,7 @@ struct TodayPageView: View {
             eventsSection(apple.events)
 
             ForEach(rows) { task in
-              taskRow(for: task, draggable: true, rows: rows)
+              taskRow(for: task, moveIndex: moveIndex, draggable: true, rows: rows)
             }
             if showsNewTaskField { newTaskRow }
             remindersSection(apple.reminders)
@@ -132,7 +134,8 @@ struct TodayPageView: View {
       focus: $focus, blocks: { page.blocks }, delete: delete,
       reorder: reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
-      newTask: MenuAction(id: "newTask.today", run: createTaskInEditMode)
+      newTask: MenuAction(id: "newTask.today", run: createTaskInEditMode),
+      locatesClicks: true
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
@@ -143,7 +146,13 @@ struct TodayPageView: View {
         onInsertHeader: nil,
         onSearch: { searchPresented = true })
     }
-    .onReceive(ticker) { now = $0 }
+    // Minuit (ou un changement d'heure, de fuseau, un réveil après minuit) : le seul moment où « le
+    // jour même » change. `receive(on:)` parce que rien ne garantit le fil de cette notification, et
+    // qu'un `@State` écrit ailleurs qu'en principal est un plantage à retardement. Même réveil que
+    // « Tâches » et les pages de liste.
+    .onReceive(
+      NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
+    ) { _ in now = Date() }
     .task { await refreshAppleItems() }
     // Un rappel/événement peut changer côté Rappels/Calendrier pendant que Today est ouvert ou
     // en arrière-plan — même double déclencheur que `ContentView.syncCompletionsFromReminders`.
@@ -180,7 +189,7 @@ struct TodayPageView: View {
   /// La MÊME `TaskRow` que dans une page de liste : édition, suppression, dates, durée, rappels et
   /// sous-tâches viennent avec, sans une ligne de plus ici.
   private func taskRow(
-    for task: TaskItem, showsParent: Bool = true,
+    for task: TaskItem, moveIndex: MoveTargetIndex, showsParent: Bool = true,
     draggable: Bool = false, rows: [TaskItem] = []
   ) -> some View {
     // Typés ici : un ternaire entre une closure et `nil` ne s'infère pas au milieu d'une chaîne de
@@ -189,7 +198,11 @@ struct TodayPageView: View {
       draggable
       ? { translation, start in
         // Replier AVANT d'armer, et renoncer à cette image : cf. `TaskDragCollapse`.
-        guard !dragCollapse.collapseIfNeeded(task, translation: translation) else { return }
+        // Testé AVANT de muter : réécrire le `@State` à chaque image invaliderait la page.
+        if dragCollapse.shouldCollapse(task, translation: translation) {
+          _ = dragCollapse.collapseIfNeeded(task, translation: translation)
+          return
+        }
         reorder.track(task, by: translation, in: rows)
         filing.arm(
           grabbedAt: start, restingFrame: reorder.frames[.task(task.persistentModelID)])
@@ -200,7 +213,7 @@ struct TodayPageView: View {
       task: task,
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
-      moveTargets: activeLists.filter { $0.persistentModelID != task.list?.persistentModelID },
+      moveTargets: moveIndex.excluding(task.list?.persistentModelID),
       showsDate: false,
       parentTag: showsParent ? TaskParentTag(of: task) : nil,
       onBeginEditing: { beginEditing(task) },
@@ -282,7 +295,7 @@ struct TodayPageView: View {
     // Son rappel — ou son événement — part avec elle : laissé derrière, il revient dans la section
     // « Rappels » ou « Calendrier » de cette même page (cf. `RemindersService.forgetAppleItems`).
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
+      _ = modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
@@ -339,23 +352,9 @@ struct TodayPageView: View {
     // ⌘N martelé enchaîne les lignes au lieu de rouvrir la même carte (cf. `nameIfBlank`).
     keepEditedTaskIfBlank(focus, in: modelContext)
     let task = TaskItem(title: "", when: startOfToday, list: inboxLists.first)
-    // Juste SOUS la ligne visée — ici le rang est l'ordre manuel, renuméroté comme au lâcher d'un
-    // glisser. SANS ligne visée on ne stampe RIEN : `smartOrder == 0` laisse `SmartList.sort` placer
-    // la neuve, et stamper d'office figerait toute une page en ordre manuel à chaque ⌘N.
-    var ordered = TodayPage.build(from: allTasks).tasks
-    withAnimation(taskInsert) {
-      if let index = ordered.firstIndex(where: { focus.isSelected($0) }) {
-        ordered.insert(task, at: index + 1)
-        TaskItem.stampSmartOrder(ordered)
-      }
-      modelContext.insertAndSave(task)
-    }
-    let id = task.persistentModelID
-    // Au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues avant que le focus
-    // puisse s'y poser. Même raison, et même remède, que sur une page de liste.
-    DispatchQueue.main.async {
-      withAnimation(taskFlow) { focus.edit(id: id) }
-    }
+    // Juste SOUS la ligne visée, puis édition au tour de boucle suivant : cf. le helper.
+    insertTaskUnderSelection(
+      task, among: TodayPage.build(from: allTasks).tasks, focus: $focus, in: modelContext)
   }
 
   private func createTask() {
@@ -375,7 +374,7 @@ struct TodayPageView: View {
   // MARK: Rappels et événements Apple (lecture seule)
 
   /// Absente si vide — une page neuve ne montre pas une section sans rien dedans (même
-  /// convention que `archiveSection`/`dormantSummary` de `ListPageView`).
+  /// convention que `archiveSection` de `ListPageView`).
   @ViewBuilder private func remindersSection(_ unlinked: [EKReminder]) -> some View {
     if !unlinked.isEmpty {
       AppleItemsSection(title: "Rappels", systemImage: "bell") {

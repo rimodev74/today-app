@@ -45,6 +45,18 @@ final class TaskDragCollapseTests: XCTestCase {
     XCTAssertFalse(collapse.isCollapsing)
   }
 
+  /// `shouldCollapse` ne mute rien : c'est lui que les pages appellent à chaque image, pour ne
+  /// toucher leur `@State` qu'une fois par geste.
+  func testShouldCollapseIsPureAndMatchesCollapseIfNeeded() throws {
+    let task = try makeTask(subtasks: 2)
+    var collapse = TaskDragCollapse()
+    XCTAssertFalse(collapse.shouldCollapse(task, translation: CGSize(width: 1, height: 1)))
+    XCTAssertTrue(collapse.shouldCollapse(task, translation: CGSize(width: 0, height: 5)))
+    XCTAssertFalse(collapse.isCollapsing)  // l'appel n'a rien écrit
+    _ = collapse.collapseIfNeeded(task, translation: CGSize(width: 0, height: 5))
+    XCTAssertFalse(collapse.shouldCollapse(task, translation: CGSize(width: 0, height: 40)))
+  }
+
   func testResetReopensWhateverHappenedBefore() throws {
     let task = try makeTask(subtasks: 2)
     var collapse = TaskDragCollapse()

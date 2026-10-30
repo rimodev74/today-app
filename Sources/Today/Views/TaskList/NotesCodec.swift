@@ -22,13 +22,39 @@ enum NotesCodec {
     return attributedString.rtf(from: range, documentAttributes: [:]) ?? Data()
   }
 
+  /// Aperçus déjà calculés, par contenu RTF. Le décodage RTF et l'expression régulière coûtent bien
+  /// plus qu'une comparaison d'octets, et une rangée rejoue son corps à chaque survol : sans cache,
+  /// chaque survol d'une tâche à notes redécodait le RTF. Clé = les octets eux-mêmes (`NSData`
+  /// compare le contenu, pas l'identité) : une note modifiée change de clé toute seule, il n'y a
+  /// rien à invalider. Borné en nombre ET en poids, `NSCache` vidant de lui-même sous pression.
+  ///
+  /// `nonisolated(unsafe)` : `NSCache` n'est pas `Sendable` pour le compilateur, mais Apple la
+  /// documente sûre depuis plusieurs fils — et c'est la seule chose partagée ici.
+  nonisolated(unsafe) private static let previews: NSCache<NSData, NSString> = {
+    let cache = NSCache<NSData, NSString>()
+    cache.countLimit = 512
+    cache.totalCostLimit = 4 * 1024 * 1024
+    return cache
+  }()
+
   /// Texte brut, pour l'aperçu tronqué (une ligne, sans mise en forme) sous une tâche au repos.
   /// Retours à la ligne et espaces multiples repliés en un seul espace : l'aperçu reste une ligne
   /// continue que la vue tronque à sa largeur, au lieu de s'arrêter au premier `\n` d'une note
-  /// multi-lignes (ex. une consigne suivie de ses détails).
+  /// multi-lignes (ex. une consigne suivie de ses détails). Mémoïsé (cf. `previews`).
   static func plainText(_ data: Data) -> String {
-    decode(data).string
+    guard !data.isEmpty else { return "" }
+    let key = data as NSData
+    if let cached = previews.object(forKey: key) { return cached as String }
+    let text = decode(data).string
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespaces)
+    previews.setObject(text as NSString, forKey: key, cost: data.count + text.utf8.count)
+    return text
+  }
+
+  /// Vrai si l'aperçu de ces octets est déjà en cache — pour le test qui vérifie que le second
+  /// appel ne recalcule pas.
+  static func hasCachedPreview(for data: Data) -> Bool {
+    previews.object(forKey: data as NSData) != nil
   }
 }

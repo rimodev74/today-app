@@ -156,4 +156,83 @@ final class CascadeDeleteTests: XCTestCase {
     XCTAssertEqual(forgotten.sorted(), ["R0", "R1"], "identifiants lus avant la suppression")
     XCTAssertEqual(remainingWhenForgetting, 10, "SwiftData a fini quand EventKit commence")
   }
+
+  // MARK: Un enregistrement raté n'efface RIEN côté Apple
+
+  /// Un contexte sur la même base, mais qui REFUSE d'enregistrer : la façon la plus sûre de faire
+  /// échouer `save()` sans abîmer le disque.
+  private func readOnlyContext() throws -> ModelContext {
+    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    return ModelContext(
+      try ModelContainer(
+        for: schema,
+        configurations: ModelConfiguration(schema: schema, url: storeURL, allowsSave: false)))
+  }
+
+  /// `try? save()` puis `forget` quand même : la tâche restait sur le disque, son rappel partait.
+  /// Raté, l'enregistrement ne fait RIEN effacer côté Apple tout de suite — seulement au prochain
+  /// enregistrement réussi, et pour les tâches encore supprimées à ce moment-là.
+  ///
+  /// Pas de `rollback()` attendu : il fait tomber SwiftData ou laisse un état incohérent (mesuré,
+  /// cf. `ModelContext.saveReportingSuccess`). La suppression reste en attente.
+  func testDeleteTasksAndSave_failedSave_forgetsOnlyAfterTheNextSuccessfulSave() throws {
+    _ = try seedThenReopen()
+    let ctx = try readOnlyContext()
+    let tasks = Array(try ctx.fetch(FetchDescriptor<TaskItem>()).prefix(2))
+    for (i, task) in tasks.enumerated() { task.reminderIdentifier = "R\(i)" }
+
+    var forgotten: [String]?
+    let saved = ctx.deleteTasksAndSave(tasks) { forgotten = $0 }
+
+    XCTAssertFalse(saved)
+    XCTAssertNil(forgotten, "rien effacé côté Apple tant que le disque relie la tâche au rappel")
+    XCTAssertTrue(ctx.hasChanges, "la suppression attend le prochain enregistrement")
+
+    // Le prochain enregistrement réussi (ici simulé : ce contexte refuse d'enregistrer).
+    NotificationCenter.default.post(name: ModelContext.didSave, object: ctx)
+    XCTAssertEqual(forgotten?.sorted(), ["R0", "R1"])
+
+    forgotten = nil
+    NotificationCenter.default.post(name: ModelContext.didSave, object: ctx)
+    XCTAssertNil(forgotten, "une fois, puis l'observateur s'en va")
+  }
+
+  /// La cascade en attente sera écrite par l'autosave : le manager ne revient qu'APRÈS, sans quoi
+  /// cet enregistrement-là serait le plantage que le helper évite.
+  func testDeleteCascadeAndSave_failedSave_keepsUndoDetachedUntilTheNextSave() throws {
+    _ = try seedThenReopen()
+    let ctx = try readOnlyContext()
+    let manager = UndoManager()
+    ctx.undoManager = manager
+    let project = try XCTUnwrap(try ctx.fetch(FetchDescriptor<Project>()).first)
+
+    XCTAssertFalse(ctx.deleteCascadeAndSave(project))
+    XCTAssertNil(ctx.undoManager)
+
+    NotificationCenter.default.post(name: ModelContext.didSave, object: ctx)
+    XCTAssertTrue(ctx.undoManager === manager)
+  }
+
+  func testDeleteTasksAndSave_success_reportsTrue() throws {
+    let ctx = try seedThenReopen()
+    let task = try XCTUnwrap(try ctx.fetch(FetchDescriptor<TaskItem>()).first)
+    _ = task.title
+    for subtask in task.subtasks { _ = subtask.title }
+    XCTAssertTrue(ctx.deleteTasksAndSave([task]) { _ in })
+  }
+
+  /// Ce que `RemindersSyncPass.isGone` lit après chaque `await` : une tâche supprimée — avant comme
+  /// après l'enregistrement — doit se reconnaître, sans quoi la passe écrirait l'identifiant d'un
+  /// rappel neuf sur un objet effacé.
+  func testADeletedTaskIsRecognisable_beforeAndAfterSave() throws {
+    let ctx = try openContext()
+    let task = TaskItem(title: "T")
+    ctx.insert(task)
+    try ctx.save()
+
+    ctx.delete(task)
+    XCTAssertTrue(task.isDeleted || task.modelContext == nil, "avant l'enregistrement")
+    try ctx.save()
+    XCTAssertTrue(task.isDeleted || task.modelContext == nil, "après l'enregistrement")
+  }
 }

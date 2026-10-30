@@ -51,13 +51,15 @@ struct AllTasksPageView: View {
     // Construite UNE fois par rendu, puis distribuée. Avant, chaque lecture refiltrait et retriait
     // toute la base — plusieurs fois par image.
     let page = AllTasksPage.build(tasks: allTasks, retention: retention, now: tick)
+    // Les cibles du « Déplacer vers… », lues UNE fois pour toutes les rangées (cf. `MoveTargetIndex`).
+    let moveIndex = MoveTargetIndex(activeLists)
     // Largeur EXPLICITE et pas `maxWidth: .infinity`, sans quoi le titre d'une tâche en édition
     // disparaît. Le pourquoi est dans `PIEGES.md` § Layout, avec la mesure.
     return GeometryReader { geo in
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           header
-          rowsView(of: page)
+          rowsView(of: page, moveIndex: moveIndex)
           if showsNewTaskField(page) { newTaskRow }
         }
         .frame(width: max(geo.size.width - 2 * gutter, 1), alignment: .leading)
@@ -75,7 +77,8 @@ struct AllTasksPageView: View {
       delete: delete,
       reorder: reorder,
       // Le MÊME geste que le ⊕ de la barre du bas : le champ de saisie prend le focus.
-      newTask: MenuAction(id: "newTask.all", run: createTaskInEditMode)
+      newTask: MenuAction(id: "newTask.all", run: createTaskInEditMode),
+      locatesClicks: true
     )
     .onChange(of: page.tasks.count) { _, _ in
       // Une ligne qui apparaît ou disparaît sous le geste (la synchro Rappels, un ⌘Z) invaliderait
@@ -121,10 +124,10 @@ struct AllTasksPageView: View {
   /// Les lignes dans leur propre `VStack` plutôt que posées à même celui du `body` : c'est lui qui
   /// porte la largeur explicite, et l'intercaler garde les rangées à la largeur de la page (cf.
   /// `PIEGES.md` § Layout — un `VStack` laisse ses enfants se réduire à leur taille idéale).
-  private func rowsView(of page: AllTasksPage) -> some View {
+  private func rowsView(of page: AllTasksPage, moveIndex: MoveTargetIndex) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(page.tasks) { task in
-        taskRow(for: task, rows: page.tasks)
+        taskRow(for: task, moveIndex: moveIndex, rows: page.tasks)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -133,12 +136,14 @@ struct AllTasksPageView: View {
   /// La MÊME `TaskRow` que partout ailleurs. La date compte (rien ne la rend implicite ici) ; le
   /// rattachement, non : toutes ces tâches sont dans l'Inbox, la pilule dirait la même chose à
   /// chaque ligne.
-  private func taskRow(for task: TaskItem, rows: [TaskItem] = []) -> some View {
+  private func taskRow(for task: TaskItem, moveIndex: MoveTargetIndex, rows: [TaskItem] = [])
+    -> some View
+  {
     TaskRow(
       task: task,
       isSelected: focus.isSelected(task),
       isEditing: focus.isEditing(task),
-      moveTargets: activeLists.filter { $0.persistentModelID != task.list?.persistentModelID },
+      moveTargets: moveIndex.excluding(task.list?.persistentModelID),
       showsDate: true,
       parentTag: nil,
       onBeginEditing: { beginEditing(task) },
@@ -158,7 +163,11 @@ struct AllTasksPageView: View {
       onEdit: { beginEditing(task) },
       onDrag: { translation, start in
         // Replier AVANT d'armer, et renoncer à cette image : cf. `TaskDragCollapse`.
-        guard !dragCollapse.collapseIfNeeded(task, translation: translation) else { return }
+        // Testé AVANT de muter : réécrire le `@State` à chaque image invaliderait la page.
+        if dragCollapse.shouldCollapse(task, translation: translation) {
+          _ = dragCollapse.collapseIfNeeded(task, translation: translation)
+          return
+        }
         reorder.track(task, by: translation, in: rows)
         filing.arm(grabbedAt: start, restingFrame: reorder.frames[.task(task.persistentModelID)])
       },
@@ -237,7 +246,7 @@ struct AllTasksPageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
+      _ = modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
@@ -302,22 +311,10 @@ struct AllTasksPageView: View {
     let task = TaskItem(title: "", list: inbox)
     task.sortIndex = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
     // Juste SOUS la ligne visée. Cette page range par ordre manuel (cf. `AllTasksPage.build`), pas
-    // par `sortIndex` : c'est lui qu'on renumérote, et seulement quand une ligne est visée — même
-    // règle que sur « Aujourd'hui ».
-    var ordered = AllTasksPage.build(tasks: allTasks, retention: retention, now: tick).tasks
-    withAnimation(taskInsert) {
-      if let index = ordered.firstIndex(where: { focus.isSelected($0) }) {
-        ordered.insert(task, at: index + 1)
-        TaskItem.stampSmartOrder(ordered)
-      }
-      modelContext.insertAndSave(task)
-    }
-    let id = task.persistentModelID
-    // Au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues avant que le focus
-    // puisse s'y poser. Même raison, et même remède, que sur une page de liste.
-    DispatchQueue.main.async {
-      withAnimation(taskFlow) { focus.edit(id: id) }
-    }
+    // par `sortIndex` : c'est lui qu'on renumérote (cf. le helper).
+    insertTaskUnderSelection(
+      task, among: AllTasksPage.build(tasks: allTasks, retention: retention, now: tick).tasks,
+      focus: $focus, in: modelContext)
   }
 
   private func createTask() {

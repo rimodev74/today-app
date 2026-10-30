@@ -151,9 +151,9 @@ final class RemindersSyncTests: XCTestCase {
   /// `needsPush`, qui recréait donc le rappel dans la seconde — supprimer côté Rappels n'avait
   /// aucun effet visible.
   ///
-  /// `vanished: true` est une affirmation FORTE (vu vivant dans cette session, puis absent deux
-  /// passes de suite) — c'est `RemindersService.reminderVanished(_:)` qui la produit, pas une
-  /// simple absence. Cf. le test de la base restaurée plus bas.
+  /// `vanished: true` est une affirmation FORTE (vu vivant dans cette session, puis absent sur la
+  /// durée et sur plusieurs passes) — c'est `VanishEvidence` qui la produit, pas une simple
+  /// absence (cf. `VanishEvidenceTests`, et le test de la base restaurée plus bas).
   func testRappelSupprimeEmporteLaTache() {
     XCTAssertTrue(RemindersSync.shouldDelete(linked(on: day(2026, 8, 10)), vanished: true))
   }
@@ -238,8 +238,8 @@ final class RemindersSyncTests: XCTestCase {
   ///
   /// La cause tient en une ligne : le push traitait « rappel introuvable » comme « jamais poussé »,
   /// donc le recréait DANS LA MÊME PASSE que celle qui venait d'enregistrer sa disparition. La
-  /// passe suivante voyait un rappel bien vivant — le nôtre — et les deux preuves qu'exige
-  /// `RemindersService.reminderVanished` ne pouvaient jamais être réunies.
+  /// passe suivante voyait un rappel bien vivant — le nôtre — et les preuves qu'exige
+  /// `VanishEvidence` ne pouvaient jamais être réunies.
   func testUnRappelVuVivantPuisDisparuNestPasRecree() {
     let task = dated(on: day(2026, 8, 10))
     task.reminderIdentifier = "x-apple-reminderkit://REMCDReminder/1234"
@@ -428,7 +428,7 @@ final class RemindersSyncTests: XCTestCase {
   }
 
   /// **Le garde-fou du 5 août 2026.** Une absence non confirmée ne retire RIEN : `vanished` doit
-  /// être une affirmation prouvée (vu vivant, puis absent deux passes), jamais un simple
+  /// être une affirmation prouvée (cf. `VanishEvidence`), jamais un simple
   /// « EventKit ne le trouve pas » — c'est cette confusion qui avait effacé trois tâches.
   func testUneAbsenceNonConfirmeeNeRetireRien() {
     let task = dated(on: day(2026, 9, 10))

@@ -24,8 +24,29 @@ struct ArchivePage {
 
   var isEmpty: Bool { tasks.isEmpty }
 
-  /// Un pan par mois, dans l'ordre affiché — ce que ↑/↓ et ⌫ parcourent. Aucun n'est repliable.
-  var blocks: [TaskPageBlock] { months.map { .visible($0.tasks) } }
+  /// Combien de mois la page ajoute à son affichage, au départ et à chaque « Afficher les mois
+  /// précédents ». La page construit TOUTES ses rangées (jamais de `LazyVStack` : le socle a besoin
+  /// des cadres mesurés de chacune pour le clic dans le vide), donc des années d'archives rendues
+  /// d'un coup coûtaient leur nombre entier à l'ouverture. On borne ce qu'on rend, pas la façon de
+  /// le rendre.
+  static let monthsPerStep = 3
+
+  /// Les `count` mois les plus récents. `tasks` reste, lui, l'ensemble : « Vider les archives »
+  /// supprime tout, pas seulement ce qui est à l'écran.
+  func visibleMonths(_ count: Int) -> [ArchiveMonth] {
+    Array(months.prefix(max(count, 0)))
+  }
+
+  /// Combien de mois restent cachés derrière le bouton quand `count` sont affichés.
+  func hiddenMonthCount(after count: Int) -> Int {
+    max(months.count - max(count, 0), 0)
+  }
+
+  /// Un pan par mois AFFICHÉ, dans l'ordre affiché — ce que ↑/↓ et ⌫ parcourent. Aucun n'est
+  /// repliable. Les mois cachés n'y sont pas : ils n'ont pas de rangée, donc pas de cadre mesuré.
+  func blocks(showing count: Int) -> [TaskPageBlock] {
+    visibleMonths(count).map { .visible($0.tasks) }
+  }
 }
 
 /// Un mois d'archives. `id` = le premier jour du mois, qui sert aussi de clé de tri.

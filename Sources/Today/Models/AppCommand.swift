@@ -180,10 +180,15 @@ enum AppCommand: String, CaseIterable, Identifiable {
   /// Renvoie `false` quand il a fallu RECRÉER la fenêtre : elle n'existe pas encore, rien ne peut
   /// l'atteindre par notification (cf. `deliver`).
   @MainActor private func activate() -> Bool {
+    // `ignoringOtherApps: true` et PAS `NSApp.activate()` : celle-ci est une activation
+    // COOPÉRATIVE, que macOS peut refuser quand l'appel vient d'un raccourci global ou de la
+    // capsule pendant qu'une autre app est au premier plan — exactement les cas où il sert.
     NSApp.activate(ignoringOtherApps: true)
-    // Les fenêtres hors sujet s'écartent d'elles-mêmes : la capsule de saisie rapide et le
-    // `MenuBarExtra` sont sans bordure, donc jamais `canBecomeMain`.
-    guard let window = NSApp.windows.first(where: \.canBecomeMain) else {
+    // La fenêtre PRINCIPALE, celle que `WindowConfigurator` a retenue — pas « la première qui peut
+    // devenir principale » : la fenêtre des Réglages en est une aussi et pouvait être ramenée à sa
+    // place. Retenue faiblement, et vérifiée vivante dans `NSApp.windows` : une fenêtre fermée au
+    // bouton rouge n'y est plus, même si quelqu'un tient encore son objet.
+    guard let window = MainWindow.current, NSApp.windows.contains(window) else {
       // Fermée au bouton rouge, la fenêtre ne SURVIT PAS dans `NSApp.windows` : SwiftUI la détruit,
       // il n'y a rien à ramener, il faut la recréer. Seul AppKit sait remonter une scène
       // `WindowGroup`, et le clic Dock est son unique déclencheur public — d'où la demande

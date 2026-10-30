@@ -53,12 +53,22 @@ enum StoreBackup {
     let current = fingerprint(of: schema)
     guard defaults.string(forKey: fingerprintKey) != current else { return nil }
 
-    // L'empreinte est écrite MÊME si la copie ne donne rien (première ouverture, base encore
-    // inexistante) : sans ça, chaque lancement reprendrait le même chemin pour rien.
-    defer { defaults.set(current, forKey: fingerprintKey) }
+    // Pas encore de base (tout premier lancement) : rien à protéger, et l'empreinte est retenue —
+    // sans ça, chaque lancement reprendrait le même chemin pour rien.
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      defaults.set(current, forKey: fingerprintKey)
+      return nil
+    }
 
-    let destination = copy(url, now: now)
-    prune(in: url.deletingLastPathComponent())
+    // L'empreinte n'est retenue QUE si la copie a réussi. Elle l'était quoi qu'il arrive (`defer`),
+    // et une copie ratée (disque plein, droits) faisait donc passer la forme pour « déjà
+    // sauvegardée » : la migration qui suivait ouvrait la vraie base sans filet, et aucun lancement
+    // ne réessayait. Ratée, elle sera retentée au prochain.
+    guard let destination = copy(url, now: now) else { return nil }
+    defaults.set(current, forKey: fingerprintKey)
+    // Après une copie réussie seulement : élaguer sur un échec supprimerait une bonne sauvegarde
+    // sans l'avoir remplacée.
+    prune(in: url.deletingLastPathComponent(), storeName: url.lastPathComponent)
     return destination
   }
 
@@ -94,11 +104,13 @@ enum StoreBackup {
     return digest.map { String(format: "%02x", $0) }.joined()
   }
 
-  /// Copie le store et son journal dans un dossier horodaté. `nil` s'il n'y a pas encore de base.
+  /// Copie le store et son journal dans un dossier horodaté. `nil` s'il n'y a pas encore de base,
+  /// ou si la copie a échoué.
   ///
   /// Les trois fichiers ou rien : `-wal` et `-shm` sont le journal SQLite, et une copie amputée du
   /// journal restituerait un état antérieur aux dernières écritures — une sauvegarde qui ment est
-  /// pire que pas de sauvegarde. Même raisonnement que `StoreQuarantine`.
+  /// pire que pas de sauvegarde. Même raisonnement que `StoreQuarantine`. Un fichier présent qui ne
+  /// se copie pas fait donc RETIRER le dossier entier : laissé là, il passerait pour une copie.
   private static func copy(_ url: URL, now: Date) -> URL? {
     let manager = FileManager.default
     guard manager.fileExists(atPath: url.path) else { return nil }
@@ -116,7 +128,10 @@ enum StoreBackup {
       let source = URL(fileURLWithPath: url.path + suffix)
       guard manager.fileExists(atPath: source.path) else { continue }
       let target = directory.appendingPathComponent(source.lastPathComponent)
-      try? manager.copyItem(at: source, to: target)
+      guard (try? manager.copyItem(at: source, to: target)) != nil else {
+        try? manager.removeItem(at: directory)
+        return nil
+      }
     }
     return directory
   }
@@ -124,16 +139,25 @@ enum StoreBackup {
   /// Ne garde que les `keep` copies les plus récentes. Les noms sont des horodatages ISO 8601 :
   /// leur ordre alphabétique EST leur ordre chronologique, pas besoin d'interroger le système de
   /// fichiers pour les dater.
-  private static func prune(in parent: URL) {
+  ///
+  /// Seules comptent les copies VALIDES — un dossier qui contient le `.store`. Un dossier vide ou
+  /// partiel (laissé par une version qui ne nettoyait pas ses échecs, ou posé à la main) comptait
+  /// comme une copie, et sa date récente faisait supprimer une vraie sauvegarde plus ancienne. Il
+  /// n'est ni compté ni supprimé : ce n'est pas à l'élagage de décider de ce qu'il ne reconnaît pas.
+  private static func prune(in parent: URL, storeName: String) {
     let manager = FileManager.default
     let directory = parent.appendingPathComponent(directoryName)
     guard
       let entries = try? manager.contentsOfDirectory(
         at: directory, includingPropertiesForKeys: nil)
     else { return }
-    let sorted = entries.map(\.lastPathComponent).sorted()
-    guard sorted.count > keep else { return }
-    for stale in sorted.dropLast(keep) {
+    let valid =
+      entries
+      .filter { manager.fileExists(atPath: $0.appendingPathComponent(storeName).path) }
+      .map(\.lastPathComponent)
+      .sorted()
+    guard valid.count > keep else { return }
+    for stale in valid.dropLast(keep) {
       try? manager.removeItem(at: directory.appendingPathComponent(stale))
     }
   }

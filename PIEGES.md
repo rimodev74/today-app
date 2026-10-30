@@ -29,9 +29,34 @@ reproducteur AppKit nu, un `NSPopover` présenté dans le même tour de boucle q
 ferme passe 12 fois sur 12. C'est la présentation depuis le layout qui casse.
 
 Conséquence : **une palette, un sélecteur, un panneau ne prennent pas de fenêtre** — ils se révèlent
-DANS la fenêtre (cf. `PalettePicker`, et `QuickFindPanel` avant lui). Les popovers qui restent
-(`WhenPicker`, la date d'une liste) sont sous la même menace ; celui de `TaskRow`
-se referme avant d'écrire, ce qui traite le symptôme, pas la cause.
+DANS la fenêtre (cf. `PalettePicker`, et `QuickFindPanel` avant lui).
+
+**Il n'en reste plus aucun dans la fenêtre principale** (30 octobre 2026). Les trois derniers —
+`WhenPicker` (« Quand… »), la date d'une liste (`CalendarGrid`) et la feuille `SchedulePlannerView`
+— passent par `PagePanel.swift` : celui qui ouvre déclare le panneau par une préférence d'ANCRE, et
+`PagePanelHost` (posé par `taskPageBase`) le dessine par-dessus la page, hors du `ScrollView`, sous
+son ancre ou retourné au-dessus (`PanelPlacement`, testé). Il se referme au clic dehors, à Échap, à
+la molette, et avec la rangée qui l'a ouvert. Trois choses que le popover faisait sans qu'on le
+voie, et qu'il a fallu écrire :
+
+- **les moniteurs de la PAGE se taisent** tant qu'un panneau est ouvert (`PagePanelPresence`) : un
+  popover vivait dans SA fenêtre, ils l'ignoraient d'eux-mêmes ; dans la fenêtre principale, un clic
+  sur un jour tombe « dans le vide » (il refermerait la carte qui l'a ouvert) et ⌫ supprimerait la
+  tâche sélectionnée derrière — y compris depuis le champ d'heure d'un `DatePicker`, qui n'est pas
+  un `NSText` ;
+- **Échap passe par un moniteur qui CONSOMME la touche**, pas par un `.cancelAction` : la page d'une
+  liste en pose déjà un pendant l'édition, et deux raccourcis identiques laissent AppKit choisir ;
+- **`@Environment(\.dismiss)` n'a plus rien à fermer** — hors d'une feuille, dans un `WindowGroup`,
+  c'est la fenêtre principale qu'il fermerait. Le planificateur reçoit un `onClose`.
+
+Ce qui reste présenté par SwiftUI : les `.alert` (suppression dans la sidebar, d'une en-tête, vider
+les archives, la base mise en quarantaine, l'erreur du planificateur) — des alertes système
+qu'aucun plantage n'a encore citées, à surveiller au même titre. Les `NSOpenPanel`
+sont lancés depuis l'ACTION d'un bouton, jamais par `.fileImporter`.
+
+`SidebarMenu`, la pilule de la barre de titre quand la sidebar est repliée, en était un : un popover
+avec un `TextField` focalisé, donc les deux pièges réunis (celui-ci et le suivant). Il n'ouvre plus
+rien lui-même — il ouvre `QuickFindPanel`, déjà dans la fenêtre et qui montre les récents champ vide.
 
 ### Donner le premier répondeur dans une fenêtre JAMAIS affichée arme un plantage différé
 
@@ -113,10 +138,10 @@ hébergé un champ focalisé », vue depuis un panneau qu'on croyait inoffensif 
 « qu'un sélecteur ».
 
 Remplacé par deux menus déroulants (heure, minutes au pas de 5) : un `NSPopUpButton` ne prend jamais
-le premier répondeur texte. **Ça ne rend pas les popovers sûrs** — `WhenPicker`, la date d'une liste
-et la feuille `SchedulePlannerView` (qui, elle, a encore un champ Titre ET deux
-champs d'heure) restent des fenêtres présentées depuis le layout. Le correctif de fond reste le même
-qu'ailleurs : se révéler DANS la fenêtre.
+le premier répondeur texte. **Ça ne rendait pas les popovers sûrs** — `WhenPicker`, la date d'une
+liste et la feuille `SchedulePlannerView` (qui, elle, avait encore un champ Titre ET deux champs
+d'heure) restaient des fenêtres présentées depuis le layout. Le correctif de fond est arrivé le
+30 octobre 2026, le même qu'ailleurs : ils se révèlent DANS la fenêtre (cf. plus haut).
 
 ### Une fenêtre fermée reste ABONNÉE, et elle consomme ce qui était pour sa remplaçante
 
@@ -370,14 +395,21 @@ Ce qui n'est PAS en cause, vérifié dans la même passe : le démontage. Une pa
 
 ## SwiftData
 
-### Un `@Query` se ré-invalide SANS qu'aucune écriture n'ait lieu
+### Un `@Query` se ré-invalide quand un champ réécrit sa valeur À L'IDENTIQUE
 
 Mesuré le 6 août 2026 avec `Self._printChanges()` : ouvrir la carte d'édition d'une tâche imprime, à
 chaque fois, `SidebarView: \_QueryController<TodoList, String>.<computed (Bool)> changed` — puis
-pareil à la fermeture. Or **rien n'est écrit** : vérifié en écoutant `ModelContext.didSave`,
-`ModelContext.willSave` et `NSManagedObjectContextObjectsDidChange`, aucune des trois ne sonne.
-C'est une sur-notification de SwiftData (l'accès à une relation suffit), et **on ne peut pas
-l'empêcher depuis ici**.
+pareil à la fermeture. On a cru alors que **rien n'était écrit** : `ModelContext.didSave`,
+`willSave` et `NSManagedObjectContextObjectsDidChange` ne sonnaient pas, et on a conclu à une
+« sur-notification de SwiftData » impossible à empêcher. **C'était faux** (corrigé le 29 octobre
+2026). Un `TextField` qui prend le focus RÉÉCRIT sa valeur inchangée, et le setter d'un `@Model` ne
+compare rien : l'objet devient « modifié » (compté : N → N+1 objets modifiés à chaque ouverture,
+stable sans le focus). Les trois notifications se taisaient parce que l'ENREGISTREMENT, lui, vient
+plus tard — l'autosave part 0 à 20 s après, à un instant quelconque, souvent en plein geste
+suivant, et relance tous les `@Query`, la sidebar, les raccourcis et la synchro. C'était le
+« saccadé aléatoire » du double-clic. D'où `Binding.changesOnly` (`TaskPageChrome.swift`) : **toute
+liaison d'un champ à un `@Model` passe par lui.** Mesuré : focus 28,8 → 15,1 ms, fermeture 61,5 →
+41,7 ms, enregistrements fantômes 3 → 1 sur 20 gestes.
 
 Conséquence, et c'est elle qui compte : **le corps d'une vue qui porte un `@Query` se rejoue bien
 plus souvent qu'on ne le croit** — il faut donc qu'il soit BON MARCHÉ, pas qu'il soit rare.
@@ -523,6 +555,23 @@ corrigée, à garder — mais le crash est resté identique à la ligne près). 
 les rapports de crash AVANT et APRÈS le correctif. Mêmes frames SwiftData, même assertion. **Un
 correctif qui ne déplace pas la pile n'a pas touché la cause.**
 
+
+### `rollback()` après une cascade fait TOMBER SwiftData
+
+(30 octobre 2026.) Pour « annuler une suppression dont l'enregistrement a raté », `rollback()` était
+le geste évident. Mesuré sur un store temporaire, tâche à une sous-tâche :
+- suppression puis `rollback()`, sous-tâches JAMAIS lues : `ModelSnapshot.swift:268: Fatal error:
+  Unexpected backing data for snapshot creation` — le process tombe, même sans échec d'enregistrement ;
+- sous-tâches lues, enregistrement raté, puis `rollback()` : la tâche dit `isDeleted == false` mais
+  ne revient dans AUCUN fetch. Un état qu'aucune vue ne sait montrer.
+
+Et le contexte est celui de l'interface : annuler emporterait aussi la saisie en attente de
+l'autosave. D'où la règle : **un enregistrement raté ne s'annule pas** (`saveReportingSuccess`), les
+changements restent en attente, et les effets externes attendent le prochain enregistrement RÉUSSI
+(`runAfterNextSave` — `didSave` ne sonne jamais sur un échec, vérifié). Pour une cascade, l'`UndoManager`
+reste débranché jusque-là : l'autosave écrira la cascade en attente, et l'écrire manager branché est
+le plantage de la section précédente. Le moyen de faire échouer `save()` en test sans abîmer le disque :
+`ModelConfiguration(allowsSave: false)` (cf. `CascadeDeleteTests`).
 ---
 
 ## EventKit et la synchro Rappels
@@ -531,7 +580,8 @@ correctif qui ne déplace pas la pile n'a pas touché la cause.**
 
 `EKEventStore.calendarItem(withIdentifier:)` fait un aller-retour bloquant vers le démon Rappels :
 sur le fil principal, il le GÈLE le temps de la réponse. Trois fonctions en posaient un PAR tâche
-liée (`completionStates`, `reminderDay`, `reminderVanished`). Mesuré au `sample`, app AU REPOS :
+liée (`completionStates`, `reminderDay`, `reminderVanished` — devenu `reminderPresence`). Mesuré au
+`sample`, app AU REPOS :
 **97 échantillons de fil principal arrêtés dans
 `__NSXPCCONNECTION_IS_WAITING_FOR_A_SYNCHRONOUS_REPLY__` sur une fenêtre de 4 s** — la moitié de
 tout le travail non-oisif du fil qui dessine, pour une app à laquelle personne ne touchait. Et c'est
@@ -618,12 +668,63 @@ Trois pièges, chacun payé une fois pendant l'écriture :
   changement venu de Calendrier, et les deux côtés se renvoient la balle.
 - **La requête bornée ne trouve pas ce qui est parti loin.** `linkedEventTimes` ne relit que les
   jours des tâches concernées (+2) ; un événement déplacé d'un mois en sortait, était lu comme
-  absent, donc réécrit — c'est-à-dire ramené. D'où `eventTime(_:)`, une lecture à l'unité pour cette
-  seule absence, et le résultat passé à `eventPresence(_:foundInWindow:)` qui payait déjà la même.
+  absent, donc réécrit — c'est-à-dire ramené. D'où `eventLookup(_:)` (ex-`eventTime`), une lecture
+  à l'unité pour cette seule absence, dont le résultat sert aussi de preuve de présence — une seule
+  lecture là où il y en avait deux.
 
-Ce qui n'a PAS changé : la suppression garde ses deux preuves, et un événement absent ne se
-« reprend » jamais — il se recrée (identifiant périmé) ou se laisse mort. Reprendre une absence,
-ce serait effacer la durée sur un hoquet iCloud.
+Ce qui n'a PAS changé : la suppression garde ses preuves (cf. la section suivante), et un événement
+absent ne se « reprend » jamais — il se recrée (identifiant périmé) ou se laisse mort. Reprendre une
+absence, ce serait effacer la durée sur un hoquet iCloud.
+
+### « Absent deux passes de suite » durait deux secondes
+
+(30 octobre 2026, audit.) La règle écrite disait « vu vivant, puis absent DEUX passes de suite » et
+se lisait comme une précaution. Mesurée en temps, elle n'en était pas une : la seconde passe était le
+RÉARMEMENT à une seconde que la première déclenchait elle-même. Une tâche — notes et sous-tâches
+comprises, sans annulation — partait donc après 2 à 3 s d'absence : la durée exacte d'une resynchro
+iCloud ou d'une liste partagée qui disparaît un instant, précisément quand `.EKEventStoreChanged`
+sonne. Et le réarmement tournait à 1 Hz SANS FIN pour un identifiant sorti des tâches suivies : plus
+personne ne le tranchait, `hasPendingVanishVerdict` restait vrai.
+
+D'où `VanishEvidence` (`Models/`, type de valeur, horloge en paramètre, `VanishEvidenceTests`) :
+- absence HORODATÉE, tranchée après **≥ 120 s ET ≥ 3 passes** — le temps écarte le hoquet, le
+  nombre écarte une passe isolée tardive ;
+- **passe retenue** (rien n'est compté, ni temps ni nombre) si le conteneur manque — la liste-pont
+  absente de l'instantané, le calendrier désigné disparu — ou si plus du quart des éléments vivants
+  (trois au moins) manquent d'un coup. Une panne fait disparaître en masse ; un utilisateur supprime
+  un par un. Le prix, assumé : supprimer d'un coup dans Rappels plus du quart des rappels liés laisse
+  les tâches en place, liées à des rappels morts ;
+- les identifiants qui ne sont plus suivis sont OUBLIÉS à chaque passe, ceux qu'on efface soi-même
+  aussi (`forgetReminders`/`forgetEvents`) ; et la passe se réarme sur l'échéance de la prochaine
+  preuve utile (`nextCheck` : à mi-parcours, puis à 120 s), jamais pendant une passe retenue.
+
+Ce qui ne pouvait PAS remplacer la suppression : « détacher » le lien. Une tâche datée sans lien
+est une tâche jamais poussée, et le push recréerait le rappel dans la seconde — le défaut de la
+section précédente, à l'envers.
+
+### Une coche faite PENDANT la passe était défaite par elle
+
+`withSyncLock` vide la file d'écritures, PUIS lit l'instantané. Mais `pushCompletion` partait en
+`Task.detached` hors file : une coche tombée pendant la lecture arrivait chez Rappels APRÈS
+l'instantané, et `syncCompletionsFromReminders` recopiait l'état d'avant — la case se décochait,
+puis se recochait à la passe suivante, `completedAt` réécrit au passage. Deux corrections, chacune
+nécessaire : les écritures de complétion passent par la FILE (la passe suivante les attend), et la
+passe relève la complétion de chaque tâche liée AVANT l'instantané — qui ne la porte plus a été
+modifié ici, et ici fait foi.
+
+Même famille : toute boucle de la passe qui `await` puis relit une tâche vérifie qu'elle existe
+encore (`isGone`) — ⌫ tombe entre deux `await`. Supprimée pendant que son rappel s'écrivait, on
+efface le rappel au lieu d'écrire son identifiant sur un objet mort ; et l'import ne reprend jamais
+un rappel que l'app a elle-même effacé (`forgottenReminders`).
+
+### « Aujourd'hui » et « À venir » lisaient l'agenda sur le fil principal
+
+`events(matching:)` est synchrone. « À venir » le posait sur 180 jours, à chaque
+`.EKEventStoreChanged` — donc en rafale pendant une resynchro — et à chaque retour au premier plan.
+Désormais détaché (`events(from:to:)`), avec un jeton de génération (un résultat ancien revenu tard
+n'écrase pas un récent) et 300 ms d'anti-rebond, sauf au premier chargement. Les vues lisent encore
+des `EKEvent` : les projeter en valeurs toucherait `UpcomingPage` et les sections, hors de ce
+correctif.
 
 ---
 
@@ -820,9 +921,9 @@ fluide, l'ouverture d'une carte saccadait. Les corps ne se rejouaient presque pa
 animation de 0,2 s — un quart de l'ouverture mangé d'un coup. Trois causes :
 
 1. **La prise de focus du titre** (~40 ms) : field editor, fenêtre de Writing Tools, et la
-   sur-notification SwiftData ci-dessus qui fait refetcher la sidebar. Vérifié : sans focus, la
-   sidebar ne se rejoue plus ; ni l'écriture du `Binding` à l'identique ni l'`UndoManager` n'y sont
-   pour rien. Le focus est donc posé à la FIN de l'ouverture (`taskFlowDuration`), pas au tick
+   réécriture à l'identique du titre ci-dessus qui fait refetcher la sidebar. Vérifié : sans focus,
+   la sidebar ne se rejoue plus. (Ce point disait que l'écriture à l'identique n'y était « pour
+   rien » : démenti le 29 octobre 2026, c'était elle — cf. `Binding.changesOnly`.) Le focus est donc posé à la FIN de l'ouverture (`taskFlowDuration`), pas au tick
    suivant — l'image lourde tombe hors de l'animation, qui tourne à 8,3 ms partout.
 2. **Les sous-tâches basculaient `Text` ↔ `TextField`** : deux identités en fondu croisé (titre
    dédoublé au ralenti) et un `NSTextField` créé par sous-tâche sur la première image. Même règle

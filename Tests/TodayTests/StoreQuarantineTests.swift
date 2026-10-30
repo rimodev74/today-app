@@ -110,4 +110,23 @@ final class StoreQuarantineTests: XCTestCase {
 
     XCTAssertEqual(StoreQuarantine.consumeReport(defaults: defaults).count, 1)
   }
+
+  // MARK: Un échec arrête
+
+  /// Le `.store` qui ne bouge pas retient son journal : sur un `continue`, le journal partait sans
+  /// sa base, qui restait illisible ET perdait ses dernières écritures.
+  func testQuarantine_storeThatCannotMoveKeepsItsJournal() throws {
+    let url = try store(["", "-wal", "-shm"])
+    let now = Date(timeIntervalSince1970: 0)
+    let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
+    // La destination occupée : `moveItem` refuse d'écraser.
+    try Data("occupé".utf8).write(to: URL(fileURLWithPath: url.path + ".corrupt-\(stamp)"))
+
+    let moved = StoreQuarantine.quarantine(url, now: now)
+
+    XCTAssertTrue(moved.isEmpty)
+    for suffix in ["", "-wal", "-shm"] {
+      XCTAssertTrue(FileManager.default.fileExists(atPath: url.path + suffix), "\(suffix) a bougé")
+    }
+  }
 }

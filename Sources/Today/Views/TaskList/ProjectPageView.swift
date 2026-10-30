@@ -21,6 +21,7 @@ struct ProjectPageView: View {
   /// ils restent orphelins et reviennent s'afficher dans les sections « Rappels » de l'app (cf.
   /// `TodoList.delete(from:in:forget:)`).
   @Environment(RemindersService.self) private var remindersService
+  @Environment(ProjectCovers.self) private var covers
   @FocusState private var notesFocused: Bool
   /// Liste en attente de confirmation de suppression (non nil ⇒ alerte). Même règle que la
   /// sidebar : vide, elle part sans rien demander (cf. `TodoList.needsDeleteConfirmation`).
@@ -49,14 +50,23 @@ struct ProjectPageView: View {
     let board = ProjectBoard.build(from: project, previewLimit: Self.previewLimit, bounds: bounds)
     let cardsShown = entranceTrigger == project.persistentModelID
 
+    // L'avancement cumulé sort de la MÊME passe que les cartes (cf. `ProjectBoard.total`), au lieu
+    // d'une seconde traversée de toutes les tâches du projet.
+    let total = board.total
+    // Lue UNE fois : chaque anneau de carte la reprend, au lieu de relire `list.project?.color`
+    // (deux relations SwiftData) par carte et par rendu.
+    let tint = project.color?.color
+
     return ScrollView {
+      // Le bandeau hors de la colonne : il va bord à bord, comme dans Notion.
+      ProjectCoverBanner(uuid: project.uuid, tint: project.color?.color ?? PageTint.projects)
       VStack(alignment: .leading, spacing: 20) {
-        header
+        header(total)
         listsHeader(board)
         LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
           ForEach(Array(board.cards.enumerated()), id: \.element.id) { rank, card in
             ListCardView(
-              card: card,
+              card: card, tint: tint,
               open: { selection = .list(card.list) },
               rename: { rename(card.list) },
               archive: card.isFinished ? ("Archiver la liste", { archive(card.list) }) : nil,
@@ -78,7 +88,7 @@ struct ProjectPageView: View {
         // gauche de tout le reste de la page (mesuré le 10 août 2026).
         .padding(.leading, taskContentColumn)
 
-        archiveSection(board, bounds: bounds)
+        archiveSection(board, bounds: bounds, tint: tint)
       }
       // `gutter`, comme toutes les autres pages : à `gutter - 8`, l'en-tête et son encadré de notes
       // tombaient 8 pt à gauche de ceux d'une liste — un décalage que rien ne justifiait, visible
@@ -118,24 +128,48 @@ struct ProjectPageView: View {
     }
   }
 
-  private var header: some View {
+  private func header(_ total: SidebarCounts.Row) -> some View {
     // Même construction QUE `ListPageView.header`, au point près (espacement, retrait de l'anneau,
     // encadré de notes) : les deux pages doivent se lire comme une seule.
     VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 12) {
-        ProgressRing(progress: project.progress(), size: 26, lineWidth: 3)
-          .tint(project.color?.color)
-        TextField("Nom du projet", text: $project.title)
+      // Le DOSSIER du projet, pas un anneau : la barre dessous dit déjà l'avancement, et deux
+      // jauges l'une sous l'autre (le jour, le cumul) se lisaient comme une contradiction. Les
+      // anneaux restent sur les cartes des listes, où ils sont seuls. Même cartouche que les
+      // bandeaux des autres pages.
+      HStack(spacing: 10) {
+        PageHeaderIcon(
+          systemImage: "folder.fill", tint: project.color?.color ?? PageTint.projects)
+        TextField("Nom du projet", text: $project.title.changesOnly)
           .textFieldStyle(.plain)
           .font(.app(.title).bold())
+        CoverPickerButton(uuid: project.uuid, tint: project.color?.color ?? PageTint.projects)
       }
+      .coverDrop(
+        uuid: project.uuid, covers: covers, tint: project.color?.color ?? PageTint.projects
+      )
       // L'anneau se cale sur `taskContentColumn`, comme sur la page d'une liste (cf.
       // `ListPageView.header`) — même colonne que le bord du `NotesBox` juste en dessous.
       .padding(.leading, taskContentColumn)
 
+      // L'avancement CUMULÉ, le même que la carte du projet dans « Projets » (cf.
+      // `ProjectsOverview.total`) — la seule jauge de la page au niveau du projet.
+      HStack(spacing: 10) {
+        ProgressBar(progress: total.progress, tint: project.color?.color ?? .accentColor)
+          .frame(maxWidth: 220)
+        Text(
+          total.countable == 0 ? "Aucune tâche" : "\(total.done) / \(total.countable) tâches faites"
+        )
+        .font(.app(.caption).weight(.semibold))
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+      }
+      .padding(.leading, taskContentColumn)
+
       // Même encadré que la page de liste (cf. `NotesBox`).
-      NotesBox(notes: $project.notes, font: .app(), textColor: .labelColor, focused: $notesFocused)
-      {
+      NotesBox(
+        notes: $project.notes.changesOnly, font: .app(), textColor: .labelColor,
+        focused: $notesFocused
+      ) {
         notesFocused = false
       }
     }
@@ -202,7 +236,9 @@ struct ProjectPageView: View {
   /// contenu RETIRÉ quand il est replié — les cartes des archives ne sont fabriquées qu'ici, à
   /// l'ouverture (cf. `ProjectBoard.archived`).
   @ViewBuilder
-  private func archiveSection(_ board: ProjectBoard, bounds: DayBounds) -> some View {
+  private func archiveSection(_ board: ProjectBoard, bounds: DayBounds, tint: Color?)
+    -> some View
+  {
     let count = board.archived.count
     if count > 0 {
       let plural = count > 1 ? "s" : ""
@@ -231,7 +267,7 @@ struct ProjectPageView: View {
           LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
             ForEach(cards) { card in
               ListCardView(
-                card: card,
+                card: card, tint: tint,
                 open: { selection = .list(card.list) },
                 rename: { rename(card.list) },
                 archive: ("Désarchiver", { unarchive(card.list) }),
@@ -279,7 +315,7 @@ extension View {
   /// retasse pas pendant l'entrée, et le body de la carte ne se rejoue pas.
   ///
   /// ponytail: retard plafonné au 8e rang — au-delà, la cascade traînerait sur un gros projet.
-  fileprivate func enteringCard(_ shown: Bool, rank: Int) -> some View {
+  func enteringCard(_ shown: Bool, rank: Int) -> some View {
     opacity(shown ? 1 : 0)
       .scaleEffect(shown ? 1 : 0.92)
       .offset(y: shown ? 0 : 12)
@@ -292,6 +328,9 @@ extension View {
 /// de sa liste et c'est tout.
 private struct ListCardView: View {
   let card: ProjectBoard.Card
+  /// La teinte du PROJET, donnée par la page qui la lit une fois : la carte n'a pas à remonter
+  /// `list.project?.color` elle-même.
+  let tint: Color?
   let open: () -> Void
   let rename: () -> Void
   /// « Archiver la liste » sur une carte finie, « Désarchiver » dans les archives, `nil` sinon.
@@ -356,7 +395,7 @@ private struct ListCardView: View {
   private var title: some View {
     HStack(spacing: 8) {
       ProgressRing(progress: card.progress, size: 18)
-        .tint(card.list.project?.color?.color)
+        .tint(tint)
       Text(card.list.title.isEmpty ? "Sans titre" : card.list.title)
         .font(.app(.headline))
         .lineLimit(1)

@@ -131,7 +131,18 @@ final class PomodoroTimer {
   ]
 
   var phase: PomodoroPhase = .work
-  var remaining: TimeInterval
+  var remaining: TimeInterval {
+    didSet {
+      let text = Self.menuBarText(remaining)
+      if text != menuBarText { menuBarText = text }
+    }
+  }
+  /// Ce que la barre de menus affiche, STOCKÉ et réécrit seulement quand il change. Lire
+  /// `remaining` depuis l'étiquette redessinait l'icône du `NSStatusItem` chaque seconde : un bloc
+  /// de ~10 ms sur le fil principal toutes les secondes de la session, soit une image perdue par
+  /// seconde pendant toute animation (mesuré le 29 octobre 2026). Les minutes suffisent à un coup
+  /// d'œil ; les secondes ne reviennent que pendant la dernière minute.
+  private(set) var menuBarText = ""
   var isRunning = false
   private(set) var completedWorkSessions = 0
 
@@ -157,6 +168,17 @@ final class PomodoroTimer {
   }
 
   @ObservationIgnored private var timer: Timer?
+  /// L'instant où la phase en cours finit — la VÉRITÉ du temps restant, `remaining` n'en est que
+  /// l'affichage. Décompter `remaining -= 1` à chaque tick faisait dériver le minuteur dès qu'un
+  /// tick était retardé ou sauté (App Nap, fil principal occupé, veille) : chaque seconde perdue
+  /// l'était pour de bon. `nil` tant que rien ne tourne.
+  @ObservationIgnored private var endDate: Date?
+  /// L'horloge, injectable : un test fait passer dix minutes sans les attendre.
+  @ObservationIgnored var now: () -> Date = Date.init
+  /// Tient App Nap à distance tant que le minuteur tourne. Sans elle, macOS regroupe et retarde les
+  /// ticks d'une app qu'il juge inactive — pas de quoi fausser le temps (la date de fin suffit) mais
+  /// assez pour figer le compte à rebours à l'écran.
+  @ObservationIgnored private var activity: NSObjectProtocol?
 
   init() {
     let defaults = UserDefaults.standard
@@ -165,12 +187,35 @@ final class PomodoroTimer {
     shortBreakMinutes = defaults.object(forKey: Self.shortBreakMinutesKey) as? Int ?? 5
     longBreakMinutes = defaults.object(forKey: Self.longBreakMinutesKey) as? Int ?? 15
     remaining = TimeInterval(work * 60)
+    menuBarText = Self.menuBarText(remaining)
+  }
+
+  /// Minutes ARRONDIES AU-DESSUS (« 25 min » pendant toute la première minute d'une session de 25),
+  /// puis « 00:59 » … « 00:00 » pendant la dernière.
+  static func menuBarText(_ remaining: TimeInterval) -> String {
+    let total = max(0, Int(remaining))
+    return total < 60 ? String(format: "00:%02d", total) : "\((total + 59) / 60) min"
+  }
+
+  /// Le temps restant avant `end`, en secondes ENTIÈRES arrondies au-dessus : « 24:59 » dure toute la
+  /// seconde qui suit le premier tick, comme le décompte par pas de 1 qu'il remplace. Pure, donc
+  /// testable sans attendre.
+  static func secondsLeft(until end: Date, at now: Date) -> TimeInterval {
+    max(0, end.timeIntervalSince(now).rounded(.up))
   }
 
   func start() {
     guard !isRunning else { return }
     isRunning = true
     hasStarted = true
+    // La date de fin se pose AVANT de fabriquer le `Timer` : ses ticks tombent à `création + k`, donc
+    // juste APRÈS `fin − (N − k)`, et l'arrondi au-dessus donne alors exactement `N − k`. Dans
+    // l'autre ordre chaque tick lirait une seconde de trop.
+    endDate = now().addingTimeInterval(remaining)
+    // `AllowingIdleSystemSleep` : on veut des ticks à l'heure, pas un Mac qui ne dort plus tant
+    // qu'un enchaînement automatique tourne sans personne devant.
+    activity = ProcessInfo.processInfo.beginActivity(
+      options: .userInitiatedAllowingIdleSystemSleep, reason: "Minuteur Pomodoro")
     // Le son suit la PHASE lancée, pas le geste : « démarrer une pause courte » et « démarrer une
     // pause longue » passent tous deux par ici et sonnent donc pareil, ce qui est demandé.
     PomodoroSound.starting(phase).play()
@@ -210,11 +255,19 @@ final class PomodoroTimer {
   /// sans que l'utilisateur ait demandé une pause : la remise à zéro, l'ouverture d'une autre phase,
   /// et la fin d'une phase — cette dernière a déjà son alarme, un « clic » de pause juste derrière
   /// s'entendait comme un bug.
-  private func halt() {
+  ///
+  /// `syncingMusic: false` quand l'appelant a déjà tu la musique et que la suite la resynchronise :
+  /// la fin d'une phase (cf. `handlePhaseCompletion`).
+  private func halt(syncingMusic: Bool = true) {
+    // Le reste se FIGE à l'instant de l'arrêt : sans date de fin, plus rien ne le fera avancer.
+    if let endDate { remaining = Self.secondsLeft(until: endDate, at: now()) }
+    endDate = nil
+    if let activity { ProcessInfo.processInfo.endActivity(activity) }
+    activity = nil
     isRunning = false
     timer?.invalidate()
     timer = nil
-    syncMusic()
+    if syncingMusic { syncMusic() }
   }
 
   func reset() {
@@ -259,19 +312,31 @@ final class PomodoroTimer {
       phase = .work
     }
     remaining = duration(for: phase)
+    // Enchaînement automatique : le minuteur tourne toujours et la phase neuve repart de sa durée
+    // pleine, d'ici.
+    if isRunning { endDate = now().addingTimeInterval(remaining) }
     syncMusic()
   }
 
-  private func tick() {
-    guard remaining > 0 else { return }
-    remaining -= 1
-    // Le fondu s'amorce UNE fois par phase, à la seconde exacte : `remaining` décroît de 1 en 1
-    // depuis un entier, l'égalité est donc atteinte pile une fois. Un `<=` la rejouerait à chaque
-    // tick, et chaque relance repartirait du volume plein — la musique remonterait en escalier.
-    if phase == .work, Int(remaining) == MusicPlayer.shared.fadeSeconds {
+  /// Un tick lit l'horloge, il ne compte pas : un tick retardé ou sauté donne le même temps restant
+  /// qu'un tick à l'heure. Interne et pas privé, pour qu'un test le joue avec une horloge fausse.
+  func tick() {
+    guard let endDate else { return }
+    let previous = remaining
+    // Jamais en arrière : un recalage de l'horloge système ne doit pas faire remonter le compte.
+    let left = min(previous, Self.secondsLeft(until: endDate, at: now()))
+    if left != previous { remaining = left }
+    // Le fondu s'amorce UNE fois par phase, quand le reste TRAVERSE le seuil : `previous > seuil`
+    // et `left <= seuil`. Le franchissement, et pas l'égalité — un tick sauté (veille, fil occupé)
+    // ne tombe plus pile sur la seconde et le fondu n'aurait jamais lieu —, et ni une reprise
+    // sous le seuil ni une phase plus courte que le fondu ne le déclenchent : le reste y est déjà
+    // en dessous, rien ne le traverse. Un simple `<=` repartirait du volume plein à chaque tick.
+    let fade = MusicPlayer.shared.fadeSeconds
+    if phase == .work, previous > TimeInterval(fade), left <= TimeInterval(fade) {
       MusicPlayer.shared.fadeOut()
     }
-    if remaining <= 0 {
+    // `<=` : si un tick est sauté par-dessus la fin, la phase finit quand même au suivant.
+    if left <= 0 {
       handlePhaseCompletion()
     }
   }
@@ -285,15 +350,21 @@ final class PomodoroTimer {
       UserDefaults.standard.string(forKey: Self.alertSoundStorageKey) ?? Self.defaultAlertSound
     NSSound(named: soundName)?.play()
     let finished = phase
-    // `advancePhase` resynchronise la musique : avec l'enchaînement automatique, le minuteur tourne
-    // toujours et personne n'appellera `start()` — c'est donc là que le travail retrouve sa musique.
-    advancePhase()
     let alert = PomodoroAlertStyle.current
+    // L'arrêt se décide AVANT d'ouvrir la phase suivante, pas après. Dans l'autre ordre,
+    // `advancePhase` voyait un minuteur encore en marche et, si la phase suivante était un travail,
+    // relançait la musique — que `halt` coupait aussitôt : un play puis un pause audibles à chaque
+    // fin de pause, sur l'écran plein comme sans enchaînement automatique.
     if alert.takesOver(after: finished)
       || !UserDefaults.standard.bool(forKey: Self.autoStartStorageKey)
     {
-      halt()  // l'alarme vient de sonner : elle EST le signal, rien à ajouter derrière
+      // L'alarme vient de sonner : elle EST le signal, rien à ajouter derrière. La musique est déjà
+      // tue (plus haut) et `advancePhase` la resynchronise sur un minuteur arrêté.
+      halt(syncingMusic: false)
     }
+    // `advancePhase` resynchronise la musique : avec l'enchaînement automatique, le minuteur tourne
+    // toujours et personne n'appellera `start()` — c'est donc là que le travail retrouve sa musique.
+    advancePhase()
     PomodoroAlertWindow.announce(
       alert, finished: finished, next: phase, duration: formattedRemaining,
       onStart: { [weak self] in self?.start() })

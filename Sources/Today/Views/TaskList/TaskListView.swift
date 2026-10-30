@@ -2,9 +2,9 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Aiguillage du panneau de détail. Seule la page d'une to-do list est construite pour
-/// l'instant ; les vues intelligentes sont à rebrancher. La recherche vit dans la sidebar
-/// (cf. `SearchPopover`) et pilote la sélection, elle n'a plus de branche ici.
+/// Aiguillage du panneau de détail : une page par destination de la barre latérale (les quatre vues
+/// intelligentes, une liste, un projet, la vue Projets, le Pomodoro). La recherche (`QuickFindPanel`)
+/// pilote la sélection, elle n'a plus de branche ici.
 struct TaskListView: View {
   @Binding var selection: SidebarSelection?
   @Binding var searchPresented: Bool
@@ -16,8 +16,8 @@ struct TaskListView: View {
   private var page: some View {
     switch selection {
     case .smartList(.all):
-      // N'était que la page de l'Inbox : indiscernable d'une liste, et les tâches des projets n'y
-      // apparaissaient jamais. C'est désormais l'inventaire complet (cf. `AllTasksPageView`).
+      // La boîte de réception : une zone de dépôt pour ce qu'on note sans classer (cf.
+      // `AllTasksPageView`, qui dit pourquoi l'inventaire complet en a été retiré).
       AllTasksPageView(searchPresented: $searchPresented)
     case .list(let list):
       // PAS de `.id(list.persistentModelID)` ici : il forçait SwiftUI à détruire et reconstruire
@@ -32,6 +32,8 @@ struct TaskListView: View {
       ProjectPageView(
         project: project, selection: $selection, searchPresented: $searchPresented,
         pendingTitleFocus: $pendingTitleFocus)
+    case .projects:
+      ProjectsPageView(selection: $selection, searchPresented: $searchPresented)
     case .pomodoro:
       PomodoroView(searchPresented: $searchPresented)
     case .smartList(.archive):
@@ -44,16 +46,16 @@ struct TaskListView: View {
       // Aucune destination : le seul état sans page. `selection` démarre sur « Aujourd'hui » et
       // rien ne la remet à nil aujourd'hui — la branche existe parce que le type l'autorise, pas
       // parce qu'un chemin y mène.
-      comingSoon("Sélectionne une liste", searchPresented: $searchPresented)
+      emptyPage("Sélectionne une liste", searchPresented: $searchPresented)
     }
   }
 }
 
-@MainActor func comingSoon(_ title: String, searchPresented: Binding<Bool>) -> some View {
+/// Une page sans contenu : son titre, rien d'autre.
+@MainActor func emptyPage(_ title: String, searchPresented: Binding<Bool>) -> some View {
   VStack(alignment: .leading, spacing: 8) {
     // Le titre de l'onglet reste hors du fondu, comme partout ailleurs.
     Text(title).font(.app(.title).bold())
-    Text("À rebrancher.").foregroundStyle(.tertiary)
   }
   .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   .padding(.top, 30)

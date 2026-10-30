@@ -83,7 +83,7 @@ enum RemindersSync {
 
   /// Faut-il (ré)écrire l'événement de cette tâche ? `eventStart`/`eventMinutes` décrivent
   /// l'événement lié tel qu'il est en ce moment — `nil` s'il n'existe pas encore, ou si son
-  /// identifiant est PÉRIMÉ (base restaurée : cf. `RemindersService.EventPresence`). Un événement
+  /// identifiant est PÉRIMÉ (base restaurée : cf. `VanishEvidence.Presence`). Un événement
   /// que l'utilisateur vient de supprimer, lui, ne passe jamais par ici : c'est
   /// `shouldDropDuration` qui répond, et la durée tombe au lieu que l'événement renaisse.
   ///
@@ -136,9 +136,10 @@ enum RemindersSync {
   /// Un créneau qu'on efface d'un ⌫ dans le Calendrier ne dit rien de la tâche, de ses notes ni de
   /// ses sous-tâches ; il dit seulement qu'on ne veut plus de ce bloc-là.
   ///
-  /// `vanished` est une affirmation FORTE, pas une absence : elle vient de
-  /// `RemindersService.eventPresence`, qui exige d'avoir vu l'événement VIVANT dans cette session
-  /// puis absent deux passes de suite.
+  /// `vanished` est une affirmation FORTE, pas une absence : elle vient de `VanishEvidence` (par
+  /// `RemindersService.eventPresence`), qui exige d'avoir vu l'événement VIVANT dans cette session,
+  /// puis absent depuis au moins deux minutes et sur au moins trois passes, hors de toute
+  /// disparition en masse — les mêmes preuves que `shouldDelete`.
   static func shouldDropDuration(_ task: TaskItem, vanished: Bool) -> Bool {
     vanished && task.eventIdentifier != nil && task.estimateMinutes > 0
   }
@@ -156,8 +157,8 @@ enum RemindersSync {
   ///   recréer serait déjà faux en soi, mais le vrai dégât est ailleurs : ça EFFACE LA PREUVE que
   ///   `shouldDelete` attend. La passe suivante retrouve un rappel bien vivant (le nôtre, tout
   ///   neuf, avec un identifiant neuf), donc plus rien n'a jamais disparu, donc la tâche n'est
-  ///   jamais supprimée. Les deux preuves de `RemindersService.reminderVanished` ne pouvaient
-  ///   simplement pas être réunies tant que le push tournait.
+  ///   jamais supprimée. Les preuves de `VanishEvidence` ne pouvaient simplement pas être réunies
+  ///   tant que le push tournait.
   ///
   /// Sans valeur par défaut, comme `TaskPageBase.reorder` : un `false` implicite ramènerait
   /// exactement le défaut ci-dessus, sans un mot à la compilation.
@@ -190,8 +191,9 @@ enum RemindersSync {
   /// Cette tâche doit-elle DISPARAÎTRE parce que son rappel a été supprimé côté Apple ?
   ///
   /// **`vanished` est une affirmation FORTE, pas une simple absence.** Elle vient de
-  /// `RemindersService.reminderVanished(_:)`, qui n'y répond `true` qu'après avoir vu le rappel
-  /// VIVANT pendant cette session, puis absent DEUX passes de suite. La distinction a coûté des
+  /// `VanishEvidence` (par `RemindersService.reminderPresence`), qui ne la rend qu'après avoir vu le
+  /// rappel VIVANT pendant cette session, puis absent depuis au moins deux minutes et sur au moins
+  /// trois passes, hors de toute disparition en masse. La distinction a coûté des
   /// données réelles le 5 août 2026 : la version précédente supprimait sur un simple « EventKit ne
   /// le trouve pas », et trois tâches d'une base fraîchement RESTAURÉE sont parties en quelques
   /// minutes — leurs identifiants pointaient des rappels nettoyés depuis, ce qui n'a jamais voulu

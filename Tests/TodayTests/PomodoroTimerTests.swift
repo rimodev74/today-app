@@ -150,4 +150,133 @@ final class PomodoroTimerTests: XCTestCase {
     timer.reset()
     XCTAssertFalse(timer.hasStarted, "seule la remise à zéro rend la barre à son icône")
   }
+
+  /// La barre de menus ne change qu'une fois par minute, sauf pendant la dernière.
+  func testMenuBarText_minutesRoundedUpThenSecondsInLastMinute() {
+    XCTAssertEqual(PomodoroTimer.menuBarText(25 * 60), "25 min")
+    XCTAssertEqual(PomodoroTimer.menuBarText(24 * 60 + 1), "25 min")
+    XCTAssertEqual(PomodoroTimer.menuBarText(24 * 60), "24 min")
+    XCTAssertEqual(PomodoroTimer.menuBarText(60), "1 min")
+    XCTAssertEqual(PomodoroTimer.menuBarText(59), "00:59")
+    XCTAssertEqual(PomodoroTimer.menuBarText(-3), "00:00")
+  }
+
+  /// Le `didSet` d'un `@Observable` tient bien le texte stocké à jour.
+  func testMenuBarText_suitRemaining() {
+    let timer = PomodoroTimer()
+    timer.remaining = 59
+    XCTAssertEqual(timer.menuBarText, "00:59")
+    timer.remaining = 600
+    XCTAssertEqual(timer.menuBarText, "10 min")
+  }
+
+  // MARK: Pas de dérive — le reste vient de l'horloge, pas du nombre de ticks
+
+  /// Un minuteur dont l'horloge est celle du test : `elapsed` avance à la main.
+  private func timerWithClock(_ clock: FakeClock, seconds: TimeInterval = 25 * 60)
+    -> PomodoroTimer
+  {
+    let timer = PomodoroTimer()
+    timer.remaining = seconds  // pas `workMinutes` : il s'écrit dans les défauts
+    timer.now = { clock.date }
+    return timer
+  }
+
+  private final class FakeClock {
+    var date = Date(timeIntervalSinceReferenceDate: 1_000_000)
+    func advance(_ seconds: TimeInterval) { date = date.addingTimeInterval(seconds) }
+  }
+
+  func testSecondsLeft_roundsUpToWholeSeconds() {
+    let end = Date(timeIntervalSinceReferenceDate: 100)
+    XCTAssertEqual(PomodoroTimer.secondsLeft(until: end, at: end.addingTimeInterval(-59.2)), 60)
+    XCTAssertEqual(PomodoroTimer.secondsLeft(until: end, at: end.addingTimeInterval(-1)), 1)
+    XCTAssertEqual(PomodoroTimer.secondsLeft(until: end, at: end), 0)
+    XCTAssertEqual(PomodoroTimer.secondsLeft(until: end, at: end.addingTimeInterval(7)), 0)
+  }
+
+  /// Le défaut : dix minutes passent sans qu'un seul tick ne parte (veille, App Nap, fil occupé),
+  /// puis UN tick arrive. L'ancien `remaining -= 1` en aurait retiré une seconde.
+  func testTick_afterSkippedTicksReadsTheClock() {
+    let clock = FakeClock()
+    let timer = timerWithClock(clock)
+    timer.start()
+    defer { timer.reset() }
+
+    clock.advance(600.3)
+    timer.tick()
+    XCTAssertEqual(timer.remaining, 25 * 60 - 600, "reste = fin − maintenant, arrondi au-dessus")
+  }
+
+  /// Un tick ordinaire, une seconde après le départ, fait lire 24:59 comme avant.
+  func testTick_oneSecondAfterStartReadsOneSecondLess() {
+    let clock = FakeClock()
+    let timer = timerWithClock(clock)
+    timer.start()
+    defer { timer.reset() }
+
+    clock.advance(1.004)  // un tick part toujours un poil APRÈS sa seconde
+    timer.tick()
+    XCTAssertEqual(timer.remaining, 25 * 60 - 1)
+    XCTAssertEqual(timer.formattedRemaining, "24:59")
+  }
+
+  /// La pause fige le reste ; reprendre repart de ce reste, quel que soit le temps passé en pause.
+  func testPauseFreezesRemainingAndResumeContinuesFromIt() {
+    let clock = FakeClock()
+    let timer = timerWithClock(clock)
+    timer.start()
+    clock.advance(300)
+    timer.pause()
+    XCTAssertEqual(timer.remaining, 20 * 60)
+
+    clock.advance(3_600)  // une heure de pause
+    timer.tick()  // un tick tardif sur un minuteur en pause ne doit rien changer
+    XCTAssertEqual(timer.remaining, 20 * 60)
+
+    timer.start()
+    clock.advance(60.001)
+    timer.tick()
+    XCTAssertEqual(timer.remaining, 19 * 60, "repart du reste figé, pas de l'heure de pause")
+    timer.reset()
+  }
+
+  /// Un tick sauté PAR-DESSUS la fin termine quand même la phase (`<=`, pas `==`).
+  func testTick_skippedPastTheEndStillCompletesThePhase() {
+    let defaults = UserDefaults.standard
+    defaults.removeObject(forKey: PomodoroTimer.autoStartStorageKey)
+    defaults.removeObject(forKey: PomodoroAlertStyle.storageKey)
+
+    let clock = FakeClock()
+    let timer = timerWithClock(clock, seconds: 60)
+    timer.start()
+    clock.advance(75)  // 15 s APRÈS la fin, aucun tick entre-temps
+    timer.tick()
+    XCTAssertEqual(timer.phase, .shortBreak)
+    XCTAssertFalse(timer.isRunning, "sans enchaînement automatique, la phase suivante attend")
+    XCTAssertEqual(timer.remaining, TimeInterval(timer.shortBreakMinutes * 60))
+    timer.reset()
+  }
+
+  /// Enchaînement automatique : la phase neuve repart de sa durée PLEINE depuis maintenant, elle
+  /// n'hérite pas du retard de la précédente.
+  func testAutoStartedPhaseCountsFromItsOwnStart() {
+    let defaults = UserDefaults.standard
+    defaults.set(true, forKey: PomodoroTimer.autoStartStorageKey)
+    defaults.removeObject(forKey: PomodoroAlertStyle.storageKey)
+    defer { defaults.removeObject(forKey: PomodoroTimer.autoStartStorageKey) }
+
+    let clock = FakeClock()
+    let timer = timerWithClock(clock, seconds: 60)
+    timer.start()
+    clock.advance(75)
+    timer.tick()
+    XCTAssertEqual(timer.phase, .shortBreak)
+    XCTAssertTrue(timer.isRunning)
+
+    clock.advance(30.001)
+    timer.tick()
+    XCTAssertEqual(timer.remaining, TimeInterval(timer.shortBreakMinutes * 60 - 30))
+    timer.reset()
+  }
 }

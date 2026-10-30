@@ -38,6 +38,34 @@ func keepEditedTaskIfBlank(_ focus: TaskFocus, in context: ModelContext) {
   task.nameIfBlank()
 }
 
+/// Insère une tâche NEUVE juste sous la ligne sélectionnée et ouvre son édition — la fin commune de
+/// ⌘N sur « Aujourd'hui » et « Tâches » (`ListPageView` a son propre chemin, par blocs).
+///
+/// Ici le rang est l'ordre manuel (`smartOrder`), renuméroté comme au lâcher d'un glisser. SANS ligne
+/// sélectionnée on ne stampe RIEN : `smartOrder == 0` laisse `SmartList.sort` placer la neuve, et
+/// stamper d'office figerait toute une page en ordre manuel à chaque ⌘N. `ordered` est la séquence
+/// AFFICHÉE avant l'insertion.
+///
+/// Le focus d'édition part au tour de boucle SUIVANT : la rangée doit exister dans l'arbre de vues
+/// avant que le focus puisse s'y poser. Même raison, et même remède, que sur une page de liste.
+@MainActor
+func insertTaskUnderSelection(
+  _ task: TaskItem, among ordered: [TaskItem], focus: Binding<TaskFocus>, in context: ModelContext
+) {
+  var ordered = ordered
+  withAnimation(taskInsert) {
+    if let index = ordered.firstIndex(where: { focus.wrappedValue.isSelected($0) }) {
+      ordered.insert(task, at: index + 1)
+      TaskItem.stampSmartOrder(ordered)
+    }
+    context.insertAndSave(task)
+  }
+  let id = task.persistentModelID
+  DispatchQueue.main.async {
+    withAnimation(taskFlow) { focus.wrappedValue.edit(id: id) }
+  }
+}
+
 /// DEUX colonnes, et c'est voulu — le décrochement entre elles est ce qui donne la hiérarchie.
 ///
 /// `taskContentColumn` est celle des repères de SECTION : bandeau de page (icône, anneau), bord
@@ -150,15 +178,24 @@ struct TaskDragCollapse {
 
   func isCollapsed(_ task: TaskItem) -> Bool { taskID == task.persistentModelID }
 
-  /// À appeler à CHAQUE image du glissement, avant d'armer le moteur de la page.
+  /// Vrai quand cette image doit replier la ligne : rien n'est replié, la ligne porte des
+  /// sous-tâches et le geste a dépassé le seuil. NON mutant, et c'est son rôle : il se rappelle à
+  /// CHAQUE image du glissement, or appeler une méthode `mutating` sur un `@State` le réécrit (donc
+  /// invalide sa page) même quand rien ne change. Les pages testent ceci d'abord et ne mutent que
+  /// sur `true` — une seule fois par geste.
+  func shouldCollapse(_ task: TaskItem, translation: CGSize) -> Bool {
+    taskID == nil && !task.subtasks.isEmpty
+      && (abs(translation.width) > Self.threshold || abs(translation.height) > Self.threshold)
+  }
+
+  /// Replie la ligne si `shouldCollapse` le dit, avant d'armer le moteur de la page.
   ///
   /// Rend `true` quand elle vient de replier : l'appelant doit alors RENONCER à cette image sans
   /// armer quoi que ce soit — c'est ce `return` qui laisse la mise en page se refaire avant le gel.
-  /// Une ligne sans sous-tâche, ou déjà repliée, rend `false` : il n'y a rien à attendre.
+  /// Une ligne sans sous-tâche, ou déjà repliée, rend `false` : il n'y a rien à attendre. Les pages
+  /// gardent l'appel derrière `shouldCollapse` pour ne pas muter leur `@State` à chaque image.
   mutating func collapseIfNeeded(_ task: TaskItem, translation: CGSize) -> Bool {
-    guard taskID == nil, !task.subtasks.isEmpty,
-      abs(translation.width) > Self.threshold || abs(translation.height) > Self.threshold
-    else { return false }
+    guard shouldCollapse(task, translation: translation) else { return false }
     taskID = task.persistentModelID
     return true
   }
@@ -174,8 +211,9 @@ struct TaskDragCollapse {
   var isCollapsing: Bool { taskID != nil }
 }
 
-/// Sélection au mouseDOWN + édition au clic sur une ligne DÉJÀ sélectionnée, en UN SEUL geste —
-/// pour les pages sans réordonnancement (« Tâches », « Aujourd'hui »).
+/// Sélection au mouseDOWN + édition au clic sur une ligne DÉJÀ sélectionnée, en UN SEUL geste, avec
+/// le glissement en option (`onDrag`/`onDrop`) pour les pages qui se réordonnent. Sans lui — les
+/// archives — c'est un simple clic.
 ///
 /// SURTOUT PAS deux gestes séparés (`.onTapGesture(count: 2)` pour l'édition + `.onTapGesture`
 /// pour la sélection) : dès qu'une vue porte un tap double, AppKit RETIENT le tap simple le temps
@@ -315,14 +353,6 @@ struct DraggedRowFrameKey: PreferenceKey {
     value = value ?? nextValue()
   }
 }
-
-/// La bande verticale d'une SECTION, publiée par celle-ci et reçue par la page.
-///
-/// Séparée des cadres de lignes, et ce n'est pas un second stockage de ceux-ci (cf. le piège
-/// documenté) : elle ne nourrit AUCUN calcul de décalage, elle ne sert qu'au relâchement, pour
-/// répondre à la seule question que les lignes ne peuvent pas trancher — « sur quelle section VIDE
-/// vient-on de lâcher ? ». Elle est aussi stable pendant un geste : les décalages sont appliqués
-/// aux rangées, à l'intérieur, et un `.offset` d'enfant ne déplace pas le cadre de son parent.
 
 extension View {
   /// À poser sur CHAQUE ligne d'une page qui utilise `taskPageBase`. Sans elle, la page garde son
@@ -553,6 +583,15 @@ struct TaskPageBase: ViewModifier {
   /// c'est exactement le bug que `MenuAction` documente — la première page publiée gardait ⌘N.
   let newTask: MenuAction?
 
+  /// Le socle installe-t-il SES moniteurs de clic (dans le vide, clic droit) ? Faux pour une page qui
+  /// installe les siens : la page d'une liste mesure ses lignes dans son propre repère
+  /// (`RowFrameKey`) et ne publie jamais `TaskRowFrameKey` — les cadres du socle y restent vides, ses
+  /// deux moniteurs ne feraient donc RIEN, mais verraient chaque clic de la fenêtre pour rien.
+  ///
+  /// **Sans valeur par défaut, pour la même raison que `reorder` et `newTask`** : activer par oubli
+  /// double les moniteurs, désactiver par oubli rend le clic dans le vide muet.
+  let locatesClicks: Bool
+
   /// Le repli de secours pour une page SANS glissement (« À venir », « Archives », une liste) : elle
   /// n'a pas de `TaskPageReorder` à elle, mais elle a droit au clic dans le vide.
   @State private var ownFrames: [TaskRowKey: CGRect] = [:]
@@ -614,8 +653,16 @@ struct TaskPageBase: ViewModifier {
         guard !reorder.isDragging else { return }
         reorder.measured(frames)
       }
-      .background(LeftClickOutsideObserver(onClick: releaseSelectionIfOutside))
-      .background(RightClickObserver(onRightClick: selectAtRightClick))
+      .background {
+        if locatesClicks {
+          LeftClickOutsideObserver(onClick: releaseSelectionIfOutside)
+        }
+      }
+      .background {
+        if locatesClicks {
+          RightClickObserver(onRightClick: selectAtRightClick)
+        }
+      }
       // Une tâche restée VIDE quand son édition se referme s'en va (cf. `TaskItem.isBlank`).
       //
       // Posé sur la SORTIE d'édition, et pas dans les `endEditing` des pages : elles ne sont qu'un
@@ -674,6 +721,11 @@ struct TaskPageBase: ViewModifier {
           }
         )
       )
+      // EN DERNIER, et l'ordre compte : l'hôte pose sa présence dans l'environnement de tout ce qui
+      // précède — les moniteurs ci-dessus et ceux d'une page qui a les siens — pour qu'ils se
+      // taisent tant qu'un panneau est ouvert, et dessine le panneau par-dessus la page entière,
+      // hors du `ScrollView` qui le rognerait (cf. `PagePanel.swift`).
+      .modifier(PagePanelHost())
   }
 }
 
@@ -683,10 +735,28 @@ extension View {
     blocks: @escaping () -> [TaskPageBlock],
     delete: @escaping (TaskItem) -> Void,
     reorder: TaskPageReorder?,
-    newTask: MenuAction?
+    newTask: MenuAction?,
+    locatesClicks: Bool
   ) -> some View {
     modifier(
       TaskPageBase(
-        focus: focus, blocks: blocks, delete: delete, reorder: reorder, newTask: newTask))
+        focus: focus, blocks: blocks, delete: delete, reorder: reorder, newTask: newTask,
+        locatesClicks: locatesClicks))
+  }
+}
+
+extension Binding where Value: Equatable & Sendable {
+  /// N'écrit que ce qui CHANGE. Un champ qui prend le focus réécrit sa valeur à l'identique, et le
+  /// setter d'un `@Model` ne compare rien : l'objet devient « modifié », l'autosave part 0 à 20 s
+  /// plus tard — souvent en plein geste suivant — et relance tous les `@Query`, la sidebar et la
+  /// synchro. Mesuré le 29 octobre 2026 : ouverture d'une carte 28,8 → 15,1 ms, enregistrements
+  /// fantômes 3 → 1 sur 20 gestes. Toute liaison d'un champ à un `@Model` passe par ici.
+  var changesOnly: Binding<Value> {
+    Binding(
+      get: { wrappedValue },
+      set: { newValue, transaction in
+        guard newValue != wrappedValue else { return }
+        self.transaction(transaction).wrappedValue = newValue
+      })
   }
 }

@@ -190,7 +190,7 @@ struct HeaderRow: View {
       // TOUJOURS le même TextField (repos comme édition) : identité de vue stable, pas de bascule
       // Text↔TextField qui « recharge » le titre. Au repos il ne capte pas les clics — ils vont au
       // geste de la page (sélection, drag) — et l'édition le rend actif + focus (curseur).
-      TextField("Nouvel en-tête", text: $task.title)
+      TextField("Nouvel en-tête", text: $task.title.changesOnly)
         .textFieldStyle(.plain)
         .font(.app(.headline))
         .foregroundStyle((task.headerColor?.color ?? Color.accentColor).opacity(0.85))
@@ -198,38 +198,58 @@ struct HeaderRow: View {
         .allowsHitTesting(isEditing)
         .onSubmit(onEndEditing)
       Spacer(minLength: 0)
+      // MONTÉS au survol seulement, pas cachés par une opacité nulle (même règle que
+      // `TaskRow.trailing`) : le ••• est un menu AppKit, une vraie vue native créée pour chaque
+      // en-tête qu'on survole ou non. Leur place reste RÉSERVÉE au repos — le titre est un champ
+      // glouton, sans ça il gagnerait leur largeur et se replierait autrement au survol.
+      //
       // Copie texte du bloc entier (en-tête + tâches rattachées) dans le presse-papiers, sans
-      // passer par le menu ; mêmes conditions d'apparition que le •••, juste à sa gauche. Checkmark
-      // temporaire au clic : la copie est silencieuse côté système, sans ce retour rien ne confirme
-      // à l'utilisateur qu'elle a eu lieu.
-      Button {
-        onCopy()
-        copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
-      } label: {
-        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-          .font(.app(11, weight: .semibold))
-          .foregroundStyle(.secondary)
-          // Largeur figée : "doc.on.doc" et "checkmark" n'ont pas la même largeur intrinsèque, sans
-          // ce cadre la pilule respire d'un pixel ou deux au moment du bascule.
-          .frame(width: 16, height: 16)
+      // passer par le menu ; checkmark temporaire au clic : la copie est silencieuse côté système,
+      // sans ce retour rien ne confirme à l'utilisateur qu'elle a eu lieu.
+      Group {
+        if (hovering || active || copied) && !isDragging {
+          Button {
+            onCopy()
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+          } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+              .font(.app(11, weight: .semibold))
+              .foregroundStyle(.secondary)
+              // Largeur figée : "doc.on.doc" et "checkmark" n'ont pas la même largeur intrinsèque,
+              // sans ce cadre la pilule respire d'un pixel ou deux au moment du bascule.
+              .frame(width: 16, height: 16)
+          }
+          .buttonStyle(.plain)
+          .help("Copier l'en-tête et ses tâches")
+        } else {
+          Color.clear.frame(width: 16, height: 16)
+        }
       }
-      .buttonStyle(.plain)
-      .opacity((hovering || active || copied) && !isDragging ? 1 : 0)
+      // Le fondu du bouton qui apparaît ou disparaît AVEC la copie (souris déjà partie) : un
+      // changement que la page ne pilote pas, local à la rangée.
       .animation(.easeOut(duration: 0.15), value: copied)
-      .help("Copier l'en-tête et ses tâches")
-      Menu {
-        menuItems
-      } label: {
+      if (hovering || active) && !isDragging {
+        // ••• visible en survol et à l'état actif, mais pas pendant le drag (la pilule est en vol).
+        Menu {
+          menuItems
+        } label: {
+          Image(systemName: "ellipsis")
+            .font(.app(14, weight: .semibold))
+            .foregroundStyle(Color.accentColor.opacity(0.85))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+      } else {
+        // Mêmes dimensions que le menu monté (mesuré : glyphe + 3 pt de bordure, soit 20 pt de large
+        // à l'échelle par défaut) : le glyphe suit l'échelle de texte, le reste est constant.
         Image(systemName: "ellipsis")
           .font(.app(14, weight: .semibold))
-          .foregroundStyle(Color.accentColor.opacity(0.85))
+          .padding(.horizontal, 1.5)
+          .frame(minHeight: 14)
+          .opacity(0)
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
-      // ••• visible en survol et à l'état actif, mais pas pendant le drag (la pilule est en vol).
-      .opacity((hovering || active) && !isDragging ? 1 : 0)
     }
   }
 

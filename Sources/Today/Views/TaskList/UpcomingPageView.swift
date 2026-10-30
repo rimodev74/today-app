@@ -75,7 +75,8 @@ struct UpcomingPageView: View {
     // appartiennent pas : ⌫ ne peut rien en faire).
     // Ni réordonnancement (la page est ordonnée par une date) ni création : ⌘N n'y fait rien.
     .taskPageBase(
-      focus: $focus, blocks: { agenda.taskBlocks }, delete: delete, reorder: nil, newTask: nil
+      focus: $focus, blocks: { agenda.taskBlocks }, delete: delete, reorder: nil, newTask: nil,
+      locatesClicks: true
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
@@ -114,7 +115,7 @@ struct UpcomingPageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
+      _ = modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 

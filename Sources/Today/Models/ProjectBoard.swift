@@ -38,6 +38,11 @@ struct ProjectBoard {
   /// aperçu traverse toutes leurs tâches, et le dépliant qui les montre est replié la plupart du
   /// temps — la page les passe à `cards(for:)` seulement quand il est ouvert.
   let archived: [TodoList]
+  /// L'avancement CUMULÉ du projet entier, listes archivées comprises — celui de la barre de sa page.
+  /// Même somme que `ProjectsOverview.total(of:)` (qui reste la référence, et que les tests lui
+  /// confrontent), mais obtenue dans la passe de `build` : la page relisait avant toutes les tâches
+  /// une seconde fois pour l'avoir.
+  let total: SidebarCounts.Row
 
   /// Total affiché en tête de page. Additionné ici plutôt que recompté dans la vue.
   ///
@@ -58,46 +63,84 @@ struct ProjectBoard {
     for list in project.orderedLists {
       if list.isArchived { archived.append(list) } else { active.append(list) }
     }
+    // Les bornes du CUMUL, distinctes de celles de l'anneau : cf. `ProjectsOverview`.
+    let cumulative = ProjectsOverview.cumulativeBounds(now: bounds.now)
+    var total = SidebarCounts.Row()
+    var cards: [Card] = []
+    for list in active {
+      let (card, row) = scan(
+        list, previewLimit: previewLimit, bounds: bounds, cumulative: cumulative)
+      cards.append(card)
+      total = total + row
+    }
+    // Les archivées ne se résument pas (leur aperçu est pour plus tard), mais leurs tâches font
+    // partie de ce qui a été fait : on les compte, sans le tri ni l'aperçu des cartes.
+    for list in archived {
+      var row = SidebarCounts.Row()
+      for task in list.tasks where !task.isHeader {
+        row.hasTasks = true
+        guard task.countsTowardProgress(cumulative) else { continue }
+        row.countable += 1
+        if task.isCompleted { row.done += 1 }
+      }
+      total = total + row
+    }
     return ProjectBoard(
-      cards: cards(for: active, previewLimit: previewLimit, bounds: bounds),
+      cards: cards,
       archived: sortedByKey(
-        archived, key: { $0.archivedAt ?? .distantPast }, areInIncreasingOrder: >))
+        archived, key: { $0.archivedAt ?? .distantPast }, areInIncreasingOrder: >),
+      total: total)
   }
 
   static func cards(
     for lists: [TodoList], previewLimit: Int, bounds: DayBounds = DayBounds()
   ) -> [Card] {
-    lists.map { list in
-      // UN seul parcours par liste, et c'est tout l'enjeu. Lire une propriété d'un `@Model`
-      // traverse SwiftData (cf. `sortedByKey`) : parcourir `orderedTasks` une fois pour l'aperçu
-      // et une fois pour le compte, c'était deux fois le même prix.
-      var todo: [TaskItem] = []
-      var done: [TaskItem] = []
-      // L'anneau ne compte pas les mêmes tâches que l'aperçu : une tâche cochée AVANT aujourd'hui
-      // sort de la progression (`countsTowardProgress`) mais reste une candidate au remplissage.
-      var countable = 0
-      var completed = 0
-      for task in list.orderedTasks where !task.isHeader {
-        if task.countsTowardProgress(bounds) {
-          countable += 1
-          if task.isCompleted { completed += 1 }
+    lists.map { scan($0, previewLimit: previewLimit, bounds: bounds, cumulative: nil).card }
+  }
+
+  /// UN parcours d'une liste : la carte, et — si `cumulative` est donné — sa ligne du total cumulé,
+  /// obtenue dans la même boucle plutôt que par une seconde traversée.
+  private static func scan(
+    _ list: TodoList, previewLimit: Int, bounds: DayBounds, cumulative: DayBounds?
+  ) -> (card: Card, row: SidebarCounts.Row) {
+    // UN seul parcours par liste, et c'est tout l'enjeu. Lire une propriété d'un `@Model`
+    // traverse SwiftData (cf. `sortedByKey`) : parcourir `orderedTasks` une fois pour l'aperçu
+    // et une fois pour le compte, c'était deux fois le même prix.
+    var todo: [TaskItem] = []
+    var done: [TaskItem] = []
+    // L'anneau ne compte pas les mêmes tâches que l'aperçu : une tâche cochée AVANT aujourd'hui
+    // sort de la progression (`countsTowardProgress`) mais reste une candidate au remplissage.
+    var countable = 0
+    var completed = 0
+    var row = SidebarCounts.Row()
+    for task in list.orderedTasks where !task.isHeader {
+      if let cumulative {
+        row.hasTasks = true
+        if task.countsTowardProgress(cumulative) {
+          row.countable += 1
+          if task.isCompleted { row.done += 1 }
         }
-        if task.isCompleted { done.append(task) } else { todo.append(task) }
       }
-      var preview = Array(todo.prefix(previewLimit))
-      // `progressResetsDaily` désactivé (Réglages) : l'anneau cumule tout l'archivé, alors la
-      // carte fait de même plutôt que de laisser une liste terminée blanche — l'archivé
-      // complète l'aperçu, dans l'ordre de la liste, une fois les tâches à faire épuisées.
-      // `previewRow` les rend barrées : rien ne les confond avec ce qui reste à faire.
-      if preview.count < previewLimit, !bounds.progressResetsDaily {
-        preview += done.prefix(previewLimit - preview.count)
+      if task.countsTowardProgress(bounds) {
+        countable += 1
+        if task.isCompleted { completed += 1 }
       }
-      // Une liste VIDE reste à 0 et pas à « tout fait » : 0/0 vaudrait `nan` et l'anneau se
-      // remplirait là où il n'y a rien à faire (même garde que `SidebarCounts.Row.progress`).
-      return Card(
-        list: list, preview: preview, remainingCount: todo.count,
-        progress: countable == 0 ? 0 : Double(completed) / Double(countable),
-        isFinished: todo.isEmpty && !done.isEmpty)
+      if task.isCompleted { done.append(task) } else { todo.append(task) }
     }
+    var preview = Array(todo.prefix(previewLimit))
+    // `progressResetsDaily` désactivé (Réglages) : l'anneau cumule tout l'archivé, alors la
+    // carte fait de même plutôt que de laisser une liste terminée blanche — l'archivé
+    // complète l'aperçu, dans l'ordre de la liste, une fois les tâches à faire épuisées.
+    // `previewRow` les rend barrées : rien ne les confond avec ce qui reste à faire.
+    if preview.count < previewLimit, !bounds.progressResetsDaily {
+      preview += done.prefix(previewLimit - preview.count)
+    }
+    // Une liste VIDE reste à 0 et pas à « tout fait » : 0/0 vaudrait `nan` et l'anneau se
+    // remplirait là où il n'y a rien à faire (même garde que `SidebarCounts.Row.progress`).
+    let card = Card(
+      list: list, preview: preview, remainingCount: todo.count,
+      progress: countable == 0 ? 0 : Double(completed) / Double(countable),
+      isFinished: todo.isEmpty && !done.isEmpty)
+    return (card, row)
   }
 }

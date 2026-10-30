@@ -350,17 +350,10 @@ private struct ProfileScreen: View {
   /// `NSOpenPanel` lancé depuis l'ACTION du bouton, et pas `.fileImporter` comme dans les Réglages :
   /// SwiftUI présente celui-ci depuis le layout, par le même pont que les popovers — et ordonner une
   /// fenêtre pendant le layout de CETTE fenêtre-ci, où les cadres des lignes circulent en continu,
-  /// tue le process (→ `PIEGES.md` § Fenêtres).
+  /// tue le process (→ `PIEGES.md` § Fenêtres). Partagé avec les Réglages (`AvatarPicker`), qui
+  /// réduit la photo avant de la stocker.
   private func choosePhoto() {
-    let panel = NSOpenPanel()
-    panel.allowedContentTypes = [.image]
-    panel.allowsMultipleSelection = false
-    panel.begin { response in
-      guard response == .OK, let url = panel.url,
-        let data = try? Data(contentsOf: url), NSImage(data: data) != nil
-      else { return }
-      profile.avatarData = data
-    }
+    AvatarPicker.choose(onPicked: { profile.avatarData = $0 })
   }
 }
 

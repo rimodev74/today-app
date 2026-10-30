@@ -98,4 +98,28 @@ final class StoreLocationTests: XCTestCase {
     // Et le déménagement a bien eu lieu au passage : c'est le seul appel du chemin réel.
     XCTAssertEqual(read(url), "base")
   }
+
+  /// L'ordre que le commentaire promet : la base, puis son journal, puis l'index du journal.
+  func testLOrdreDuDemenagement() {
+    XCTAssertEqual(StoreLocation.companionSuffixes, ["", "-wal", "-shm"])
+  }
+
+  /// Un déplacement raté arrête la suite : rien ne part après lui.
+  func testUnEchecArreteLeDemenagement() throws {
+    try makeLegacyStore()
+    let destination = StoreLocation.storeURL(in: root)
+    try FileManager.default.createDirectory(
+      at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    // Le journal ne peut pas arriver : sa place est prise.
+    try "occupé".write(
+      to: URL(fileURLWithPath: destination.path + "-wal"), atomically: true, encoding: .utf8)
+
+    XCTAssertTrue(StoreLocation.migrateIfNeeded(applicationSupport: root), "la base a bougé")
+
+    let legacy = StoreLocation.legacyURL(in: root)
+    XCTAssertEqual(read(destination), "base")
+    XCTAssertEqual(read(URL(fileURLWithPath: legacy.path + "-wal")), "base-wal", "resté en place")
+    XCTAssertEqual(
+      read(URL(fileURLWithPath: legacy.path + "-shm")), "base-shm", "rien après l'échec")
+  }
 }

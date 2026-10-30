@@ -29,7 +29,11 @@ enum StoreLocation {
   /// SQLite écrit TROIS fichiers, pas un. Déménager le seul `.store` en laissant son journal
   /// derrière perdrait tout ce qu'il n'a pas encore replié — et ce journal vit longtemps : celui
   /// mesuré le 5 août pesait 2,2 Mo pour une base de 106 Ko.
-  static let companionSuffixes = ["", "-shm", "-wal"]
+  ///
+  /// Dans CET ordre, et `migrateIfNeeded` s'arrête au premier échec : la base, puis son journal
+  /// (`-wal`, ce qui porte les écritures pas encore repliées), puis l'index du journal (`-shm`, que
+  /// SQLite sait reconstruire).
+  static let companionSuffixes = ["", "-wal", "-shm"]
 
   /// La place définitive, dans le sous-dossier de l'app.
   static func storeURL(in applicationSupport: URL) -> URL {
@@ -48,9 +52,11 @@ enum StoreLocation {
   /// Trois refus, et chacun a sa raison :
   /// - la destination existe déjà → elle fait foi, on ne l'écrase sous aucun prétexte ;
   /// - l'ancien fichier n'existe pas → premier lancement, il n'y a rien à déménager ;
-  /// - un déplacement échoue → on s'arrête là. Les fichiers déjà déplacés le restent : le `.store`
-  ///   part en premier, donc un échec sur le journal laisse une base cohérente à l'arrivée, pas une
-  ///   moitié de base à chaque bout.
+  /// - un déplacement échoue → on s'arrête là, sans rien remettre en place. Le `.store` part en
+  ///   premier : s'il ne bouge pas, rien ne bouge, et l'ancienne adresse reste entière. S'il bouge
+  ///   mais que son journal échoue, la base arrive SANS ses dernières écritures, qui restent dans
+  ///   le `-wal` à l'ancienne adresse — récupérables à la main, jamais effacées. Défaire le
+  ///   premier déplacement pourrait échouer à son tour ; on préfère un état qu'on sait décrire.
   @discardableResult
   static func migrateIfNeeded(
     applicationSupport: URL, fileManager: FileManager = .default

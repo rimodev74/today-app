@@ -3,9 +3,10 @@
 # Les versions se changent dans Scripts/make-app.sh (SHORT_VERSION / BUILD).
 # Usage : ./Scripts/release.sh
 #
-# Le code source vit dans un dépôt privé ; la distribution doit rester publique
-# (une app installée n'a pas les identifiants GitHub de son auteur). Les DMG et
-# l'appcast partent donc dans DIST_REPO, qui ne contient rien de confidentiel.
+# La distribution vit dans un dépôt À PART (DIST_REPO), public : une app installée n'a pas
+# les identifiants GitHub de son auteur. Les DMG et l'appcast y partent, rien d'autre.
+# (Le dépôt du code est lui aussi PUBLIC à ce jour — d'où le garde-fou de quick.sh sur les
+# fichiers non suivis.)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -175,7 +176,7 @@ Ce dépôt public ne sert qu'à distribuer l'application **Today** :
 - `appcast.xml` — le flux que l'app interroge pour détecter les mises à jour ;
 - les *releases* — les `.dmg` téléchargeables, signés avec une clé EdDSA.
 
-Le code source est privé. Tout ici est généré par `Scripts/release.sh`.
+Tout ici est généré par `Scripts/release.sh`.
 
 ## Installation
 

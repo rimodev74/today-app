@@ -34,7 +34,15 @@ final class SparkleUpdater {
     // vraiment une mise à jour) et rend `git quick` visible dans la journée.
     updater.updateCheckInterval = 3600
 
-    try? updater.start()
+    // Un échec ici (bundle mal signé, `SUFeedURL` absente) coupe les mises à jour pour toute la
+    // session, et `try?` le rendait invisible. Rien à montrer à l'utilisateur, qui ne peut rien y
+    // faire — mais une trace. `NSLog` et pas `CrashLog`, qui n'écrit que des plantages ; le journal
+    // unifié ne rend rien de ce process à `log show` (cf. `CrashLog`), Console.app le montre.
+    do {
+      try updater.start()
+    } catch {
+      NSLog("Sparkle n'a pas démarré — pas de mises à jour cette session : %@", "\(error)")
+    }
   }
 
   var automaticallyChecksForUpdates: Bool {

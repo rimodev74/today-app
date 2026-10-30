@@ -10,6 +10,7 @@ DerivedData/
 # distribués via les releases GitHub — jamais versionnés.
 Today.app/
 TodayDev.app/
+Today-temp/
 *.dmg
 
 # Clone local du dépôt public de distribution (voir Scripts/release.sh).
@@ -17,6 +18,7 @@ TodayDev.app/
 
 # Notes de travail perso : ce dépôt est PUBLIC, et `Scripts/quick.sh` publie avec `git add -A`.
 analyse-marketing-pricing.md
+AUDIT-HIG.md
 LA night vibe.png
 
 # Maquette Next.js gardée à côté du code, jamais versionnée : 565 Mo et ses node_modules.

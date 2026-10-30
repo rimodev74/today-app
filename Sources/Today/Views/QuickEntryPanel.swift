@@ -474,6 +474,23 @@ private final class QuickEntryDraftStore {
     var minutes: Int?
     var targetID: PersistentIdentifier?
     var queued: [PendingTask] = []
+    /// L'étape où l'on écrivait. Sans elle, un brouillon repris retombait en RECHERCHE : le titre
+    /// d'une tâche en cours devenait une requête, et le bloc des sous-tâches s'ouvrait sans la barre
+    /// qui sait en parler.
+    var place: Place = .search
+
+    /// `Step` sans les objets SwiftData : le brouillon survit aux fermetures, la liste visée a pu
+    /// disparaître entre-temps — on garde donc son identifiant, résolu seulement à la reprise.
+    enum Place {
+      case search
+      case addTask(Target)
+      case createList(PersistentIdentifier)
+    }
+
+    enum Target {
+      case inbox, today
+      case list(PersistentIdentifier)
+    }
 
     var isEmpty: Bool {
       title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -507,6 +524,10 @@ private struct QuickEntryView: View {
   /// pertinence pour une recherche), et un `SortDescriptor` de plus ne ferait que trier deux fois.
   @State private var allTasks: [TaskItem] = []
   @State private var allTasksLoaded = false
+  /// Les anneaux des destinations, comptés UNE fois sur `allTasks` (cf. `SidebarCounts`). Stockés et
+  /// pas recalculés au rendu : le bloc des destinations se rejoue à chaque survol, et reconstruire
+  /// le décompte de toute la base à chacun était le coût quadratique du survol.
+  @State private var counts = SidebarCounts(tasks: [])
 
   @State private var title = ""
   /// Sous-tâches en brouillon : de simples chaînes, pas des `Subtask`. Le modèle n'existera qu'à
@@ -563,6 +584,16 @@ private struct QuickEntryView: View {
 
   private var shortcuts: [TextShortcut] { TextShortcut.decode(shortcutData) }
 
+  /// Les deux gestes que la capsule répète (cocher, valider une frappe) n'ont plus de ressort :
+  /// sa traîne sub-pixel garde le fil principal occupé bien après ce qu'on voit (cf. `taskInsert`,
+  /// `PIEGES.md` § Animations). Courbes de Bézier ajustées par moindres carrés sur le ressort
+  /// qu'elles remplacent (écart quadratique moyen 2,5 % et 3,8 %), dépassement compris.
+  ///
+  /// La coche : ex-`.bouncy(duration: 0.3)`.
+  private static let checkFlow = Animation.timingCurve(0.563, 1.213, 0.291, 1.066, duration: 0.32)
+  /// Le bouton d'envoi qui s'arme : ex-`.spring(response: 0.3, dampingFraction: 0.55)`.
+  private static let sendFlow = Animation.timingCurve(0.504, 1.774, 0.34, 0.926, duration: 0.42)
+
   /// La fournée de tâches, chargée une fois par ouverture. Appelée depuis `onChange` et `begin`,
   /// donc DANS la transaction qui change le titre ou l'étape : le body qui suit voit déjà la
   /// fournée, il n'y a pas d'image intermédiaire sans tâches.
@@ -573,6 +604,7 @@ private struct QuickEntryView: View {
   private func loadAllTasks() {
     guard !allTasksLoaded else { return }
     allTasks = (try? modelContext.fetch(FetchDescriptor<TaskItem>())) ?? []
+    counts = SidebarCounts(tasks: allTasks)
     allTasksLoaded = true
   }
 
@@ -620,30 +652,33 @@ private struct QuickEntryView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       .onChange(of: channel.isRequested) { _, requested in
         guard requested else { return }
-        // Échap referme d'abord ce qui est ouvert PAR-DESSUS la capsule, comme un menu système :
-        // emporter tout le panneau ferait perdre une saisie en cours pour un simple clic de trop.
-        if picking {
+        // Seul Échap recule d'un cran (cf. `QuickEntryClose`) : un clic ailleurs ou la perte de la clé
+        // arrivent ici par le même canal, et les traiter comme Échap laissait un panneau fantôme
+        // (bloc refermé, capsule toujours là mais sans clé) ou vidait le brouillon.
+        switch QuickEntryClose.outcome(
+          discardDraft: channel.discardDraft, blockOpen: picking, onSecondStep: !step.isSearch)
+        {
+        case .collapseBlock:
+          // Échap referme d'abord ce qui est ouvert PAR-DESSUS la capsule, comme un menu système :
+          // emporter tout le panneau ferait perdre une saisie en cours pour un simple clic de trop.
           channel.isRequested = false
           withAnimation(.bouncy(duration: 0.4)) { picking = false }
           focus = .title
-          return
-        }
-        // Même règle un cran plus bas : Échap DÉFAIT la dernière étape avant de fermer. On est
-        // entré dans une liste par erreur, on en ressort — sans perdre la capsule.
-        if !step.isSearch {
+        case .stepBack:
+          // Même règle un cran plus bas : Échap DÉFAIT la dernière étape avant de fermer. On est
+          // entré dans une liste par erreur, on en ressort — sans perdre la capsule.
           channel.isRequested = false
           backToSearch()
-          return
-        }
-        // Échap est la SEULE annulation volontaire : elle jette le brouillon. Tout le reste (clic
-        // ailleurs, perte de la clé, raccourci global rejoué) est accidentel et le garde — pour
-        // toujours, jusqu'à la prochaine ouverture ou un vrai enregistrement (cf. `persistDraft`).
-        if channel.discardDraft {
+        case .closeDiscardingDraft:
+          // Échap est la SEULE annulation volontaire : elle jette le brouillon.
           QuickEntryDraftStore.shared.draft = nil
-        } else {
+          dismiss()
+        case .closeKeepingDraft:
+          // Clic ailleurs, perte de la clé, raccourci global rejoué : accidentels, ils gardent le
+          // brouillon — jusqu'à la prochaine ouverture ou un vrai enregistrement (cf. `persistDraft`).
           persistDraft()
+          dismiss()
         }
-        dismiss()
       }
       // Le focus se pose ICI et pas dans `onAppear` : à ce moment-là le panneau n'est pas encore
       // clé (`makeKeyAndOrderFront` est en cours), et AppKit rend son premier répondeur à la
@@ -927,7 +962,9 @@ private struct QuickEntryView: View {
   /// Cocher depuis la capsule. Elle RESTE ouverte : on en coche souvent deux ou trois d'affilée, et
   /// Échap la referme.
   private func toggle(_ task: TaskItem) {
-    withAnimation(.bouncy(duration: 0.3)) { task.toggleCompletion() }
+    withAnimation(Self.checkFlow) { task.toggleCompletion() }
+    // La coche déplace l'anneau de la liste de cette tâche : le décompte stocké doit la suivre.
+    counts = SidebarCounts(tasks: allTasks)
     // Enregistré tout de suite plutôt que laissé à l'autosave : c'est `ModelContext.didSave` qui
     // réveille la passe Rappels (cf. `ContentView.syncWithReminders`), et le panneau peut très bien
     // se fermer avant qu'un autosave ne tombe.
@@ -1257,23 +1294,21 @@ private struct QuickEntryView: View {
   /// mesuré par-dessus une capture d'écran riche en contraste : le chip seul perdait tout l'effet
   /// liquid glass que le reste de la capsule gardait.
   private static func chipTint(picking: Bool) -> Color {
-    Color(
-      nsColor: NSColor(name: nil) { appearance in
-        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let base =
-          NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .windowBackgroundColor
-        let fraction = picking ? (dark ? 0.22 : 0.14) : (dark ? 0.14 : 0.08)
-        return base.blended(withFraction: fraction, of: .black) ?? base
-      }
-    )
     // Un cran au-dessus du tint de la capsule (0.45) : assez pour rester lisible sur un fond clair
     // sans redevenir l'aplat qu'on vient de retirer.
-    .opacity(0.6)
+    chipBase(picking: picking).opacity(0.6)
   }
 
   /// Repli pré-macOS 26 : pas de verre à nourrir, donc l'aplat opaque d'origine reste le bon choix —
   /// c'est la même densification que le repli material de `pane`.
-  private static func chipFill(picking: Bool) -> Color {
+  private static func chipFill(picking: Bool) -> Color { chipBase(picking: picking) }
+
+  /// Le fond de la fenêtre, assombri : UNE définition pour les deux chemins.
+  ///
+  /// Pas `dualColor` (cf. `Theme.swift`) : il fige deux valeurs hexadécimales, alors que cette
+  /// teinte se DÉRIVE de `windowBackgroundColor` — qui varie avec la version de macOS et l'accent
+  /// de fenêtre. En figer deux copies changerait la teinte du chip sur chaque système.
+  private static func chipBase(picking: Bool) -> Color {
     Color(
       nsColor: NSColor(name: nil) { appearance in
         let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -1339,7 +1374,7 @@ private struct QuickEntryView: View {
     if case .addTask(.today) = step {
       Image(systemName: SmartList.today.systemImage).foregroundStyle(.secondary)
     } else if let destination, !destination.isInbox {
-      ProgressRing(progress: destination.progress(), size: 11, lineWidth: 1.8)
+      ProgressRing(progress: counts[destination].progress, size: 11, lineWidth: 1.8)
         .tint(destination.project?.color?.color)
     } else {
       Image(systemName: "tray.full.fill").foregroundStyle(.secondary)
@@ -1363,13 +1398,12 @@ private struct QuickEntryView: View {
   }
 
   private var destinationList: some View {
-    // Les anneaux en UNE passe sur la fournée déjà chargée (`begin` l'a fait avant d'ouvrir ce
-    // bloc), puis distribués. Chaque rangée lisait `list.progress()`, soit trois traversées de la
-    // relation `TodoList.tasks` par rangée et par rendu — le motif que `SidebarCounts` existe pour
-    // remplacer, et qui revenait ici à chaque survol.
-    let counts = SidebarCounts(tasks: allTasks)
+    // Les anneaux viennent du décompte en UNE passe (`counts`), et la destination courante se lit
+    // UNE fois ici : chaque rangée la relisait via `destination`, qui re-filtre toutes les listes —
+    // un coût quadratique rejoué à chaque survol, puisque `hovered` réécrit tout le corps.
+    let current = destination?.persistentModelID
     return VStack(alignment: .leading, spacing: 1) {
-      if let inbox { destinationRow(inbox, counts) }
+      if let inbox { destinationRow(inbox, counts, current: current) }
       // Un projet n'est PAS une destination : `TaskItem.project` se déduit de la liste
       // (`list?.project`), une tâche se pose donc toujours dans une liste. Il n'est ici qu'un
       // titre de section.
@@ -1384,7 +1418,7 @@ private struct QuickEntryView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 1)
-          ForEach(lists) { destinationRow($0, counts) }
+          ForEach(lists) { destinationRow($0, counts, current: current) }
         }
       }
     }
@@ -1393,7 +1427,9 @@ private struct QuickEntryView: View {
     .padding(.horizontal, 6)
   }
 
-  private func destinationRow(_ list: TodoList, _ counts: SidebarCounts) -> some View {
+  private func destinationRow(
+    _ list: TodoList, _ counts: SidebarCounts, current: PersistentIdentifier?
+  ) -> some View {
     let id = list.persistentModelID
     return Button {
       withAnimation(.bouncy(duration: 0.4)) {
@@ -1418,7 +1454,7 @@ private struct QuickEntryView: View {
         .frame(width: 14)
         Text(list.title.isEmpty ? "Sans titre" : list.title).font(.app(13)).lineLimit(1)
         Spacer(minLength: 8)
-        if destination?.persistentModelID == id {
+        if current == id {
           Image(systemName: "checkmark")
             .font(.app(11, weight: .semibold))
             .foregroundStyle(Color.accentColor)
@@ -1483,7 +1519,7 @@ private struct QuickEntryView: View {
     .foregroundStyle(canSave ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
     .disabled(!canSave)
     .scaleEffect(canSave ? 1 : 0.82)
-    .animation(.spring(response: 0.3, dampingFraction: 0.55), value: canSave)
+    .animation(Self.sendFlow, value: canSave)
     .help(queued.isEmpty ? "Enregistrer (↩)" : "Enregistrer les \(queued.count + 1) tâches (↩)")
   }
 
@@ -1516,6 +1552,11 @@ private struct QuickEntryView: View {
     whenMinutes = saved.minutes
     if let savedTarget = saved.targetID { targetID = savedTarget }
     queued = saved.queued
+    step = resumedStep(saved.place)
+    if !step.isSearch {
+      loadAllTasks()
+      selection = nil  // en seconde étape la barre est le lieu de l'action (cf. `selection`)
+    }
     if !saved.subtasks.isEmpty { expanded = true }
   }
 
@@ -1524,8 +1565,32 @@ private struct QuickEntryView: View {
   private func persistDraft() {
     let saved = QuickEntryDraftStore.Draft(
       title: title, subtasks: subtasks, when: when, minutes: whenMinutes, targetID: targetID,
-      queued: queued)
+      queued: queued, place: draftPlace)
     QuickEntryDraftStore.shared.draft = saved.isEmpty ? nil : saved
+  }
+
+  private var draftPlace: QuickEntryDraftStore.Draft.Place {
+    switch step {
+    case .search: return .search
+    case .addTask(.inbox): return .addTask(.inbox)
+    case .addTask(.today): return .addTask(.today)
+    case .addTask(.list(let list)): return .addTask(.list(list.persistentModelID))
+    case .createList(let project): return .createList(project.persistentModelID)
+    }
+  }
+
+  /// L'étape d'un brouillon repris. Une liste ou un dossier disparus entre-temps ramènent à la
+  /// boîte de réception ou à la recherche : mieux vaut perdre l'endroit que la frappe.
+  private func resumedStep(_ place: QuickEntryDraftStore.Draft.Place) -> Step {
+    switch place {
+    case .search: return .search
+    case .addTask(.inbox): return .addTask(.inbox)
+    case .addTask(.today): return .addTask(.today)
+    case .addTask(.list(let id)):
+      return .addTask(reachable.first { $0.persistentModelID == id }.map { .list($0) } ?? .inbox)
+    case .createList(let id):
+      return projects.first { $0.persistentModelID == id }.map { .createList($0) } ?? .search
+    }
   }
 
   // MARK: Enregistrement

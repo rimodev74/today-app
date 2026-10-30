@@ -65,7 +65,7 @@ extension TodoList {
   /// `TaskPageBase.reorder` et `newTask` documentent, et qui s'est déjà produit deux fois ici.
   func delete(
     from selection: Binding<SidebarSelection?>, in context: ModelContext,
-    forget: ([String]) -> Void
+    forget: @escaping ([String]) -> Void
   ) {
     // Des IDENTIFIANTS, pas des tâches : de simples chaînes, qui survivent à ce que la cascade
     // efface. Lues ici, tant que tout est debout.
@@ -76,7 +76,13 @@ extension TodoList {
     // `deleteCascadeAndSave` et pas `delete` + `save` : une liste emporte ses tâches, qui emportent
     // leurs sous-tâches, et l'`UndoManager` branché sur le contexte fait tomber SwiftData pendant
     // l'enregistrement. Le pourquoi, avec la mesure, est en tête du helper.
-    context.deleteCascadeAndSave(self)
+    // Enregistrement raté : la suppression reste en attente dans le contexte, ses rappels Apple
+    // ne partent qu'au prochain enregistrement réussi — sinon la tâche resterait en base, privée
+    // de son rappel (cf. `ModelContext.runAfterNextSave`).
+    guard context.deleteCascadeAndSave(self) else {
+      context.runAfterNextSave { forget(doomed) }
+      return
+    }
     // APRÈS l'enregistrement, jamais pendant : effacer un rappel fait écrire EventKit, qui poste sa
     // notification de changement, qui relance la synchro, qui réenregistre CE contexte. Écrire dans
     // un contexte pendant qu'on l'enregistre n'a rien à faire là — mais ce n'est PAS ce qui faisait
@@ -159,6 +165,9 @@ enum SidebarSelection: Hashable {
   case smartList(SmartList)
   case project(Project)
   case list(TodoList)
+  /// La vue de tous les projets (`ProjectsPageView`). Pas une `SmartList` : celles-ci filtrent et
+  /// trient des TÂCHES, une vue de projets n'aurait aucune branche sensée dans `scopeMatches`.
+  case projects
   case pomodoro
 
   /// La couleur que la fenêtre pousse dans l'environnement pour la destination courante
@@ -169,6 +178,7 @@ enum SidebarSelection: Hashable {
     case .smartList(let list): return list.color
     case .project(let project): return project.color?.color ?? .accentColor
     case .list(let list): return list.project?.color?.color ?? PageTint.inbox
+    case .projects: return PageTint.projects
     case .pomodoro: return PageTint.pomodoro
     }
   }

@@ -1,30 +1,22 @@
 // La recherche rapide (palette ⌘K) et la sidebar réduite en pilule de barre de titre, sorties de
-// `ContentView` : deux vues autonomes qui partagent leurs lignes (`QuickFindRow`), sans rien de la
-// fenêtre qui les héberge.
+// `ContentView` : deux vues autonomes, sans rien de la fenêtre qui les héberge.
 
 import SwiftData
 import SwiftUI
 
-/// La sidebar réduite à une pilule de barre de titre. Pas un `Menu` natif : les lignes veulent
-/// les icônes de la sidebar (anneau de progression, pastilles colorées, compteur) qu'un menu
-/// AppKit ne sait pas rendre. C'est donc un popover qui réutilise les lignes de la palette.
+/// La sidebar réduite à une pilule de barre de titre : elle dit OÙ l'on est, et ouvre la recherche
+/// rapide (`QuickFindPanel`, qui montre les récents champ vide) pour aller ailleurs.
+///
+/// Elle présentait avant un popover avec son propre champ de recherche, monté dans la barre
+/// d'outils. Un popover est une FENÊTRE présentée depuis le layout, et y donner le premier
+/// répondeur à un `TextField` est la famille de plantages de `PIEGES.md` § Fenêtres. La palette
+/// de la fenêtre fait déjà le même travail, DANS la fenêtre.
 struct SidebarMenu: View {
-  @Binding var selection: SidebarSelection?
-
-  @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
-  private var projects: [Project]
-  @Query private var allTasks: [TaskItem]
-
-  @State private var presented = false
-  @State private var query = ""
-  @FocusState private var focused: Bool
-
-  private var needle: String { query.trimmingCharacters(in: .whitespaces) }
+  var selection: SidebarSelection?
+  var onOpen: () -> Void
 
   var body: some View {
-    Button {
-      presented = true
-    } label: {
+    Button(action: onOpen) {
       HStack(spacing: 7) {
         Text(currentTitle)
         Image(systemName: "chevron.up.chevron.down")
@@ -38,112 +30,6 @@ struct SidebarMenu: View {
     }
     .buttonStyle(.plain)
     .fixedSize()
-    .popover(isPresented: $presented, arrowEdge: .bottom) { panel }
-  }
-
-  private var panel: some View {
-    // Les anneaux des rangées, calculés en UNE passe puis distribués — jamais `list.progress()`
-    // par rangée, qui retraverse les tâches de sa liste à chaque rendu (cf. `SidebarCounts`).
-    let counts = SidebarCounts(tasks: allTasks)
-    return VStack(spacing: 0) {
-      searchField
-      ScrollView {
-        VStack(spacing: 1) {
-          if needle.isEmpty { groupedRows(counts) } else { filteredRows(counts) }
-        }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 8)
-      }
-      .frame(maxHeight: 420)
-    }
-    .frame(width: 320)
-    // Le champ ne prend le focus qu'à l'ouverture du popover ; `query` est remis à zéro à la
-    // fermeture pour rouvrir sur la liste complète.
-    .onAppear { focused = true }
-    .onDisappear { query = "" }
-  }
-
-  private var searchField: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-      TextField("Recherche rapide", text: $query)
-        .textFieldStyle(.plain)
-        .focused($focused)
-    }
-    .padding(.vertical, 6)
-    .padding(.horizontal, 10)
-    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .padding(10)
-  }
-
-  /// Ordre de la sidebar : vues intelligentes, Pomodoro, puis chaque projet suivi de ses listes.
-  @ViewBuilder private func groupedRows(_ counts: SidebarCounts) -> some View {
-    ForEach(SmartList.allCases, id: \.self) { smartRow($0) }
-    separator
-    row(.pomodoro, title: "Pomodoro") {
-      Image(systemName: "timer").foregroundStyle(.red)
-    }
-    ForEach(projects) { project in
-      separator
-      projectRow(project)
-      ForEach(project.activeLists) { listRow($0, counts) }
-    }
-  }
-
-  @ViewBuilder private func filteredRows(_ counts: SidebarCounts) -> some View {
-    let smart = SmartList.allCases.filter { $0.label.localizedCaseInsensitiveContains(needle) }
-    let matchedProjects = projects.filter { $0.title.localizedCaseInsensitiveContains(needle) }
-    let matchedLists = projects.flatMap(\.activeLists).filter {
-      $0.title.localizedCaseInsensitiveContains(needle)
-    }
-    if smart.isEmpty && matchedProjects.isEmpty && matchedLists.isEmpty {
-      Text("Aucun résultat")
-        .foregroundStyle(.tertiary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-    } else {
-      ForEach(smart, id: \.self) { smartRow($0) }
-      ForEach(matchedProjects) { projectRow($0) }
-      ForEach(matchedLists) { listRow($0, counts) }
-    }
-  }
-
-  private var separator: some View { Divider().padding(.vertical, 4) }
-
-  private func smartRow(_ smart: SmartList) -> some View {
-    // Compteur seulement sur « Aujourd'hui », même règle que la sidebar.
-    let count = smart == .today ? smart.filter(allTasks).count : 0
-    return row(.smartList(smart), title: smart.label, badge: count > 0 ? "\(count)" : nil) {
-      Image(systemName: smart.systemImage).foregroundStyle(smart.color)
-    }
-  }
-
-  private func projectRow(_ project: Project) -> some View {
-    row(.project(project), title: title(project.title), bold: true) {
-      Image(systemName: "folder.fill").font(.app(15))
-        .foregroundStyle(project.color.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary))
-    }
-  }
-
-  private func listRow(_ list: TodoList, _ counts: SidebarCounts) -> some View {
-    row(.list(list), title: title(list.title)) {
-      ProgressRing(progress: counts[list].progress, size: 16)
-        .tint(list.project?.color?.color)
-    }
-  }
-
-  private func row<Icon: View>(
-    _ destination: SidebarSelection, title: String, badge: String? = nil, bold: Bool = false,
-    @ViewBuilder icon: @escaping () -> Icon
-  ) -> some View {
-    QuickFindRow(
-      title: title, subtitle: badge, bold: bold, isCurrent: selection == destination,
-      action: {
-        selection = destination
-        presented = false
-      },
-      icon: icon
-    )
   }
 
   private func title(_ raw: String) -> String { raw.isEmpty ? "Sans titre" : raw }
@@ -153,6 +39,7 @@ struct SidebarMenu: View {
     case .smartList(let smart): return smart.label
     case .project(let project): return title(project.title)
     case .list(let list): return title(list.title)
+    case .projects: return "Projets"
     case .pomodoro: return "Pomodoro"
     case nil: return "Aller à"
     }
@@ -196,13 +83,25 @@ struct QuickFindPanel: View {
   }
 
   private var card: some View {
+    // Tout ce qui se calcule l'est ICI, UNE fois par rendu, puis distribué : les correspondances
+    // étaient des propriétés calculées relues jusqu'à six fois par frappe (chacune refiltre toute
+    // la base), et le décompte des anneaux se reconstruisait même quand aucune liste n'était à
+    // l'écran.
+    let matches = needle.isEmpty ? nil : currentMatches
+    // Les anneaux servent aux rangées de LISTE seulement : les récents (champ vide) et les
+    // résultats qui en contiennent. Une frappe qui ne ramène que des tâches n'en a pas besoin.
+    let needsRings = matches.map { !$0.lists.isEmpty } ?? true
     // Une passe pour tous les anneaux, distribuée aux rangées (cf. `SidebarCounts`) : `row(for:)`
     // lisait `list.progress()`, donc retraversait les tâches de chaque liste affichée, à chaque
     // rendu — et champ vide, la palette les montre TOUTES.
-    let counts = SidebarCounts(tasks: tasks)
+    let counts = SidebarCounts(tasks: needsRings ? tasks : [])
     return VStack(spacing: 0) {
       searchField
-      content(counts)
+      if let matches {
+        resultsContent(matches, counts)
+      } else {
+        recentsContent(counts)
+      }
     }
     .frame(width: 520)
     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -226,15 +125,6 @@ struct QuickFindPanel: View {
     .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     .padding(14)
     .onAppear { focused = true }
-  }
-
-  @ViewBuilder
-  private func content(_ counts: SidebarCounts) -> some View {
-    if needle.isEmpty {
-      recentsContent(counts)
-    } else {
-      resultsContent(counts)
-    }
   }
 
   // MARK: État vide — Récents
@@ -283,22 +173,27 @@ struct QuickFindPanel: View {
 
   // MARK: Résultats de recherche
 
-  private var matchingTasks: [TaskItem] {
-    // Sans liste rattachée, une tâche n'a pas de page où naviguer : on l'écarte.
-    tasks.filter {
-      !$0.isHeader && $0.list != nil && $0.title.localizedCaseInsensitiveContains(needle)
-    }
+  /// Ce que la frappe trouve, calculé UNE fois par rendu (cf. `card`).
+  private struct Matches {
+    var tasks: [TaskItem]
+    var lists: [TodoList]
+    var projects: [Project]
+    var isEmpty: Bool { tasks.isEmpty && lists.isEmpty && projects.isEmpty }
   }
-  private var matchingLists: [TodoList] {
-    lists.filter { $0.title.localizedCaseInsensitiveContains(needle) }
-  }
-  private var matchingProjects: [Project] {
-    projects.filter { $0.title.localizedCaseInsensitiveContains(needle) }
+
+  private var currentMatches: Matches {
+    Matches(
+      // Sans liste rattachée, une tâche n'a pas de page où naviguer : on l'écarte.
+      tasks: tasks.filter {
+        !$0.isHeader && $0.list != nil && $0.title.localizedCaseInsensitiveContains(needle)
+      },
+      lists: lists.filter { $0.title.localizedCaseInsensitiveContains(needle) },
+      projects: projects.filter { $0.title.localizedCaseInsensitiveContains(needle) })
   }
 
   @ViewBuilder
-  private func resultsContent(_ counts: SidebarCounts) -> some View {
-    if matchingTasks.isEmpty && matchingLists.isEmpty && matchingProjects.isEmpty {
+  private func resultsContent(_ matches: Matches, _ counts: SidebarCounts) -> some View {
+    if matches.isEmpty {
       Text("Aucun résultat")
         .foregroundStyle(.tertiary)
         .frame(maxWidth: .infinity)
@@ -306,17 +201,17 @@ struct QuickFindPanel: View {
     } else {
       ScrollView {
         VStack(alignment: .leading, spacing: 1) {
-          if !matchingProjects.isEmpty {
+          if !matches.projects.isEmpty {
             sectionHeader("Projets")
-            ForEach(matchingProjects) { row(for: .project($0), counts) }
+            ForEach(matches.projects) { row(for: .project($0), counts) }
           }
-          if !matchingLists.isEmpty {
+          if !matches.lists.isEmpty {
             sectionHeader("Listes")
-            ForEach(matchingLists) { row(for: .list($0), counts) }
+            ForEach(matches.lists) { row(for: .list($0), counts) }
           }
-          if !matchingTasks.isEmpty {
+          if !matches.tasks.isEmpty {
             sectionHeader("Tâches")
-            ForEach(matchingTasks) { task in
+            ForEach(matches.tasks) { task in
               QuickFindRow(
                 title: task.title,
                 subtitle: task.list?.title,

@@ -2,14 +2,20 @@ import AppKit
 import EventKit
 import SwiftUI
 
-/// Feuille pour transformer une tâche en rappel Apple Rappels.
+/// Panneau pour transformer une tâche en rappel Apple Rappels.
 /// Ne connaît que `RemindersService` — aucune API EventKit manipulée ici hors le type `EKCalendar`
 /// (simple valeur de sélection dans le Picker de liste).
 ///
-/// **Une feuille macOS, pas une vue posée dans une fenêtre.** Trois manquements se voyaient à
-/// l'usage, et aucun n'était visible en lisant le code :
-/// 1. **Échap ne fermait pas.** Le bouton « Annuler » n'avait pas `.cancelAction` ; or toute feuille
-///    du système se referme à Échap, sans exception. C'est le raccourci qu'on essaie en premier ;
+/// **Un panneau DANS la fenêtre, plus une feuille.** La feuille était une fenêtre, et elle portait
+/// un champ Titre et deux champs d'heure : chaque fermeture jetait une fenêtre qui avait hébergé
+/// un champ focalisé — la famille des 27 plantages d'août 2026 (`PIEGES.md` § Fenêtres). Révélé
+/// par la page (cf. `PagePanel`), son premier répondeur vit dans la fenêtre principale, qui reste
+/// à l'écran : c'est ce qui rend ces champs sûrs. Seul le contenant a changé ; les trois leçons de
+/// la feuille tiennent toujours :
+/// 1. **Échap referme**, comme toute feuille du système — c'est le raccourci qu'on essaie en
+///    premier. Il passe désormais par le panneau (`EscapeKeyMonitor`) et non plus par un
+///    `.cancelAction` : la page d'une liste en pose déjà un pendant l'édition, et deux raccourcis
+///    identiques dans la même fenêtre laissent AppKit choisir ;
 /// 2. **« Annuler » n'annulait pas.** Le champ Titre écrivait DIRECTEMENT dans la tâche
 ///    (`@Bindable`), donc renommer puis annuler laissait le nouveau nom. Le brouillon vit désormais
 ///    ici, et n'atteint la tâche qu'à l'enregistrement ;
@@ -19,7 +25,9 @@ import SwiftUI
 struct SchedulePlannerView: View {
   let task: TaskItem
   let remindersService: RemindersService
-  @Environment(\.dismiss) private var dismiss
+  /// Referme le panneau. Plus `@Environment(\.dismiss)` : hors d'une feuille, dans un
+  /// `WindowGroup`, c'est la FENÊTRE principale qu'il fermerait.
+  var onClose: () -> Void
 
   /// Brouillon du titre : la tâche n'est touchée qu'à l'enregistrement (cf. point 2 ci-dessus).
   @State private var title = ""
@@ -31,6 +39,7 @@ struct SchedulePlannerView: View {
   @State private var accessDenied = false
   @State private var errorMessage: String?
   @State private var isSaving = false
+  @FocusState private var titleFocused: Bool
 
   private var isUpdate: Bool { task.reminderIdentifier != nil }
 
@@ -70,6 +79,7 @@ struct SchedulePlannerView: View {
     VStack(spacing: 0) {
       Form {
         TextField("Titre", text: $title)
+          .focused($titleFocused)
         DatePicker("Date", selection: $day, displayedComponents: .date)
         DatePicker("Début", selection: $startTime, displayedComponents: .hourAndMinute)
         DatePicker("Échéance", selection: $dueTime, displayedComponents: .hourAndMinute)
@@ -93,8 +103,7 @@ struct SchedulePlannerView: View {
         .fixedSize(horizontal: false, vertical: true)
       HStack {
         Spacer()
-        Button("Fermer") { dismiss() }
-          .keyboardShortcut(.cancelAction)
+        Button("Fermer", action: onClose)
         Button("Ouvrir les Réglages") {
           let url = URL(
             string:
@@ -107,13 +116,12 @@ struct SchedulePlannerView: View {
     .padding(20)
   }
 
-  /// Ordre macOS : le bouton par défaut à droite, l'annulation à sa gauche. `.cancelAction` ne sert
-  /// pas qu'à Échap — c'est aussi lui qui dit au système lequel des deux est l'échappatoire.
+  /// Ordre macOS : le bouton par défaut à droite, l'annulation à sa gauche. Échap vaut
+  /// « Annuler » — c'est le panneau qui le porte (cf. point 1 en tête du type).
   private var actionBar: some View {
     HStack {
       Spacer()
-      Button("Annuler") { dismiss() }
-        .keyboardShortcut(.cancelAction)
+      Button("Annuler", action: onClose)
       Button(isUpdate ? "Mettre à jour" : "Créer le rappel") {
         Task { await save() }
       }
@@ -141,6 +149,10 @@ struct SchedulePlannerView: View {
       dueTime = when.addingTimeInterval(3600)
     }
     selectedList = remindersService.defaultList ?? remindersService.writableLists.first
+    // Le curseur dans le Titre, comme une feuille le pose d'elle-même. Depuis `.task`, donc HORS
+    // de la transaction animée qui fait paraître le panneau, et sur un champ de largeur fixe : le
+    // piège du champ focalisé pendant que sa largeur s'anime (`PIEGES.md` § Layout) n'a pas prise.
+    titleFocused = true
   }
 
   private func save() async {
@@ -163,7 +175,7 @@ struct SchedulePlannerView: View {
       // Le brouillon n'atteint la tâche qu'ici : l'écriture est le seul chemin qui la modifie.
       task.title = trimmed
       task.reminderIdentifier = id  // conserve l'identifiant pour une modif ultérieure (bonus)
-      dismiss()
+      onClose()
     } catch {
       errorMessage = (error as? RemindersError)?.errorDescription ?? error.localizedDescription
     }

@@ -143,6 +143,8 @@ enum PageTint {
   static let upcoming = dualColor(light: 0x78_57E0, dark: 0xA3_8CF5)
   static let archive = dualColor(light: 0x2E_9E60, dark: 0x4F_C383)
   static let pomodoro = dualColor(light: 0xD8_503C, dark: 0xF0_705C)
+  /// Bleu franc : ni l'ardoise sourde de « Tâches », ni le violet d'« À venir ».
+  static let projects = dualColor(light: 0x2F_6FDB, dark: 0x5B_95F5)
 }
 
 private struct PageTintKey: EnvironmentKey {

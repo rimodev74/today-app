@@ -197,7 +197,7 @@ final class RemindersService {
   /// `ModelContext.didSave`. Une requête bornée à UN calendrier et aux jours des tâches concernées
   /// coûte le même aller-retour, une fois.
   ///
-  /// Un événement déplacé HORS de la fenêtre n'est pas retrouvé ici — c'est `eventTime(_:)` qui
+  /// Un événement déplacé HORS de la fenêtre n'est pas retrouvé ici — c'est `eventLookup(_:)` qui
   /// va le chercher, une lecture à l'unité pour ce seul cas. Sans elle, « absent de la fenêtre »
   /// se lisait « pas d'événement », donc « réécrire », et déplacer un créneau de plus de deux
   /// jours dans Calendrier le ramenait au jour de sa tâche.
@@ -224,73 +224,54 @@ final class RemindersService {
     }.value
   }
 
-  /// Ce que l'app sait de l'événement lié, et le NIVEAU DE PREUVE qui va avec.
+  /// L'état des événements liés, avec leurs preuves (cf. `VanishEvidence`) — TOUS en un appel, une
+  /// fois par passe : c'est ce qui permet au garde-fou de masse de les voir ensemble.
   ///
-  /// Quatre réponses et pas un booléen, parce que « introuvable » recouvre trois situations qui
-  /// appellent des gestes opposés — et que les confondre a déjà coûté des données réelles (cf.
-  /// `reminderVanished`, et les trois tâches effacées le 5 août 2026).
-  enum EventPresence {
-    /// Il est là.
-    case alive
-    /// Introuvable, et jamais vu vivant de la session : l'identifiant est périmé, pas orphelin.
-    /// C'est le cas d'une base restaurée. On RECRÉE — c'est ce qui rend son agenda à une sauvegarde.
-    case unknownIdentifier
-    /// Vu vivant, puis absent UNE fois. Un compte iCloud qui se resynchronise fait disparaître et
-    /// revenir des éléments : une absence isolée ne tranche rien. On ne touche à rien, et surtout
-    /// on ne RÉÉCRIT pas — réécrire effacerait la preuve qu'attend la passe suivante.
-    case missingOnce
-    /// Vu vivant, puis absent DEUX passes de suite : l'utilisateur vient de le supprimer.
-    case vanished
+  /// `found` porte chaque identifiant suivi et s'il a été trouvé — dans la fenêtre relue par
+  /// `linkedEventTimes`, ou à l'unité par `eventLookup`. `calendar` est le calendrier désigné : s'il
+  /// a disparu de la liste des calendriers pendant la passe (compte qui se resynchronise), rien
+  /// n'est compté.
+  ///
+  /// Sans accès, tout est « vivant » et rien n'est noté : un accès révoqué ferait sinon passer TOUS
+  /// les événements pour supprimés d'un coup.
+  func eventPresence(
+    _ found: [String: Bool], in calendar: EKCalendar, now: Date = Date()
+  ) -> [String: VanishEvidence.Presence] {
+    guard eventAuthorizationStatus == .fullAccess else { return found.mapValues { _ in .alive } }
+    let containerPresent = eventCalendar(withIdentifier: calendar.calendarIdentifier) != nil
+    let verdicts = eventEvidence.assess(found, containerPresent: containerPresent, at: now)
+    // Dossier clos : on ne prétendra plus savoir ce que portait cet événement.
+    for (identifier, verdict) in verdicts where verdict == .vanished {
+      lastAgreed.removeValue(forKey: identifier)
+    }
+    return verdicts
   }
 
-  /// L'état de l'événement lié, avec ses preuves. `foundInWindow` vient de `linkedEventTimes` :
-  /// trouvé là, il est vivant et l'on n'interroge personne. Ce n'est QUE pour une absence qu'on
-  /// paie une lecture directe — rare par construction, et c'est ce qui évite de conclure « supprimé »
-  /// sur un événement simplement déplacé hors de la fenêtre relue.
-  func eventPresence(_ identifier: String, foundInWindow: Bool) -> EventPresence {
-    guard eventAuthorizationStatus == .fullAccess else { return .alive }
-    if foundInWindow || store.event(withIdentifier: identifier) != nil {
-      eventsSeenAlive.insert(identifier)
-      eventsMissedOnce.remove(identifier)
-      return .alive
-    }
-    guard eventsSeenAlive.contains(identifier) else { return .unknownIdentifier }
-    guard eventsMissedOnce.contains(identifier) else {
-      eventsMissedOnce.insert(identifier)
-      return .missingOnce
-    }
-    // Verdict rendu : on oublie cet événement, sinon `hasPendingEventVanishVerdict` réarmerait la
-    // synchro indéfiniment pour un dossier clos (même piège que côté rappels).
-    eventsMissedOnce.remove(identifier)
-    eventsSeenAlive.remove(identifier)
-    lastAgreed.removeValue(forKey: identifier)
-    return .vanished
-  }
+  /// L'instant où la passe suivante peut faire avancer une absence d'événement — à n'utiliser que
+  /// par une passe qui vient d'appeler `eventPresence` (cf. `RemindersSyncPass.schedule`).
+  var nextEventProofCheck: Date? { eventEvidence.nextCheck }
 
-  /// Une absence attend sa confirmation : il manque UNE passe pour trancher. L'appelant en relance
-  /// une (cf. `ContentView.syncWithReminders`), sans quoi la durée resterait en sursis jusqu'au
-  /// prochain réveil venu d'ailleurs — c'est-à-dire peut-être jamais.
-  var hasPendingEventVanishVerdict: Bool { !eventsMissedOnce.isEmpty }
-
-  /// En mémoire seulement, comme leurs équivalents côté rappels : la question posée est
+  /// En mémoire seulement, comme son équivalent côté rappels : la question posée est
   /// « l'utilisateur vient-il de le supprimer ? », qui n'a de sens que dans une session.
-  private var eventsSeenAlive: Set<String> = []
-  private var eventsMissedOnce: Set<String> = []
+  @ObservationIgnored private var eventEvidence = VanishEvidence()
 
-  /// Le créneau de l'événement lié, relu AU COUP PAR COUP — le repli quand la requête bornée ne
-  /// l'a pas trouvé (cf. `linkedEventTimes`).
+  /// L'événement lié, relu AU COUP PAR COUP — le repli quand la requête bornée ne l'a pas trouvé
+  /// (cf. `linkedEventTimes`). `exists` et le créneau à part : un événement présent mais sans dates
+  /// lisibles est VIVANT, il ne doit pas passer pour supprimé.
   ///
   /// C'est l'aller-retour XPC synchrone qu'on refuse de payer PAR TÂCHE, et il reste borné à ce
   /// qui manque : un événement déplacé hors de la fenêtre relue, donc de plusieurs jours, ce qui
   /// n'arrive qu'au geste de l'utilisateur et se résorbe à la passe suivante (la tâche adopte le
-  /// nouveau jour, la fenêtre le contient à nouveau). `eventPresence` payait déjà exactement cette
-  /// lecture pour la même absence : on la lui évite en lui passant le résultat (`foundInWindow:`).
-  func eventTime(_ identifier: String) -> DateInterval? {
+  /// nouveau jour, la fenêtre le contient à nouveau) — ou un événement supprimé, le temps que ses
+  /// preuves se réunissent. Une seule lecture répond aux deux questions.
+  func eventLookup(_ identifier: String) -> (exists: Bool, interval: DateInterval?) {
     guard eventAuthorizationStatus == .fullAccess,
-      let event = store.event(withIdentifier: identifier),
-      let start = event.startDate, let end = event.endDate, start <= end
-    else { return nil }
-    return DateInterval(start: start, end: end)
+      let event = store.event(withIdentifier: identifier)
+    else { return (false, nil) }
+    guard let start = event.startDate, let end = event.endDate, start <= end else {
+      return (true, nil)
+    }
+    return (true, DateInterval(start: start, end: end))
   }
 
   /// Ce que portait l'élément Apple lié la dernière fois que la tâche et lui étaient d'accord — le
@@ -299,7 +280,7 @@ final class RemindersService {
   /// (durée nulle) : les identifiants de rappel et d'événement ne vivent pas dans le même espace
   /// de noms, aucun ne peut être pris pour l'autre.
   ///
-  /// En mémoire seulement, comme `eventsSeenAlive` et pour la même raison : la persister ferait
+  /// En mémoire seulement, comme `eventEvidence` et pour la même raison : la persister ferait
   /// croire au lancement qu'on sait qui a bougé pendant que l'app était fermée, alors que la
   /// réponse est toujours « pas nous ».
   private var lastAgreed: [String: DateInterval] = [:]
@@ -359,18 +340,26 @@ final class RemindersService {
   /// file avant de relire quoi que ce soit — une passe ne voit jamais un état d'avant ses écritures.
   @ObservationIgnored private var pendingWrite: Task<Void, Never>?
 
-  private func enqueueWrite(_ write: @escaping @Sendable () -> Void) {
+  /// Rend l'écriture elle-même, pour qui veut l'attendre (cf. `setCompleted`).
+  @discardableResult
+  private func enqueueWrite(_ write: @escaping @Sendable () -> Void) -> Task<Void, Never> {
     let previous = pendingWrite
-    pendingWrite = Task.detached(priority: .userInitiated) {
+    let next = Task.detached(priority: .userInitiated) {
       await previous?.value
       write()
     }
+    pendingWrite = next
+    return next
   }
 
   /// Efface les événements dont la tâche n'a plus de durée (ou plus de date), et ceux des tâches
   /// qu'on supprime. Même contrat que `forgetReminders` : synchrone, muet, par IDENTIFIANT — donc
   /// utilisable APRÈS que SwiftData a effacé les objets (cf. sa doc, et le plantage du 6 août 2026).
   func forgetEvents(_ identifiers: [String]) {
+    // Plus rien à prouver sur un événement qu'on efface soi-même — et une absence laissée en cours
+    // pour lui réarmerait la synchro sans jamais être tranchée. Avant la garde d'accès : la mémoire
+    // se vide même quand EventKit n'est plus joignable.
+    eventEvidence.forget(identifiers)
     guard eventAuthorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
     for identifier in identifiers { lastAgreed.removeValue(forKey: identifier) }
     // Allers-retours synchrones, un par identifiant, en pleine animation de suppression : dans la
@@ -406,15 +395,15 @@ final class RemindersService {
   /// hors du fil qui dessine, ce qui est tout le sujet. Le borner le jour où ça se mesure.
   ///
   /// Pendant une passe, l'instantané de `withSyncLock` sert de source : la passe entière ne coûte
-  /// alors qu'UN aller-retour, partagé avec `reminderDay(for:)` et `reminderVanished(_:)`.
+  /// alors qu'UN aller-retour, partagé avec `reminderDay(for:)` et `reminderPresence`.
   func completionStates(for identifiers: [String]) async -> [String: Bool] {
     guard authorizationStatus == .fullAccess, !identifiers.isEmpty else { return [:] }
     // Pas de `??` : son opérande droit est une autoclosure, qui n'accepte pas d'`await`.
     let all: [String: EKReminder]
     if let passSnapshot {
-      all = passSnapshot
+      all = passSnapshot.byID
     } else {
-      all = await fetchedSnapshot()
+      all = await fetchedSnapshot().byID
     }
     return identifiers.reduce(into: [:]) { states, id in
       guard let reminder = all[id] else { return }
@@ -438,18 +427,28 @@ final class RemindersService {
   ///
   /// `fetchReminders` rend la main tout de suite et rappelle hors du fil principal : le coût
   /// devient une requête par passe, et elle ne bloque plus personne.
-  @ObservationIgnored private var passSnapshot: [String: EKReminder]?
+  @ObservationIgnored private var passSnapshot: ReminderSnapshot?
+
+  /// Les rappels par identifiant, et les listes qui en portent au moins un. Le second sert au
+  /// garde-fou de `reminderPresence` : une liste-pont qui n'apparaît plus dans l'instantané, c'est
+  /// un compte qui se resynchronise — pas l'utilisateur qui supprime tout d'un coup.
+  private struct ReminderSnapshot {
+    let byID: [String: EKReminder]
+    let calendars: Set<String>
+  }
 
   /// Le rappel d'identifiant donné : dans l'instantané si une passe est en cours, sinon relu au
   /// coup par coup. Le repli garde EXACTEMENT le comportement d'avant hors passe — c'est ce qui
   /// permet d'installer l'instantané sans rien changer à ce que voient les appelants.
   private func reminder(_ identifier: String) -> EKReminder? {
-    if let passSnapshot { return passSnapshot[identifier] }
+    if let passSnapshot { return passSnapshot.byID[identifier] }
     return store.calendarItem(withIdentifier: identifier) as? EKReminder
   }
 
-  private func fetchedSnapshot() async -> [String: EKReminder] {
-    guard authorizationStatus == .fullAccess else { return [:] }
+  private func fetchedSnapshot() async -> ReminderSnapshot {
+    guard authorizationStatus == .fullAccess else {
+      return ReminderSnapshot(byID: [:], calendars: [])
+    }
     // `predicateForReminders(in:)` ramène les complétés comme les autres — c'est indispensable,
     // `completionStates` n'existe que pour lire des complétions.
     //
@@ -457,14 +456,17 @@ final class RemindersService {
     // plus grosse pour qui a des milliers de rappels — mais hors du fil qui dessine, ce qui est
     // tout le sujet. La borner le jour où ça se mesure.
     let predicate = store.predicateForReminders(in: nil)
-    // Indexé DANS le rappel d'EventKit, donc sur son fil : lire `calendarItemIdentifier` de chaque
-    // rappel du compte n'a rien à faire sur le fil qui dessine.
+    // Indexé DANS le rappel d'EventKit, donc sur son fil : lire `calendarItemIdentifier` (et la
+    // liste) de chaque rappel du compte n'a rien à faire sur le fil qui dessine.
     return await withCheckedContinuation { continuation in
       store.fetchReminders(matching: predicate) { reminders in
+        let all = reminders ?? []
         let byID = Dictionary(
-          (reminders ?? []).map { ($0.calendarItemIdentifier, $0) },
-          uniquingKeysWith: { first, _ in first })
-        continuation.resume(returning: UncheckedBox(byID))
+          all.map { ($0.calendarItemIdentifier, $0) }, uniquingKeysWith: { first, _ in first })
+        // `calendar` est `null_unspecified` (cf. `PIEGES.md` § EventKit) : lu en optionnel.
+        let calendars = Set(all.compactMap { ($0.calendar as EKCalendar?)?.calendarIdentifier })
+        continuation.resume(
+          returning: UncheckedBox(ReminderSnapshot(byID: byID, calendars: calendars)))
       }
     }.value
   }
@@ -490,24 +492,34 @@ final class RemindersService {
 
   /// Événements du calendrier compris entre `start` et `end`, triés par heure de début. Vide tant
   /// que l'accès n'est pas accordé — même convention que `writableLists`.
-  func events(from start: Date, to end: Date) -> [EKEvent] {
+  ///
+  /// **Hors du fil principal.** `events(matching:)` est un aller-retour SYNCHRONE vers le démon
+  /// Calendrier, sans variante asynchrone, et « À venir » le pose sur 180 jours — à chaque
+  /// `.EKEventStoreChanged` et à chaque retour au premier plan. Même idiome que `linkedEventTimes`.
+  func events(from start: Date, to end: Date) async -> [EKEvent] {
     guard eventAuthorizationStatus == .fullAccess else { return [] }
-    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-    // `EKEvent.startDate` est déclaré `null_unspecified` côté EventKit, donc importé en `Date!` :
-    // un événement détaché d'une récurrence ou venu d'un calendrier distant mal formé peut n'en
-    // porter aucune, et le déréférencement force au premier tri PLANTE l'app. On l'écarte ICI,
-    // à l'unique porte d'entrée des événements : tout ce qui sort d'ici a une date de début, et
-    // les vues (groupement par jour, heure affichée) n'ont aucune garde à répéter.
-    return store.events(matching: predicate)
-      .filter { $0.startDate != nil }
-      .sorted { $0.startDate < $1.startDate }
+    let store = UncheckedBox(store)
+    return await Task.detached(priority: .userInitiated) {
+      let predicate = store.value.predicateForEvents(withStart: start, end: end, calendars: nil)
+      // `EKEvent.startDate` est déclaré `null_unspecified` côté EventKit, donc importé en `Date!` :
+      // un événement détaché d'une récurrence ou venu d'un calendrier distant mal formé peut n'en
+      // porter aucune, et le déréférencement force au premier tri PLANTE l'app. On l'écarte ICI,
+      // à l'unique porte d'entrée des événements : tout ce qui sort d'ici a une date de début, et
+      // les vues (groupement par jour, heure affichée) n'ont aucune garde à répéter.
+      let events = store.value.events(matching: predicate)
+        .filter { $0.startDate != nil }
+        .sorted { $0.startDate < $1.startDate }
+      // Mêmes objets non-`Sendable` que `reminders(dueFrom:to:)`, même convoyeur : nés ici, lus
+      // ensuite par le seul appelant.
+      return UncheckedBox(events)
+    }.value.value
   }
 
   /// Événements qui touchent `day` — cf. `events(from:to:)`.
-  func events(on day: Date) -> [EKEvent] {
+  func events(on day: Date) async -> [EKEvent] {
     let start = Calendar.current.startOfDay(for: day)
     let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? day
-    return events(from: start, to: end)
+    return await events(from: start, to: end)
   }
 
   /// Rappels dont l'échéance tombe entre `start` et `end` et pas encore complétés — même règle
@@ -545,19 +557,53 @@ final class RemindersService {
   private(set) var upcomingEvents: [EKEvent] = []
   private(set) var upcomingReminders: [EKReminder] = []
 
+  /// Les deux rafraîchissements partagent deux règles, et chacune répond à un défaut précis :
+  /// - **un jeton de génération** : les lectures partent désormais hors du fil principal, donc
+  ///   deux rafraîchissements peuvent se croiser — et le plus ancien, revenu le dernier, écraserait
+  ///   le plus récent. Seul le dernier demandé écrit ;
+  /// - **un anti-rebond** (`refreshDebounce`) : `.EKEventStoreChanged` arrive en RAFALE (chacune de
+  ///   nos écritures en poste une, une resynchro iCloud des dizaines). Sans lui, chaque
+  ///   notification relançait la requête entière. Pas d'attente au tout premier chargement : le
+  ///   cache est vide, il n'y a rien à montrer en attendant.
   func refreshToday(now: Date) async {
-    todayReminders = await reminders(dueOn: now)
-    if await requestEventAccess() {
-      todayEvents = events(on: now)
+    todayGeneration += 1
+    let generation = todayGeneration
+    if todayLoaded {
+      try? await Task.sleep(for: Self.refreshDebounce)
+      guard generation == todayGeneration, !Task.isCancelled else { return }
     }
+    let reminders = await reminders(dueOn: now)
+    let events: [EKEvent]? = await requestEventAccess() ? await events(on: now) : nil
+    guard generation == todayGeneration else { return }
+    todayReminders = reminders
+    if let events { todayEvents = events }
+    todayLoaded = true
   }
 
   func refreshUpcoming(from start: Date, to end: Date) async {
-    upcomingReminders = await reminders(dueFrom: start, to: end)
-    if await requestEventAccess() {
-      upcomingEvents = events(from: start, to: end)
+    upcomingGeneration += 1
+    let generation = upcomingGeneration
+    if upcomingLoaded {
+      try? await Task.sleep(for: Self.refreshDebounce)
+      guard generation == upcomingGeneration, !Task.isCancelled else { return }
     }
+    let reminders = await reminders(dueFrom: start, to: end)
+    let events: [EKEvent]? =
+      await requestEventAccess() ? await events(from: start, to: end) : nil
+    guard generation == upcomingGeneration else { return }
+    upcomingReminders = reminders
+    if let events { upcomingEvents = events }
+    upcomingLoaded = true
   }
+
+  /// ponytail: 300 ms — assez pour avaler une rafale, assez court pour qu'un rappel coché dans
+  /// Rappels se voie sortir de la page sans qu'on attende.
+  private static let refreshDebounce: Duration = .milliseconds(300)
+
+  @ObservationIgnored private var todayGeneration = 0
+  @ObservationIgnored private var upcomingGeneration = 0
+  @ObservationIgnored private var todayLoaded = false
+  @ObservationIgnored private var upcomingLoaded = false
 
   /// Retrait optimiste immédiat (cf. `TodayPageView`/`UpcomingPageView.completeReminder`) : on ne
   /// montre jamais un rappel déjà coché, pas d'attendre le prochain refresh pour le faire sortir.
@@ -573,9 +619,14 @@ final class RemindersService {
   /// `completionStates`. No-op si la tâche n'est pas liée ou si l'accès n'est pas accordé.
   /// Silencieux : cocher une tâche ne doit jamais lever d'alerte. Sans ce push, le retour
   /// Rappels → app relit un rappel resté coché et ré-écrase le décochage local.
+  ///
+  /// Lue et mise dans la FILE sans attendre (aucune demande d'accès, qui suspendrait) : deux coches
+  /// rapides partent dans l'ordre, et `withSyncLock` vide la file avant de prendre son instantané
+  /// — une passe ne relit donc jamais un rappel d'avant la coche. Partie en `Task.detached` hors
+  /// file, l'écriture pouvait arriver APRÈS l'instantané, et la passe recochait la tâche à l'envers.
   func pushCompletion(for task: TaskItem) async {
     guard let id = task.reminderIdentifier, authorizationStatus == .fullAccess else { return }
-    try? await setCompleted(task.isCompleted, identifier: id)
+    writeCompletion(task.isCompleted, identifier: id)
   }
 
   // MARK: Pont continu avec l'app Rappels — les FAITS dont la synchro a besoin
@@ -596,67 +647,75 @@ final class RemindersService {
     return reminder.dueDateComponents.flatMap(Calendar.current.date(from:))
   }
 
-  /// Le rappel lié a-t-il été SUPPRIMÉ côté Apple ? La seule question dont la réponse autorise à
-  /// effacer une tâche (cf. `RemindersSync.shouldDelete`), et elle demande donc des preuves.
+  /// L'état des rappels liés, avec leurs preuves — la seule question dont la réponse autorise à
+  /// effacer une tâche (cf. `RemindersSync.shouldDelete`). Les preuves exigées, et pourquoi chacune,
+  /// sont dans `VanishEvidence` ; ici, on ne fait que lui fournir les faits de la passe.
   ///
   /// **Absent ne veut pas dire supprimé.** Le 5 août 2026, la version qui répondait simplement
   /// « EventKit ne le trouve pas » a effacé trois tâches d'une base fraîchement restaurée, en
   /// quelques minutes et sans un mot. Leurs identifiants pointaient des rappels nettoyés depuis
-  /// longtemps — un fait sur l'HISTOIRE du rappel, jamais un geste de l'utilisateur. Toute
-  /// sauvegarde restaurée porte des identifiants périmés : supprimer là-dessus, c'est punir la
-  /// restauration au moment précis où l'on en avait besoin.
+  /// longtemps — un fait sur l'HISTOIRE du rappel, jamais un geste de l'utilisateur. Puis la
+  /// version « absent deux passes de suite » tranchait en 2 à 3 s, la seconde passe étant le
+  /// réarmement à une seconde : la durée exacte d'une resynchro iCloud.
   ///
-  /// Deux preuves exigées, et chacune écarte un faux positif distinct :
-  /// 1. **vu vivant pendant CETTE session** — sinon on ne sait rien de ce rappel, on sait seulement
-  ///    qu'il n'est pas là. C'est le cas de la base restaurée, et celui d'un accès accordé après
-  ///    coup ;
-  /// 2. **absent DEUX passes de suite** — un compte iCloud qui se resynchronise fait disparaître
-  ///    puis revenir des éléments, et `.EKEventStoreChanged` sonne précisément pendant ces
-  ///    remaniements. Une absence isolée ne tranche rien.
+  /// TOUS les identifiants suivis en un appel, une fois par passe, et lus dans l'INSTANTANÉ
+  /// seulement (jamais au coup par coup) : sans instantané — fetch revenu vide —, la liste-pont n'y
+  /// figure pas, rien n'est compté, et l'on n'a payé aucun aller-retour synchrone pour rien.
   ///
-  /// Sans accès, la réponse est toujours `false` : un accès révoqué ferait sinon passer TOUTES les
-  /// tâches liées pour supprimées d'un coup.
+  /// Sans accès, tout est « vivant » et rien n'est noté : un accès révoqué ferait sinon passer
+  /// TOUTES les tâches liées pour supprimées d'un coup.
   ///
   /// Distinct de `reminderDay(for:)`, qui rend déjà `nil` pour un rappel SANS échéance : « pas
   /// d'échéance » et « plus de rappel » appellent des réponses opposées (réécrire vs supprimer).
-  func reminderVanished(_ identifier: String) -> Bool {
-    guard authorizationStatus == .fullAccess else { return false }
-    guard reminder(identifier) == nil else {
-      seenAlive.insert(identifier)
-      missedOnce.remove(identifier)
-      return false
+  func reminderPresence(
+    of identifiers: Set<String>, bridgeList: EKCalendar, now: Date = Date()
+  ) -> [String: VanishEvidence.Presence] {
+    guard authorizationStatus == .fullAccess else {
+      return Dictionary(uniqueKeysWithValues: identifiers.map { ($0, .alive) })
     }
-    guard seenAlive.contains(identifier) else { return false }
-    guard missedOnce.contains(identifier) else {
-      missedOnce.insert(identifier)
-      return false
+    let found = Dictionary(
+      uniqueKeysWithValues: identifiers.map { ($0, passSnapshot?.byID[$0] != nil) })
+    // La liste-pont est « présente » dès que le compte a répondu avec des rappels : `calendars`
+    // est bâti À PARTIR des rappels, une liste-pont devenue VIDE n'y figure donc jamais — exiger
+    // d'y être aurait retenu toutes les passes, et supprimer le dernier rappel de la liste
+    // n'aurait jamais atteint la tâche (puis l'aurait recréé au relancement). Qu'elle existe
+    // encore, l'appelant l'a établi en la résolvant ; une resynchro iCloud qui vide l'instantané
+    // est écartée en amont (instantané vide ignoré), et en partie par le garde-fou de masse.
+    let containerPresent =
+      passSnapshot.map {
+        $0.calendars.contains(bridgeList.calendarIdentifier) || !$0.byID.isEmpty
+      } ?? false
+    let verdicts = reminderEvidence.assess(found, containerPresent: containerPresent, at: now)
+    // Dossier clos : on ne prétendra plus savoir ce que portait ce rappel.
+    for (identifier, verdict) in verdicts where verdict == .vanished {
+      lastAgreed.removeValue(forKey: identifier)
+      lastAgreedTitle.removeValue(forKey: identifier)
     }
-    // Verdict rendu : on oublie ce rappel. Sans ça, son identifiant resterait dans `missedOnce`
-    // pour toujours — or c'est lui qui dit « une passe de plus est attendue » (cf.
-    // `hasPendingVanishVerdict`), et la synchro se rearmerait indéfiniment pour un dossier clos.
-    missedOnce.remove(identifier)
-    seenAlive.remove(identifier)
-    lastAgreed.removeValue(forKey: identifier)
-    lastAgreedTitle.removeValue(forKey: identifier)
-    return true
+    return verdicts
   }
 
   /// Ce rappel a-t-il été vu VIVANT pendant cette session ? La seule chose qui distingue un
   /// identifiant périmé (base restaurée — à repousser) d'un rappel que l'utilisateur vient de
   /// supprimer (à laisser mort, cf. `RemindersSync.needsPush`).
-  func reminderWasSeenAlive(_ identifier: String) -> Bool { seenAlive.contains(identifier) }
+  func reminderWasSeenAlive(_ identifier: String) -> Bool {
+    reminderEvidence.wasSeenAlive(identifier)
+  }
 
-  /// Une absence attend sa confirmation : il manque UNE passe pour trancher. L'appelant s'en sert
-  /// pour en repasser une (cf. `ContentView.syncWithReminders`) — sans quoi la tâche resterait en
-  /// sursis jusqu'à ce qu'un autre événement réveille la synchro, c'est-à-dire peut-être jamais.
-  var hasPendingVanishVerdict: Bool { !missedOnce.isEmpty }
+  /// L'instant où la passe suivante peut faire avancer une absence de rappel — à n'utiliser que par
+  /// une passe qui vient d'appeler `reminderPresence` (cf. `RemindersSyncPass.schedule`) : une
+  /// passe qui n'a rien tranché n'a pas à se réarmer pour des preuves qu'elle ne nourrit pas.
+  var nextReminderProofCheck: Date? { reminderEvidence.nextCheck }
 
-  /// Les rappels vus VIVANTS depuis le lancement, et ceux qui ont manqué à l'appel une fois.
   /// En mémoire seulement, et c'est voulu : la question posée est « l'utilisateur vient-il de le
   /// supprimer ? », qui n'a de sens que dans une session. Les persister rendrait au redémarrage le
   /// jugement hâtif qu'on vient justement de retirer.
-  private var seenAlive: Set<String> = []
-  private var missedOnce: Set<String> = []
+  @ObservationIgnored private var reminderEvidence = VanishEvidence()
+
+  /// Les rappels que l'app a elle-même effacés pendant la session. L'import ne les reprend jamais :
+  /// l'effacement part dans la file (`enqueueWrite`), et une passe dont la lecture de la liste-pont
+  /// tombe AVANT qu'il ait eu lieu recréerait sinon, dans « Tâches », la tâche qu'on vient de
+  /// supprimer.
+  @ObservationIgnored private(set) var forgottenReminders: Set<String> = []
 
   /// Efface les rappels de tâches qu'on supprime — la suppression dans le sens app → Rappels.
   ///
@@ -697,6 +756,9 @@ final class RemindersService {
   /// Sortir EventKit de la fenêtre de mutation supprime la classe entière de problème : quand ces
   /// lignes s'exécutent, SwiftData a fini et enregistré.
   func forgetReminders(_ identifiers: [String]) {
+    // Même raison que dans `forgetEvents` : plus rien à prouver, et pas de preuve laissée en cours.
+    reminderEvidence.forget(identifiers)
+    forgottenReminders.formUnion(identifiers)
     guard authorizationStatus == .fullAccess, !identifiers.isEmpty else { return }
     for identifier in identifiers {
       lastAgreed.removeValue(forKey: identifier)
@@ -766,17 +828,18 @@ final class RemindersService {
   /// **Un instantané VIDE ne s'installe pas.** Un fetch qui revient vide pour une raison passagère
   /// (démon Rappels qui redémarre, compte iCloud qui se resynchronise) ferait passer TOUS les
   /// rappels liés pour introuvables d'un coup, et c'est précisément l'entrée de
-  /// `reminderVanished(_:)` — la fonction qui a effacé trois tâches le 5 août 2026. Ses deux
-  /// preuves encaissent une absence isolée, mais une requête groupée rate pour tout le monde en
-  /// même temps là où les lectures une par une échouaient chacune de leur côté. Vide, on retombe
-  /// donc sur la lecture au coup par coup, c'est-à-dire sur le comportement d'avant, exactement.
+  /// `reminderPresence` — l'héritière de la fonction qui a effacé trois tâches le 5 août 2026. Une
+  /// requête groupée rate pour tout le monde en même temps là où les lectures une par une
+  /// échouaient chacune de leur côté. Vide, les lectures de dates et de titres retombent donc sur
+  /// le coup par coup, c'est-à-dire sur le comportement d'avant ; et `reminderPresence`, qui ne lit
+  /// QUE l'instantané, n'y voit plus la liste-pont et ne compte rien (cf. `VanishEvidence.isHeld`).
   @discardableResult
   func withSyncLock(_ body: () async -> Void) async -> Bool {
     guard !isSyncing else { return false }
     isSyncing = true
     await pendingWrite?.value
     let snapshot = await fetchedSnapshot()
-    passSnapshot = snapshot.isEmpty ? nil : snapshot
+    passSnapshot = snapshot.byID.isEmpty ? nil : snapshot
     await body()
     // Libéré HORS du fil principal : l'instantané porte TOUS les rappels du compte, complétés
     // compris, et les désallouer coûtait ~14 ms de fil principal à chaque passe — une image perdue
@@ -799,19 +862,24 @@ final class RemindersService {
   /// principal, ils tombaient dans les premières images de l'animation de la coche — la tâche
   /// descendait par à-coups, et seulement celles liées à un rappel, ce qui brouillait la piste.
   /// `EKEventStore` s'emploie depuis n'importe quel fil ; le rappel relu naît et meurt ici.
+  ///
+  /// Dans la FILE (`enqueueWrite`), comme `pushCompletion` et pour la même raison : `withSyncLock`
+  /// l'attend avant de relire quoi que ce soit. Lève seulement un accès refusé ; l'enregistrement,
+  /// lui, est muet comme toute écriture de la file (tous les appelants l'ignoraient déjà).
   func setCompleted(_ completed: Bool, identifier: String) async throws {
     try await requestAccess()
+    await writeCompletion(completed, identifier: identifier).value
+  }
+
+  @discardableResult
+  private func writeCompletion(_ completed: Bool, identifier: String) -> Task<Void, Never> {
     let store = UncheckedBox(store)
-    try await Task.detached(priority: .userInitiated) {
+    return enqueueWrite {
       guard let reminder = store.value.calendarItem(withIdentifier: identifier) as? EKReminder
       else { return }
       reminder.isCompleted = completed  // met aussi à jour completionDate automatiquement
-      do {
-        try store.value.save(reminder, commit: true)
-      } catch {
-        throw RemindersError.saveFailed(underlying: error)
-      }
-    }.value
+      try? store.value.save(reminder, commit: true)
+    }
   }
 }
 

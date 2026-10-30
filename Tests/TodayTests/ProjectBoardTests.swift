@@ -1,3 +1,4 @@
+import SwiftData
 import XCTest
 
 @testable import Today
@@ -269,5 +270,77 @@ final class ProjectBoardTests: XCTestCase {
 
     XCTAssertEqual(board.cards.map(\.isFinished), [true, false, false, false])
     XCTAssertEqual(board.cards[0].progress, 0)
+  }
+}
+
+/// Le total cumulé que `ProjectBoard.build` obtient dans sa passe doit valoir EXACTEMENT celui de
+/// `ProjectsOverview.total(of:)` — la barre de la page d'un projet et la carte de la vue « Projets »
+/// ne peuvent pas se contredire.
+final class ProjectBoardTotalTests: XCTestCase {
+  private var context: ModelContext!
+  private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+  override func setUpWithError() throws {
+    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+    context = ModelContext(try ModelContainer(for: schema, configurations: config))
+  }
+
+  private func add(
+    to list: TodoList, done: Bool = false, completedAt: Date? = nil, header: Bool = false
+  ) {
+    let task = TaskItem(title: "t", isHeader: header)
+    task.isCompleted = done
+    task.completedAt = completedAt
+    task.list = list
+    context.insert(task)
+  }
+
+  /// Un projet qui réunit tous les cas : une liste en cours, une liste archivée, une en-tête, une
+  /// tâche cochée AVANT aujourd'hui (hors de l'anneau du jour, dans le cumul).
+  private func makeProject() -> Project {
+    let project = Project(title: "P")
+    context.insert(project)
+    let active = TodoList(title: "En cours", project: project)
+    active.sortIndex = 0
+    context.insert(active)
+    let archived = TodoList(title: "Finie", project: project)
+    archived.sortIndex = 1
+    archived.archivedAt = now
+    context.insert(archived)
+    let yesterday = now.addingTimeInterval(-3 * 86_400)
+    add(to: active)
+    add(to: active, done: true, completedAt: now)
+    add(to: active, done: true, completedAt: yesterday)
+    add(to: active, header: true)
+    add(to: archived, done: true, completedAt: yesterday)
+    add(to: archived, done: true, completedAt: now)
+    return project
+  }
+
+  func testTotalEgaleProjectsOverviewTotalAvecAnneauQuotidien() {
+    let project = makeProject()
+    let board = ProjectBoard.build(
+      from: project, previewLimit: 6, bounds: DayBounds(now: now, progressResetsDaily: true))
+    let reference = ProjectsOverview.total(of: project, now: now)
+    XCTAssertEqual(board.total, reference)
+    // Cumulé : les 5 tâches (en-tête exclue), dont 4 cochées — la cochée d'avant-hier compte.
+    XCTAssertEqual(board.total.countable, 5)
+    XCTAssertEqual(board.total.done, 4)
+  }
+
+  func testTotalEgaleProjectsOverviewTotalAvecAnneauCumule() {
+    let project = makeProject()
+    let board = ProjectBoard.build(
+      from: project, previewLimit: 6, bounds: DayBounds(now: now, progressResetsDaily: false))
+    XCTAssertEqual(board.total, ProjectsOverview.total(of: project, now: now))
+  }
+
+  func testUnProjetSansListeAUnTotalVide() {
+    let project = Project(title: "Vide")
+    context.insert(project)
+    let board = ProjectBoard.build(from: project, previewLimit: 6, bounds: DayBounds(now: now))
+    XCTAssertEqual(board.total, SidebarCounts.Row())
+    XCTAssertEqual(board.total, ProjectsOverview.total(of: project, now: now))
   }
 }

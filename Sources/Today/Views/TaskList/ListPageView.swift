@@ -2,7 +2,8 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Page d'une to-do list — refonte en cours.
+/// Page d'une to-do list : en-tête (titre, anneau, notes), tâches et en-têtes de section
+/// réordonnables, champ « Nouvelle tâche » par bloc, archivées repliées en bas.
 ///
 /// Volontairement bâtie sur `ScrollView` + `VStack`, et PAS sur `List`. `List` sur macOS
 /// est adossée à `NSTableView` (AppKit) : elle donne gratuitement reorder/sélection/clavier,
@@ -24,9 +25,6 @@ import UniformTypeIdentifiers
 /// ponytail: toutes les rangées sont donc construites. Sans objet aux volumes réels (24 lignes,
 /// 50 tâches en base) ; le jour où une liste se compte en centaines, ce sera à remesurer — mais la
 /// réponse ne sera pas `LazyVStack` tant que cette page se réordonne au doigt.
-///
-/// ponytail: coquille minimale. N'affiche que l'en-tête et les tâches en lecture (+ la case à
-/// cocher). Édition, création, réordonnancement, sélection : à reconstruire sur specs.
 struct ListPageView: View {
   @Bindable var list: TodoList
   @Environment(RemindersService.self) private var remindersService
@@ -99,7 +97,10 @@ struct ListPageView: View {
   // (entre dans le repli d'une en-tête tirée).
   @State private var rowFrames: [RowKey: CGRect] = [:]
   @State private var draggedFieldHeight: CGFloat = 0
-  @State private var headerHovering = false
+  /// Survol de l'en-tête de page. Dans une classe observée et pas dans un `@State` : écrit à chaque
+  /// entrée/sortie de la souris, un `@State` ferait rejouer ce corps — donc toutes les rangées de la
+  /// page — pour allumer un seul ••• (cf. `HoverFlag`). Seul `HoverRevealed` le lit.
+  @State private var headerHover = HoverFlag()
   @State private var pickingListDate = false
   @FocusState private var focusedDraft: String?
   @FocusState private var notesFocused: Bool
@@ -125,11 +126,12 @@ struct ListPageView: View {
     // Le « Déplacer vers… » de TOUTES les rangées, lui, se filtre bien une fois par rendu. Les
     // archivées en sortent ici et pas dans la requête : `allLists` sert aussi à `#Nom`, qui les
     // garde.
-    let moveTargets = allLists.filter {
-      !$0.isArchived && $0.persistentModelID != list.persistentModelID
-    }
+    // Une seule lecture des identifiants et des projets pour toutes les rangées (cf.
+    // `MoveTargetIndex`) ; la liste affichée s'écarte à part.
+    let moveTargets = MoveTargetIndex(allLists.filter { !$0.isArchived })
+      .excluding(list.persistentModelID)
     // UNE traversée de `list.tasks` par rendu, distribuée ensuite. Il y en avait cinq — les blocs
-    // du `ForEach`, ceux du socle (`taskPageBase`), le compteur de sommeil, les archivées, l'anneau
+    // du `ForEach`, ceux du socle (`taskPageBase`), les archivées, l'anneau
     // de l'en-tête —, et cette relation est le poste le plus cher de la page : chaque lecture
     // reconstruit le tableau à travers SwiftData. Mesuré au `sample` le 8 octobre 2026.
     let ordered = list.orderedTasks
@@ -162,7 +164,6 @@ struct ListPageView: View {
           // Repliée pendant un drag : elle n'entre pas dans `rowFrames`/`dragState` (gelés à
           // l'empoignade), une ouverture en cours de drag décalerait le calcul du trou.
           if draggingID == nil {
-            dormantSummary(ordered)
             archiveSection(ordered)
           }
         }
@@ -232,7 +233,11 @@ struct ListPageView: View {
       // L'`uuid` de la liste dans l'id : la vue est RÉUTILISÉE d'une liste à l'autre (pas de
       // `.id(...)`, cf. plus haut), et deux ids identiques feraient créer la tâche dans la liste
       // précédente.
-      newTask: MenuAction(id: "newTask.\(list.uuid)", run: createTaskInEditMode)
+      newTask: MenuAction(id: "newTask.\(list.uuid)", run: createTaskInEditMode),
+      // Ses propres moniteurs de clic (`RightClickObserver`, `LeftClickOutsideObserver` plus haut),
+      // sur ses propres cadres (`rowFrames`) : ceux du socle, sans cadres à comparer, seraient
+      // inertes — deux moniteurs de plus qui voient chaque clic de la fenêtre pour ne rien faire.
+      locatesClicks: false
     )
     // Confirmation seulement si l'en-tête porte des tâches ; sinon `requestDeleteSelectedHeader`
     // supprime directement. Les tâches, elles, ne sont PAS supprimées — l'en-tête retirée, elles
@@ -263,6 +268,8 @@ struct ListPageView: View {
       notesFocused = false
       focusedDraft = nil
       archivesExpanded = false
+      // Le panneau de date visait la liste QUITTÉE : laissé ouvert, il daterait la suivante.
+      pickingListDate = false
     }
     // Minuit : ce qui a été coché hier quitte le flux (mode « jusqu'au lendemain »). Le seul moment
     // où `isArchived` change sans qu'on ait rien touché — et l'app peut très bien être restée
@@ -394,28 +401,6 @@ struct ListPageView: View {
     }
   }
 
-  /// Combien de tâches de cette liste ne sont plus que du décor : ni datées, ni faites, posées
-  /// depuis trop longtemps (cf. `Dormancy`). Elles sont déjà pâlies dans la liste — cette ligne
-  /// leur donne un CHIFFRE, seul moyen de voir l'accumulation d'un coup d'œil.
-  ///
-  /// ponytail: un compteur, pas encore la confrontation (« je la fais / je la date / je la tue »).
-  /// C'est la sonde : si voir ce nombre grimper ne provoque rien, la confrontation ne servira à
-  /// rien non plus.
-  @ViewBuilder private func dormantSummary(_ ordered: [TaskItem]) -> some View {
-    let count = ordered.filter(\.isDormant).count
-    if count > 0 {
-      let plural = count > 1 ? "s" : ""
-      HStack(spacing: 6) {
-        Image(systemName: "moon.zzz")
-          .font(.app(11))
-        Text("\(count) tâche\(plural) en sommeil")
-      }
-      .font(.app(.callout))
-      .foregroundStyle(.tertiary)
-      .padding(.top, 18)
-    }
-  }
-
   /// Section « Archivées », repliée par défaut, en bas de la page : ce que cette liste a déjà
   /// terminé, sans quitter la page ni aller dans la vue « Archives » globale. Absente tant que rien
   /// n'est archivé — une page neuve ne montre pas une section vide.
@@ -436,7 +421,8 @@ struct ListPageView: View {
             Text("\(archived.count) tâche\(plural) archivée\(plural)")
               .font(.app(.subheadline).weight(.semibold))
             Spacer(minLength: 0)
-            // À droite, comme les bandeaux de section de « Tâches » (cf. `AllTasksPageView`).
+            // À droite du libellé : le chevron d'un dépliant est une cible, il ne bouge pas avec le
+            // texte.
             Image(systemName: "chevron.right")
               .font(.app(10, weight: .semibold))
               .rotationEffect(.degrees(archivesExpanded ? 90 : 0))
@@ -519,12 +505,14 @@ struct ListPageView: View {
       // Le décalage se lit DANS le modificateur, jamais ici : cf. `ListDragMotion`.
       .modifier(ListRowDragOffset(motion: motion, key: .field(block.id), lifted: blockLifted))
       .zIndex(blockLifted ? 1 : 0)
+      // Retenu pour la même raison que les deux de `draggableRow` : `draggingID` s'écrit nu à
+      // l'empoignade, et `endDrag` l'efface sous une autre courbe (`.snappy(0.22)`).
       .animation(.easeInOut(duration: 0.15), value: draggingID != nil)
   }
 
   /// Enveloppe drag/drop d'une ligne (en-tête ou tâche), mutualisée entre les deux : mesure de la
   /// position de repos, décalage/soulevé pendant le drag, et le geste unique de la page.
-  private func draggableRow(for task: TaskItem, moveTargets: [TodoList]) -> some View {
+  private func draggableRow(for task: TaskItem, moveTargets: MoveTargets) -> some View {
     // `lifted` = cette ligne fait partie du groupe tiré (bloc entier pour une en-tête) → elle se
     // soulève. `grabbed` = c'est LA ligne empoignée → elle porte l'ancre du léger agrandissement.
     // `folding` = une tâche du bloc dont on tire l'en-tête : elle s'estompe (se replie dans le
@@ -578,6 +566,13 @@ struct ListPageView: View {
         y: lifted && !folding && !task.isHeader ? 5 : 0
       )
       .zIndex(lifted ? 1 : 0)
+      // Ces deux `.animation(value:)` restent, contre la règle §3, faute de transaction de page à
+      // laquelle les confier : `draggingID` et `draggedGroup` s'écrivent NUS dans le geste
+      // (`dragGesture`, à l'empoignade), et au relâchement `endDrag` anime en `.snappy(0.22)` — une
+      // courbe qui n'est NI celle-ci (0,15 s) NI la suivante (0,2 s, `folding`). Les déplacer en
+      // `withAnimation` imposerait UNE courbe aux deux effets qui en ont chacun une, et changerait
+      // le soulevé et le repli de l'en-tête à l'œil. Remède, le jour où on les harmonise : une courbe
+      // nommée dans `TaskPageChrome` + `withAnimation` autour des deux écritures, puis retirer ceci.
       .animation(.easeOut(duration: 0.15), value: lifted)
       .animation(.easeInOut(duration: 0.2), value: folding)
       // Rebond à la création (déclenché par le withAnimation de `createTask`), et au retour d'un
@@ -599,7 +594,7 @@ struct ListPageView: View {
   /// l'appelant). L'en-tête a désormais, comme la tâche, un état repos (titre en lecture) et un état
   /// édition (double-clic), pilotés par `focus`.
   @ViewBuilder
-  private func row(for task: TaskItem, moveTargets: [TodoList]) -> some View {
+  private func row(for task: TaskItem, moveTargets: MoveTargets) -> some View {
     if task.isHeader {
       HeaderRow(
         task: task,
@@ -608,7 +603,7 @@ struct ListPageView: View {
         isDragging: draggingID == task.persistentModelID,
         // Nombre RÉEL de tâches rattachées (badge rouge) ; les calques, eux, sont plafonnés à 3.
         attachedTaskCount: draggingID == task.persistentModelID ? draggedGroup.count - 1 : 0,
-        moveTargets: moveTargets,
+        moveTargets: moveTargets.lists,
         onEndEditing: { endEditingHeader(task) },
         onMove: { moveHeader(task, to: $0) },
         onCopy: { copyHeaderToClipboard(task) },
@@ -991,7 +986,12 @@ struct ListPageView: View {
           guard !focus.isEditing(task) else { return }
           // Repli des sous-tâches à MI-CHEMIN du seuil d'empoignade — `rowFrames` se fige avec
           // `draggingID`, cf. `TaskDragCollapse` pour ce que ce demi-pas garantit.
-          guard !dragCollapse.collapseIfNeeded(task, translation: value.translation) else { return }
+          // Testé AVANT de muter, comme « Aujourd'hui » et « Tâches » : réécrire le `@State` à
+          // chaque image avant le seuil invaliderait la page.
+          if dragCollapse.shouldCollapse(task, translation: value.translation) {
+            _ = dragCollapse.collapseIfNeeded(task, translation: value.translation)
+            return
+          }
           guard abs(value.translation.height) > 6 || abs(value.translation.width) > 6 else {
             return
           }
@@ -1268,7 +1268,7 @@ struct ListPageView: View {
       HStack(spacing: 12) {
         ProgressRing(progress: progress, size: 26, lineWidth: 3, showsFill: true)
           .tint(list.project?.color?.color)
-        TextField("Nom de la liste", text: $list.title)
+        TextField("Nom de la liste", text: $list.title.changesOnly)
           .textFieldStyle(.plain)
           .font(.app(.title).bold())
           .fixedSize(horizontal: false, vertical: true)
@@ -1280,7 +1280,7 @@ struct ListPageView: View {
             focusedDraft = blocks.first?.id
           }
         // Le menu ••• n'apparaît qu'au survol du titre (comme Things).
-        listMenu.opacity(headerHovering ? 1 : 0)
+        HoverRevealed(flag: headerHover) { listMenu }
         Spacer(minLength: 0)
       }
       // L'anneau est du contenu : il se cale sur `taskContentColumn`, comme l'icône des bandeaux
@@ -1294,13 +1294,13 @@ struct ListPageView: View {
     // des bandeaux d'en-tête et des pilules de ligne (cf. `pageHeader` en tête de la pile).
     // contentShape pour que le survol couvre toute la bande, pas seulement le texte.
     .contentShape(Rectangle())
-    .onHover { headerHovering = $0 }
+    .onHover { headerHover.isOn = $0 }
   }
 
   private var listMenu: some View {
     Menu {
       Button("Terminer la liste") { completeAllTasks() }
-      Button("Définir une date…") { pickingListDate = true }
+      Button("Définir une date…") { withAnimation(pagePanelFade) { pickingListDate = true } }
       Menu("Définir une priorité") {
         ForEach(Priority.allCases) { priority in
           Button {
@@ -1321,20 +1321,23 @@ struct ListPageView: View {
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     .fixedSize()
-    .popover(isPresented: $pickingListDate, arrowEdge: .bottom) {
+    // Révélé DANS la fenêtre, sous le ••• et calé sur son bord droit (le titre, glouton, le pousse
+    // au bord de la page), et plus en popover : un popover présenté depuis un item
+    // de menu est la famille des plantages d'août 2026 (`PIEGES.md` § Fenêtres, `PagePanel`).
+    .pagePanel(id: "listDate.\(list.uuid)", isPresented: $pickingListDate, alignment: .trailing) {
       VStack(spacing: 10) {
         // La MÊME grille que le panneau « Quand » : deux calendriers de deux allures pour le même
         // geste, c'était le défaut d'avant.
         CalendarGrid(selection: list.scheduledWhen) { day in
           list.scheduledWhen = day
-          pickingListDate = false
+          closeListDate()
         }
 
         if list.scheduledWhen != nil {
           Divider()
           Button("Retirer la date") {
             list.scheduledWhen = nil
-            pickingListDate = false
+            closeListDate()
           }
           .buttonStyle(.plain)
           .foregroundStyle(.secondary)
@@ -1344,13 +1347,17 @@ struct ListPageView: View {
     }
   }
 
+  private func closeListDate() {
+    withAnimation(pagePanelFade) { pickingListDate = false }
+  }
+
   /// Notes de la liste : même encadré que celui du projet (cf. `NotesBox`, partagé pour un design
   /// identique). Entrée y ferme le focus au lieu d'insérer une ligne : sur une page sans tâche,
   /// elle enchaîne plutôt sur le champ « Nouvelle tâche » — sinon elle referme simplement, comme
   /// pour le projet. Un retour à la ligne reste possible via Maj+Entrée.
   private var notesBox: some View {
     NotesBox(
-      notes: $list.notes,
+      notes: $list.notes.changesOnly,
       font: .app(),
       textColor: .labelColor,
       focused: $notesFocused
@@ -1453,12 +1460,14 @@ struct ListPageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
+      _ = modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
   /// Déplace une tâche vers une autre liste, en la posant à la fin de sa nouvelle liste.
   private func move(_ task: TaskItem, to target: TodoList) {
+    // Comme les autres pages : la tâche quitte celle-ci, sélection/édition ne doivent plus la viser.
+    focus.forget(task)
     task.move(to: target)
     try? modelContext.save()
   }
@@ -1563,6 +1572,27 @@ struct ListPageView: View {
     let used = Set(list.tasks.filter(\.isHeader).compactMap(\.headerColor))
     let available = PaletteColor.allCases.filter { !used.contains($0) }
     return (available.isEmpty ? PaletteColor.allCases : available).randomElement()!
+  }
+}
+
+/// Un survol qui ne fait rejouer que ce qui le LIT. Voir `HoverRevealed`.
+@MainActor @Observable
+final class HoverFlag {
+  var isOn = false
+  init() {}
+}
+
+/// Montre son contenu tant que `flag` est allumé (opacité, pas retrait : le ••• est un menu AppKit
+/// dont la place doit rester réservée, et une apparition changerait la largeur de la bande).
+///
+/// Ce corps est le SEUL lecteur de `flag.isOn` : le survol de l'en-tête n'invalide donc que lui, pas
+/// la page d'une liste et ses rangées. `content` est évalué par la page, une fois par rendu de page.
+private struct HoverRevealed<Content: View>: View {
+  let flag: HoverFlag
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    content.opacity(flag.isOn ? 1 : 0)
   }
 }
 

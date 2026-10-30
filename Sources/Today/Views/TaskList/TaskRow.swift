@@ -13,8 +13,10 @@ import SwiftUI
 ///   d'actions en bas (sous-tâche, date, priorité), façon Things. Au repos, la sous-tâche s'ajoute
 ///   aussi depuis le SURVOL de la ligne (`subtaskHint`), qui ouvre la carte.
 ///
-/// Le double-clic est un simple `.onTapGesture(count: 2)` — possible parce qu'on n'est plus sur
-/// une `List`/NSTableView (qui avalait ses clics). C'est tout le bénéfice de la refonte.
+/// Sélection, édition et glissement sont UN SEUL geste, posé par la page (`rowPressGesture`, ou
+/// `dragGesture(for:)` sur une liste) : jamais un `.onTapGesture(count: 2)` à côté, qui ferait
+/// retenir le tap simple le temps de la fenêtre de double-clic. Possible parce qu'on n'est plus sur
+/// une `List`/NSTableView (qui avalait ses clics).
 /// Internal et pas `private` : « Aujourd'hui » la réutilise telle quelle (cf. `TodayPageView`).
 /// C'était la seule façon d'y avoir édition, suppression, dates et durée sans réécrire la ligne —
 /// une deuxième implémentation aurait dérivé de celle-ci au premier changement.
@@ -26,8 +28,9 @@ struct TaskRow: View {
   @Bindable var task: TaskItem
   let isSelected: Bool
   let isEditing: Bool
-  /// Listes vers lesquelles déplacer la tâche (toutes sauf la sienne).
-  var moveTargets: [TodoList]
+  /// Listes vers lesquelles déplacer la tâche (toutes sauf la sienne), calculées UNE fois par page
+  /// (cf. `MoveTargetIndex`) : la rangée n'a rien à lire dans SwiftData pour les connaître.
+  var moveTargets: MoveTargets
   /// Faux dans « Aujourd'hui » : la page ne montre QUE le jour même, la date répétée sur chaque
   /// ligne n'apprend rien. Elle reste indispensable dans une liste, qui mélange les échéances.
   var showsDate: Bool = true
@@ -64,8 +67,11 @@ struct TaskRow: View {
   /// Aucun calendrier d'événements désigné — donc une durée posée ici ne créera rien dans l'agenda.
   ///
   /// Lu dans `UserDefaults` SANS `@AppStorage` : un réglage qui change une fois dans la vie de
-  /// l'app n'a pas à abonner les deux cents rangées d'une page à ses notifications. Le menu se
-  /// construit à l'ouverture, la valeur est donc fraîche au seul moment où elle est regardée.
+  /// l'app n'a pas à abonner les deux cents rangées d'une page à ses notifications. Le contenu du
+  /// menu est évalué AVEC le corps de la rangée (`.contextMenu { taskMenu }`), pas à son ouverture :
+  /// la valeur est celle du dernier rendu, et un changement de réglage n'apparaît qu'au prochain
+  /// rendu de la rangée. Acceptable pour un réglage qu'on pose une fois ; un abonnement par
+  /// rangée ne le serait pas.
   private var eventCalendarMissing: Bool {
     (UserDefaults.standard.string(forKey: RemindersSync.eventCalendarStorageKey) ?? "").isEmpty
   }
@@ -95,26 +101,34 @@ struct TaskRow: View {
   /// Numéro de la session d'édition : le focus du titre, posé en fin d'ouverture, ne se pose que si
   /// la session qui l'a demandé est toujours la bonne (fermeture ou réouverture rapide entre-temps).
   @State private var editSession = 0
-  @State private var showReminderSheet = false
   /// L'édition a été ouverte par l'icône « sous-tâche » du survol : le focus doit atterrir sur une
   /// sous-tâche neuve, pas sur le titre. Remis à faux dès qu'il a servi — un drapeau qui survit à son
   /// geste ferait ouvrir la carte suivante sur une sous-tâche vide.
   @State private var pendingSubtask = false
 
-  // UN SEUL popover à la fois. Deux `.popover(isPresented:)` sur la même vue = comportement
-  // indéfini sur macOS (le second plantait à l'ouverture de l'échéance). Un seul `.popover(item:)`
-  // dont le contenu dépend du champ édité.
-  @State private var activePicker: TaskDateField?
+  /// Le panneau ouvert sur cette tâche, s'il y en a un — « Quand » ou le rappel. UN état pour les
+  /// deux : ils s'ancrent au même endroit, et deux ouverts à la fois sur la même rangée n'auraient
+  /// aucun sens. Révélés DANS la fenêtre, plus en popover ni en feuille (cf. `PagePanel.swift`).
+  @State private var panel: Panel?
 
-  enum TaskDateField: String, Identifiable {
-    case when
-    var id: String { rawValue }
+  enum Panel: String {
+    case when, reminder
   }
 
-  /// Ouvre un panneau de date. Un seul point d'entrée pour les trois chemins (icône au survol,
-  /// menu ▸ *Quand…*, carte d'édition) — sans quoi ils divergeraient au premier réglage ajouté.
-  private func openDatePicker(_ task: TaskItem, _ field: TaskDateField) {
-    activePicker = field
+  /// Un seul point d'entrée pour tous les chemins (icône au survol, menu ▸ *Quand…*, carte
+  /// d'édition, menu ▸ *Envoyer vers Rappels…*) — sans quoi ils divergeraient au premier réglage
+  /// ajouté. Le fondu enveloppe la MUTATION (cf. `pagePanelFade`).
+  private func openPanel(_ kind: Panel) {
+    withAnimation(pagePanelFade) { panel = kind }
+  }
+
+  private func closePanel() {
+    withAnimation(pagePanelFade) { panel = nil }
+  }
+
+  /// La liaison que `pagePanel` attend : il ne sait que refermer, l'ouverture passe par `openPanel`.
+  private var panelPresented: Binding<Bool> {
+    Binding(get: { panel != nil }, set: { if !$0 { panel = nil } })
   }
 
   /// UN SEUL arbre de vues, jamais un if/else entre deux racines : c'est ce qui rend la
@@ -222,11 +236,6 @@ struct TaskRow: View {
     // clip COUPAIT ce qui dépassait pendant toute l'animation. Le seul contenu qui a vraiment besoin
     // d'être borné, c'est la fenêtre de révélation de l'éditeur, et elle porte déjà son propre
     // `.clipped()` (cf. `EditorReveal`). Celui-ci n'ajoutait que le défaut.
-    // Décrue : une tâche que personne ne réveille s'efface. Posé sur le CONTENU seulement (avant
-    // `.background`), pour que le fond de sélection reste franc — c'est la tâche qui pâlit, pas
-    // le fait qu'elle soit sélectionnée. Pleine opacité dès qu'on l'édite : on la touche, elle
-    // redevient nette le temps qu'on s'en occupe.
-    .opacity(isEditing ? 1 : task.dormancyFade)
     // PAS de `.animation(value: isEditing)` ici, et c'est le correctif du 6 août 2026 : il y en
     // avait un (`.easeOut(0.2)`), et il COUPAIT la carte en deux.
     //
@@ -263,43 +272,34 @@ struct TaskRow: View {
     // bascule aussi en édition, via `RightClickObserver` posé par la page (cf. ce type).
     .onHover { hovering = $0 }
     .contextMenu { taskMenu }
-    // Les deux panneaux de date, posés sur la ligne (pas sur un bouton du menu, qui disparaît hors
-    // survol) : ils ont ainsi toujours une ancre valide, en repos comme en édition.
+    // Le panneau, ancré à la LIGNE entière (pas à un bouton du menu, qui disparaît hors survol) :
+    // il a ainsi toujours une ancre valide, en repos comme en édition, et se pose sous elle,
+    // aligné à son bord droit — là où vivent la date et l'icône qui l'ouvrent. C'est la page qui
+    // le dessine, par-dessus les rangées voisines (`PagePanelHost`) : posé ici, il ferait grandir
+    // la rangée ou serait rogné par elle. La rangée ne fait que le déclarer, tant qu'il est ouvert.
     //
-    // Ils se referment DERRIÈRE le choix (cf. `WhenPicker.dayBinding`) : écrire une date retrie la
-    // liste, donc déplace la rangée qui sert d'ancre — et une fenêtre enfant ré-affichée sur une
-    // ancre qui bouge est ce qui plantait (`NSPopover showRelativeToRect:` → `addChildWindow` →
-    // `NSRemoteView`, trois rapports le 5 août 2026).
-    .popover(item: $activePicker, arrowEdge: .trailing) { field in
-      switch field {
-      case .when: WhenPicker(task: task) { activePicker = nil }
+    // Plus un `.popover(item:)` ni une `.sheet` : deux fenêtres présentées depuis le layout, la
+    // famille des plantages d'août 2026 (`PIEGES.md` § Fenêtres) — le popover plantait sur une
+    // ancre qui bouge (`NSPopover showRelativeToRect:` → `addChildWindow` → `NSRemoteView`, trois
+    // rapports le 5 août), la feuille jetait à chaque fermeture une fenêtre qui avait hébergé les
+    // champs Titre et heures.
+    .pagePanel(
+      id: "\(panel?.rawValue ?? "").\(task.uuid)", isPresented: panelPresented,
+      alignment: .trailing
+    ) {
+      switch panel {
+      case .when: WhenPicker(task: task, onClose: closePanel)
+      case .reminder:
+        SchedulePlannerView(task: task, remindersService: remindersService, onClose: closePanel)
+      case nil: EmptyView()
       }
     }
-    .sheet(isPresented: $showReminderSheet) {
-      SchedulePlannerView(task: task, remindersService: remindersService)
-    }
-    // Le défilement referme le panneau : la rangée qui lui sert d'ancre s'en va sous lui. Monté
-    // seulement quand il y en a un d'ouvert — un moniteur par rangée en permanence ferait passer
-    // chaque cran de molette par toute la page.
-    .background {
-      if activePicker != nil {
-        ScrollDismissObserver { activePicker = nil }
-      }
-    }
-    // Ces deux états pilotent une FENÊTRE, hors de l'arbre de vues : ils survivraient au démontage
-    // de la rangée, et leurs contenus tiennent la tâche en `@Bindable` — laissés ouverts, ils
-    // liraient un modèle effacé. On referme donc en partant. Le survol, la sélection, l'édition
-    // meurent avec la rangée : rien à faire pour eux.
-    //
-    // Ce commentaire invoquait le `LazyVStack` des pages de liste (« une rangée qui sort de l'écran
-    // est démontée »). Il n'y en a plus — les trois pages qui glissent sont en `VStack` (cf.
-    // l'en-tête de `TaskListView`). La raison qui RESTE est la vraie : la tâche peut partir
-    // d'ailleurs, sans que la rangée n'y soit pour rien (⌘Z, synchro Rappels, suppression depuis
-    // une autre fenêtre).
-    .onDisappear {
-      activePicker = nil
-      showReminderSheet = false
-    }
+    // Le panneau tient la tâche en `@Bindable` et ne vit que tant que la rangée le déclare : une
+    // rangée démontée emporte sa déclaration. On remet quand même l'état à zéro en partant, pour
+    // que la rangée qui REVIENT (section repliée puis rouverte, page quittée puis reprise) ne
+    // rouvre pas un panneau qu'on n'a pas redemandé. La tâche peut partir d'ailleurs, sans que la
+    // rangée n'y soit pour rien (⌘Z, synchro Rappels).
+    .onDisappear { panel = nil }
     // Sélection / édition / réordonnancement sont pilotés par le geste UNIQUE posé par la page
     // (cf. `dragGesture(for:)`), pour que la sélection réagisse au mouseDown sans voler le drag.
     .onExitCommand(perform: onEndEditing)
@@ -330,8 +330,8 @@ struct TaskRow: View {
         // fige la hauteur du champ à 0 pour toute la session d'édition (`PIEGES.md` § Layout).
         //
         // Et décalé jusqu'à la FIN de l'ouverture, pas d'un seul tick : prendre le focus coûte
-        // ~40 ms sur le fil principal (field editor, fenêtre de Writing Tools, et la sur-notification
-        // SwiftData qui fait refetcher la sidebar). Au tick suivant, cette image tombait au début
+        // ~40 ms sur le fil principal (field editor, fenêtre de Writing Tools ; la réécriture à
+        // l'identique du titre, elle, est fermée par `changesOnly`). Au tick suivant, cette image tombait au début
         // d'une animation de 0,2 s et en mangeait le quart — c'était l'à-coup du double-clic.
         // Mesuré le 24 septembre 2026 : 40–60 ms en 2ᵉ image, contre 8,3 ms partout une fois
         // décalé. Le curseur arrive quand la carte a fini de s'ouvrir, comme dans Things.
@@ -397,7 +397,7 @@ struct TaskRow: View {
   /// défaut (le field editor absorbe Entrée avant `onSubmit`, qui ne se déclenche plus dans ce
   /// mode), d'où l'interception : Entrée termine TOUJOURS l'édition, comme avant.
   private var titleView: some View {
-    TextField("Nouvelle tâche", text: $task.title, axis: .vertical)
+    TextField("Nouvelle tâche", text: $task.title.changesOnly, axis: .vertical)
       .textFieldStyle(.plain)
       .font(.app(.body))
       .foregroundStyle(titleColor)
@@ -405,11 +405,11 @@ struct TaskRow: View {
       .allowsHitTesting(isEditing)
       // `allowsHitTesting` ne ferme que la porte de la SOURIS. Le champ restait dans la boucle de
       // tabulation d'AppKit, donc « attrapable » au clavier — et AppKit attrape tout seul : quand
-      // une fenêtre auxiliaire se referme (le panneau de date), il repose le premier répondeur sur
-      // le premier champ texte venu de la fenêtre. Résultat mesuré le 5 août 2026 : le curseur
-      // atterrissait dans le titre d'une tâche AU HASARD, éditable sans que la ligne soit en
-      // édition — donc sans le `withAnimation`, sans la carte ouverte, et sans que ⌫ ni ↑/↓ ne
-      // sachent qu'un champ avait la main.
+      // une fenêtre auxiliaire se referme (le panneau de date, alors un popover), il repose le
+      // premier répondeur sur le premier champ texte venu de la fenêtre. Résultat mesuré le 5 août
+      // 2026 : le curseur atterrissait dans le titre d'une tâche AU HASARD, éditable sans que la
+      // ligne soit en édition — donc sans le `withAnimation`, sans la carte ouverte, et sans que ⌫
+      // ni ↑/↓ ne sachent qu'un champ avait la main.
       //
       // C'est le même défaut que `WindowConfigurator` neutralise au lancement avec
       // `makeFirstResponder(nil)` : lui traite le symptôme une fois, celui-ci ferme la porte.
@@ -480,7 +480,7 @@ struct TaskRow: View {
           .allowsHitTesting(false)
       }
       RichTextEditor(
-        data: $task.notes,
+        data: $task.notes.changesOnly,
         font: .app(),
         textColor: .labelColor,
         // Entrée valide la tâche (comme le titre) plutôt que d'ouvrir une ligne dans la note :
@@ -587,7 +587,7 @@ struct TaskRow: View {
 
   private var dateControl: some View {
     Button {
-      openDatePicker(task, .when)
+      openPanel(.when)
     } label: {
       actionIcon("calendar", active: task.when != nil)
     }
@@ -752,10 +752,10 @@ struct TaskRow: View {
   /// par l'édition. C'est le geste que son affordance promet — avant, l'icône n'existait que dans
   /// la carte d'édition, donc dater une tâche demandait d'abord de l'ouvrir, puis de recliquer au
   /// même endroit. C'est le MÊME panneau que le menu ▸ *Quand…* et que celui de la carte d'édition :
-  /// les trois chemins passent par `openTaskDatePicker`, un seul panneau, présenté par la page.
+  /// les trois chemins passent par `openPanel`, un seul panneau, dessiné par la page.
   private var dateHint: some View {
     Button {
-      openDatePicker(task, .when)
+      openPanel(.when)
     } label: {
       Image(systemName: "calendar")
         .font(.app(13, weight: .regular))
@@ -853,21 +853,6 @@ struct TaskRow: View {
     .animation(.easeOut(duration: 0.15), value: hovering)
   }
 
-  /// Cibles de classement groupées par projet, les listes libres en dernier — un projet est ce
-  /// qu'on cherche d'abord quand on range une tâche qui traîne. `filter` plutôt qu'un `sorted` :
-  /// le tri de Swift n'est pas stable, il aurait mélangé l'ordre des projets entre eux.
-  private var targetsByProject: [(project: String?, lists: [TodoList])] {
-    var order: [String?] = []
-    var buckets: [String?: [TodoList]] = [:]
-    for target in moveTargets {
-      let key = target.project?.title
-      if buckets[key] == nil { order.append(key) }
-      buckets[key, default: []].append(target)
-    }
-    let sorted = order.filter { $0 != nil } + order.filter { $0 == nil }
-    return sorted.map { (project: $0, lists: buckets[$0] ?? []) }
-  }
-
   /// Menu partagé par le ••• et le clic droit.
   @ViewBuilder
   private var taskMenu: some View {
@@ -885,7 +870,7 @@ struct TaskRow: View {
       Label("Demain", systemImage: "sunrise.fill")
     }
     Button {
-      openDatePicker(task, .when)
+      openPanel(.when)
     } label: {
       Label("Quand…", systemImage: "calendar")
     }
@@ -893,7 +878,8 @@ struct TaskRow: View {
       if moveTargets.isEmpty {
         Text("Aucune autre liste")
       } else {
-        ForEach(targetsByProject, id: \.project) { group in
+        // Un projet est ce qu'on cherche d'abord en rangeant une tâche : cf. `MoveTargets.byProject`.
+        ForEach(moveTargets.byProject, id: \.project) { group in
           // Un projet ne porte pas de tâche directement (cf. `Project`) : l'« assigner à un
           // projet » revient à choisir l'une de ses listes, d'où le sous-menu.
           if let project = group.project {
@@ -955,7 +941,7 @@ struct TaskRow: View {
       Label("Durée…", systemImage: "timer")
     }
     Button {
-      showReminderSheet = true
+      openPanel(.reminder)
     } label: {
       Label(
         task.reminderIdentifier == nil ? "Envoyer vers Rappels…" : "Modifier le rappel…",
@@ -1026,7 +1012,7 @@ extension TaskRow: Equatable {
       a.task === b.task && a.isSelected == b.isSelected && a.isEditing == b.isEditing
         && a.showsDate == b.showsDate && a.parentTag == b.parentTag
         && a.collapsedForDrag == b.collapsedForDrag
-        && a.moveTargets.map(\.persistentModelID) == b.moveTargets.map(\.persistentModelID)
+        && a.moveTargets == b.moveTargets
     }
   }
 }

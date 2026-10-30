@@ -57,9 +57,10 @@ final class Project {
     return list
   }
 
-  /// Progression du projet = celle de toutes ses tâches confondues, en-têtes exclues. Même règle
-  /// que `TodoList.progress` — ancrée sur le jour calendaire, pas sur `CompletedTaskRetention`
-  /// (cf. son commentaire pour ce que ça a remplacé, et pourquoi).
+  /// Progression du JOUR du projet = celle de toutes ses tâches confondues, en-têtes exclues. Même
+  /// règle que `TodoList.progress` — ancrée sur le jour calendaire, pas sur `CompletedTaskRetention`.
+  /// Plus affichée depuis que la page projet montre l'avancement CUMULÉ (`ProjectBoard.total`) ;
+  /// gardée parce que `ListProgressTests` y tient l'équivalence avec la règle des listes.
   func progress(bounds: DayBounds = DayBounds()) -> Double {
     let countable = allTasks.filter { !$0.isHeader && $0.countsTowardProgress(bounds) }
     guard !countable.isEmpty else { return 0 }

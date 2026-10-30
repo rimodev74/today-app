@@ -17,7 +17,11 @@ final class HUDWindow {
   /// Combien de temps la pastille reste lisible avant de s'effacer.
   private static let visibleDuration = Duration.milliseconds(1600)
   private static let fadeDuration = Duration.milliseconds(220)
-  private static let entrance = Animation.spring(duration: 0.32, bounce: 0.28)
+  /// Une courbe et plus un ressort : la pastille paraît à CHAQUE dépôt de la capsule, et la traîne
+  /// sub-pixel d'un ressort garde le fil principal occupé après ce qu'on voit (cf. `taskInsert`,
+  /// `PIEGES.md` § Animations). Ajustée par moindres carrés sur l'ex-`.spring(duration: 0.32,
+  /// bounce: 0.28)` — écart quadratique moyen 1,7 %, dépassement de 4 % compris.
+  private static let entrance = Animation.timingCurve(0.436, 0.849, 0.236, 1.151, duration: 0.34)
   private static let exit = Animation.easeOut(duration: 0.20)
 
   /// Volontairement plus grand que la pastille, et transparent : le ressort d'entrée doit avoir de

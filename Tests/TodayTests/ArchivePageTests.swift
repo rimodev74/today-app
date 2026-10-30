@@ -45,7 +45,7 @@ final class ArchivePageTests: XCTestCase {
   func testPageVide() {
     XCTAssertTrue(page([]).isEmpty)
     XCTAssertTrue(page([]).months.isEmpty)
-    XCTAssertTrue(page([]).blocks.isEmpty)
+    XCTAssertTrue(page([]).blocks(showing: ArchivePage.monthsPerStep).isEmpty)
   }
 
   // MARK: L'ordre
@@ -85,8 +85,49 @@ final class ArchivePageTests: XCTestCase {
   /// Un pan par mois, dans l'ordre affiché : c'est ce que ↑/↓ parcourt et ce que ⌫ vise.
   func testBlocksSuiventLordreAffiche() {
     let page = page([done("mai", at: date(2026, 5, 3)), done("juillet", at: date(2026, 7, 28))])
-    XCTAssertEqual(page.blocks.count, 2)
-    XCTAssertEqual(page.blocks.flatMap(\.tasks).map(\.title), ["juillet", "mai"])
+    let blocks = page.blocks(showing: ArchivePage.monthsPerStep)
+    XCTAssertEqual(blocks.count, 2)
+    XCTAssertEqual(blocks.flatMap(\.tasks).map(\.title), ["juillet", "mai"])
+  }
+
+  // MARK: Le plafond d'affichage
+
+  /// Cinq mois d'archives : on n'en montre d'abord que les trois plus récents, et chaque pas en
+  /// ajoute trois — jusqu'à ce qu'il n'en reste plus.
+  private func fiveMonths() -> ArchivePage {
+    page((1...5).map { done("m\($0)", at: date(2026, $0, 10)) })
+  }
+
+  func testLaPageNeMontreQueLesTroisMoisLesPlusRecents() {
+    let page = fiveMonths()
+    let shown = page.visibleMonths(ArchivePage.monthsPerStep)
+    XCTAssertEqual(shown.map(\.label), ["Mai", "Avril", "Mars"])
+    XCTAssertEqual(page.hiddenMonthCount(after: ArchivePage.monthsPerStep), 2)
+  }
+
+  func testChaquePasAjouteTroisMoisJusquaEpuisement() {
+    let page = fiveMonths()
+    let step = ArchivePage.monthsPerStep
+    XCTAssertEqual(page.visibleMonths(2 * step).count, 5)
+    XCTAssertEqual(page.hiddenMonthCount(after: 2 * step), 0)
+    // Demander plus qu'il n'y en a ne plante pas et ne ment pas.
+    XCTAssertEqual(page.visibleMonths(99).count, 5)
+    XCTAssertEqual(page.hiddenMonthCount(after: 99), 0)
+  }
+
+  /// Le socle clavier ne parcourt que ce qui est rendu, mais « Vider les archives » (et son compte)
+  /// porte sur TOUT.
+  func testLesPansEtLeSocleNeSuiventQueLAffichageMaisLesTachesRestentToutes() {
+    let page = fiveMonths()
+    let blocks = page.blocks(showing: ArchivePage.monthsPerStep)
+    XCTAssertEqual(blocks.flatMap(\.tasks).map(\.title), ["m5", "m4", "m3"])
+    XCTAssertEqual(page.tasks.count, 5)
+  }
+
+  func testUnCompteNegatifNeMontreRien() {
+    let page = fiveMonths()
+    XCTAssertTrue(page.visibleMonths(-1).isEmpty)
+    XCTAssertEqual(page.hiddenMonthCount(after: -1), 5)
   }
 
   // MARK: Le regroupement partagé avec le dépliant d'une page de liste

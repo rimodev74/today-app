@@ -47,6 +47,17 @@ FORCED_VERSION="${2:-}"
 # --- Garde-fous : échouer avant de toucher à quoi que ce soit ---------------
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "✗ Pas un dépôt git."; exit 1; }
 
+# Le dépôt est PUBLIC et la publication fait `git add -A` : un fichier perso laissé à la racine
+# partirait sur GitHub. Seuls les dossiers du produit peuvent apporter des fichiers NOUVEAUX ;
+# tout autre fichier non suivi arrête tout (l'ignorer dans .gitignore, ou l'ajouter à la main).
+STRAY=$(git ls-files --others --exclude-standard | grep -vE '^(Sources|Tests|docs|Scripts)/' || true)
+[[ -z "${STRAY}" ]] || {
+  echo "✗ Fichiers non suivis hors de Sources/, Tests/, docs/, Scripts/ :"
+  echo "${STRAY}" | sed 's/^/    /'
+  echo "  Ignore-les (.gitignore) ou ajoute-les toi-même avant de publier."
+  exit 1
+}
+
 [[ -z "$(git ls-files --unmerged)" ]] || {
   echo "✗ Conflit de fusion en cours. Résous-le d'abord."
   exit 1

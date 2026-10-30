@@ -133,4 +133,67 @@ final class StoreBackupTests: XCTestCase {
     XCTAssertFalse(
       kept.contains { $0.hasPrefix("1970-01-02") }, "la plus ancienne doit avoir été élaguée")
   }
+
+  // MARK: Les échecs
+
+  /// Une copie ratée ne retient PAS l'empreinte : retenue, elle faisait passer la forme pour
+  /// sauvegardée, la migration ouvrait la vraie base sans filet, et aucun lancement ne réessayait.
+  func testAFailedCopyLeavesTheFingerprintForTheNextLaunch() throws {
+    try writeStoreFiles()
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.path)
+    defer {
+      try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: store.path)
+    }
+
+    XCTAssertNil(StoreBackup.snapshotIfShapeChanged(of: store, schema: schema, defaults: defaults))
+    XCTAssertNil(defaults.string(forKey: StoreBackup.fingerprintKey), "à retenter au prochain")
+    XCTAssertTrue(backupDirectories().isEmpty, "pas de dossier vide qui passerait pour une copie")
+  }
+
+  /// Le journal qui ne se copie pas fait échouer la copie entière : une sauvegarde sans son journal
+  /// restituerait un état antérieur aux dernières écritures.
+  func testAJournalThatCannotBeCopiedFailsTheWholeSnapshot() throws {
+    try writeStoreFiles()
+    let wal = store.path + "-wal"
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: wal)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: wal) }
+
+    XCTAssertNil(StoreBackup.snapshotIfShapeChanged(of: store, schema: schema, defaults: defaults))
+    XCTAssertNil(defaults.string(forKey: StoreBackup.fingerprintKey))
+    XCTAssertTrue(backupDirectories().isEmpty)
+  }
+
+  /// Un dossier vide ou partiel, plus récent que tout le reste, comptait comme une copie : il
+  /// faisait supprimer une vraie sauvegarde. Seules les copies valides comptent, et ce que
+  /// l'élagage ne reconnaît pas, il n'y touche pas.
+  func testPruneCountsOnlyValidSnapshots() throws {
+    try writeStoreFiles()
+    let root = directory.appendingPathComponent(StoreBackup.directoryName)
+    for day in 1...StoreBackup.keep {
+      defaults.removeObject(forKey: StoreBackup.fingerprintKey)
+      StoreBackup.snapshotIfShapeChanged(
+        of: store, schema: schema, defaults: defaults,
+        now: Date(timeIntervalSince1970: TimeInterval(day) * 86_400))
+    }
+    // Deux intrus datés de l'avenir : un vide, un qui n'a que le journal.
+    try FileManager.default.createDirectory(
+      at: root.appendingPathComponent("1999-01-01T00-00-00Z"), withIntermediateDirectories: true)
+    let partial = root.appendingPathComponent("1999-01-02T00-00-00Z")
+    try FileManager.default.createDirectory(at: partial, withIntermediateDirectories: true)
+    try "x".write(
+      to: partial.appendingPathComponent("default.store-wal"), atomically: true, encoding: .utf8)
+
+    defaults.removeObject(forKey: StoreBackup.fingerprintKey)
+    StoreBackup.snapshotIfShapeChanged(
+      of: store, schema: schema, defaults: defaults,
+      now: Date(timeIntervalSince1970: TimeInterval(StoreBackup.keep + 1) * 86_400))
+
+    let kept = backupDirectories()
+    XCTAssertFalse(kept.contains { $0.hasPrefix("1970-01-02") }, "la plus ancienne VALIDE part")
+    for day in 2...(StoreBackup.keep + 1) {
+      XCTAssertTrue(kept.contains { $0.hasPrefix("1970-01-0\(day + 1)") }, "jour \(day) : \(kept)")
+    }
+    XCTAssertTrue(kept.contains("1999-01-01T00-00-00Z"), "l'intrus n'est pas supprimé…")
+    XCTAssertTrue(kept.contains("1999-01-02T00-00-00Z"), "…ni compté")
+  }
 }

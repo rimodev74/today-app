@@ -118,33 +118,17 @@ private struct GeneralSettingsTab: View {
 /// aligne les libellés sur ceux des autres sections.
 private struct ProfileSettingsRows: View {
   @Bindable var profile: UserProfile
-  @State private var isImporting = false
   @State private var importError: String?
 
   var body: some View {
     LabeledContent("Photo") {
       HStack(spacing: 12) {
         AvatarView(profile: profile, size: 40)
-        Button("Choisir…") { isImporting = true }
+        Button("Choisir…", action: choosePhoto)
         if profile.avatarData != nil {
           Button("Retirer") { profile.avatarData = nil }
         }
       }
-    }
-    .fileImporter(isPresented: $isImporting, allowedContentTypes: [.image]) { result in
-      importError = nil
-      guard case .success(let url) = result else { return }
-      // Sandbox : l'URL retournée par le fileImporter n'est lisible que dans cette portée.
-      guard url.startAccessingSecurityScopedResource() else {
-        importError = "Photo illisible."
-        return
-      }
-      defer { url.stopAccessingSecurityScopedResource() }
-      guard let data = try? Data(contentsOf: url), NSImage(data: data) != nil else {
-        importError = "Ce fichier n'est pas une image valide."
-        return
-      }
-      profile.avatarData = data
     }
 
     TextField("Prénom", text: $profile.firstName)
@@ -155,6 +139,14 @@ private struct ProfileSettingsRows: View {
         .font(.caption)
         .foregroundStyle(.red)
     }
+  }
+
+  /// `NSOpenPanel` depuis l'action du bouton, pas `.fileImporter` (cf. `AvatarPicker`).
+  private func choosePhoto() {
+    importError = nil
+    AvatarPicker.choose(
+      onPicked: { profile.avatarData = $0 },
+      onInvalid: { importError = "Ce fichier n'est pas une image valide." })
   }
 }
 
@@ -174,6 +166,9 @@ struct HotKeyRecorder: View {
   var width: CGFloat = 150
 
   @State private var monitor: Any?
+  /// Écoute la perte de la clé de la fenêtre qui porte l'enregistreur : cliquer ailleurs, changer
+  /// d'app ou fermer la fenêtre ne doit pas laisser l'écoute armée.
+  @State private var resignObserver: Any?
 
   var body: some View {
     Button(title) {
@@ -194,7 +189,17 @@ struct HotKeyRecorder: View {
   }
 
   private func start() {
-    monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+    // La fenêtre clé AU CLIC est celle du bouton. Un moniteur local voit les frappes de TOUTES les
+    // fenêtres de l'app : sans ce filtre, taper dans la fenêtre principale pendant l'écoute
+    // capturait la combinaison à la place de l'enregistreur.
+    guard let window = NSApp.keyWindow else { return }
+    resignObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { stop() }
+    }
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+      guard let window, event.window === window else { return event }
       let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
       switch Int(event.keyCode) {
       case kVK_Escape where modifiers.isEmpty:
@@ -222,6 +227,8 @@ struct HotKeyRecorder: View {
   private func stop() {
     if let monitor { NSEvent.removeMonitor(monitor) }
     monitor = nil
+    if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+    resignObserver = nil
   }
 }
 
@@ -563,6 +570,10 @@ private struct AlignedTextField: NSViewRepresentable {
   }
 
   func updateNSView(_ field: NSTextField, context: Context) {
+    // Le coordinateur est fabriqué UNE fois, avec le binding de ce moment-là. Une rangée réutilisée
+    // pour un autre élément (la liste se réordonne, un raccourci disparaît) lui garderait l'ancien
+    // binding, et la frappe s'écrirait dans la mauvaise ligne.
+    context.coordinator.text = $text
     if field.stringValue != text { field.stringValue = text }
     // L'invite suit le LECTEUR choisi : elle change sous la rangée, sans que celle-ci soit refaite.
     if field.placeholderString != placeholder { field.placeholderString = placeholder }
@@ -578,7 +589,7 @@ private struct AlignedTextField: NSViewRepresentable {
   // banc ne prouvait rien dans un sens ni dans l'autre). Le rétablir demande d'abord un moyen de
   // rejouer un VRAI clic — sans quoi on rachète du code qu'on ne peut pas juger.
   final class Coordinator: NSObject, NSTextFieldDelegate {
-    let text: Binding<String>
+    var text: Binding<String>
     init(text: Binding<String>) { self.text = text }
     func controlTextDidChange(_ notification: Notification) {
       guard let field = notification.object as? NSTextField else { return }

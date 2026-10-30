@@ -30,11 +30,16 @@ enum StoreQuarantine {
     var moved: [URL] = []
     // `-wal` et `-shm` sont le journal SQLite du store : n'en déplacer qu'une partie laisserait un
     // store neuf s'ouvrir sur le journal de l'ancien — la corruption qu'on essaie justement de fuir.
+    //
+    // Le `.store` d'abord, et un échec ARRÊTE tout. Sur un `continue`, un `.store` resté en place
+    // voyait son journal partir sans lui : la base restait illisible ET perdait les écritures que
+    // le journal n'avait pas encore repliées. Un journal absent n'est pas un échec (store fermé
+    // proprement), seul un déplacement raté l'est.
     for suffix in ["", "-wal", "-shm"] {
       let file = URL(fileURLWithPath: url.path + suffix)
       guard manager.fileExists(atPath: file.path) else { continue }
       let destination = URL(fileURLWithPath: file.path + ".corrupt-\(stamp)")
-      guard (try? manager.moveItem(at: file, to: destination)) != nil else { continue }
+      guard (try? manager.moveItem(at: file, to: destination)) != nil else { break }
       moved.append(destination)
     }
     // Rien écarté = rien à raconter, et surtout pas d'écrasement d'un rapport pas encore lu : une

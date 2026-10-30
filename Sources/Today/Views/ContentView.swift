@@ -3,6 +3,13 @@ import EventKit
 import SwiftData
 import SwiftUI
 
+/// Les titres de listes de la dernière réconciliation des raccourcis (cf.
+/// `ContentView.reconcileShortcuts`). Une référence non observée : le corps de la fenêtre ne la lit pas.
+@MainActor
+private final class ListTitlesSeen {
+  var last: [PersistentIdentifier: String]?
+}
+
 struct ContentView: View {
   @Environment(RemindersService.self) private var remindersService
   @Environment(\.modelContext) private var modelContext
@@ -20,6 +27,10 @@ struct ContentView: View {
   /// notification : elle a besoin du contexte et du service, que l'environnement ne donne qu'au
   /// rendu. Une par fenêtre, comme avant — c'est le verrou du service qui les sérialise.
   @State private var reminderSync: RemindersSyncPass?
+  /// Les titres de listes vus par la dernière réconciliation des raccourcis. Une classe NON observée
+  /// dans un `@State` : le corps ne la lit jamais, la réécrire ne rejoue donc rien (cf.
+  /// `reconcileShortcuts`).
+  @State private var shortcutTitles = ListTitlesSeen()
 
   @State private var selection: SidebarSelection? = .smartList(.today)
   @State private var searchPresented = false
@@ -51,20 +62,16 @@ struct ContentView: View {
   /// seul ancêtre commun des deux colonnes : la page publie la ligne en vol, la sidebar publie ses
   /// lignes d'accueil, et la fenêtre dessine le calque par-dessus les deux (cf. `SidebarDrop`).
   @State private var filing = SidebarDrop()
-  @State private var grabberHovered = false
-  /// Survol de la sidebar elle-même. État SÉPARÉ de `grabberHovered` (et pas le même drapeau posé
-  /// des deux côtés) : les deux zones se touchent, et rien ne garantit que SwiftUI livre la sortie
-  /// de l'une avant l'entrée dans l'autre — un seul drapeau clignoterait au passage de la frontière.
-  @State private var sidebarHovered = false
+  /// Survol du bord de la sidebar. Un objet observé et pas deux `@State` : chaque entrée ou sortie
+  /// de souris rejouait le corps de `ContentView`, donc celui de la sidebar et le recompte de
+  /// toutes les tâches — 12 à 18 ms au moment précis où la souris va vers la liste (mesuré le
+  /// 29 octobre 2026). ÉCRIT par les `onHover`, LU par le seul mors (`GrabberReveal`).
+  @State private var edgeHover = SidebarEdgeHover()
   /// L'écran d'accueil affiché, ou `nil`. Un `@State` et pas le drapeau des défauts lu en direct :
   /// l'écriture d'un `@AppStorage` échappe à la transaction animée, et l'accueil disparaîtrait sec
   /// (cf. CLAUDE.md § Animations). Sa valeur de départ est tranchée AVANT que la fenêtre existe
   /// (cf. `TodayApp.onboardingPending`) : elle en décide la taille.
   @State private var onboarding: OnboardingStep? = TodayApp.onboardingPending ? .welcome : nil
-
-  /// Le mors se montre dès que la souris est quelque part sur la sidebar OU sur la bande qui la
-  /// longe : on ne le cherche pas, il est déjà là quand on arrive au bord.
-  private var grabberVisible: Bool { grabberHovered || sidebarHovered }
 
   /// L'alerte se ferme en vidant la liste : c'est ELLE l'état, pas un second booléen à tenir
   /// synchronisé avec (cf. la règle « avant d'ajouter un `@State`, chercher celui qui porte déjà
@@ -121,8 +128,15 @@ struct ContentView: View {
   /// et un `.overlay` de plus la faisait dépasser son budget de résolution.
   /// ponytail: façon Réglages Système (fenêtre entièrement en matériau) plutôt que Finder/Mail,
   /// qui gardent une zone de contenu OPAQUE — c'est un choix d'app, pas le défaut d'AppKit.
+  private var isProjectPage: Bool {
+    if case .project = selection { return true }
+    return false
+  }
+
   private var pageBackground: some View {
-    Scrim.page.overlay(PageTintWash(tint: tint)).ignoresSafeArea()
+    // Pas de lavis sur la page d'un projet : la couverture donne l'ambiance, et une bande teintée
+    // au-dessus d'elle ne faisait que salir le haut de la fenêtre.
+    Scrim.page.overlay(PageTintWash(tint: tint).opacity(isProjectPage ? 0 : 1)).ignoresSafeArea()
   }
 
   /// Le contenu de la fenêtre : l'accueil, OU les deux colonnes — jamais l'un par-dessus l'autre.
@@ -177,7 +191,7 @@ struct ContentView: View {
       // vitrée des deux, ce qui suffit à les distinguer sans inventer de teinte.
       .background { Scrim.sidebar.ignoresSafeArea() }
       // Survoler la sidebar suffit à faire apparaître son mors, sans aller le chercher au bord.
-      .onHover { sidebarHovered = $0 }
+      .onHover { edgeHover.sidebar = $0 }
 
       if effectiveWidth > 0 {
         Divider().ignoresSafeArea()
@@ -264,6 +278,13 @@ struct ContentView: View {
         }
       }
       .animation(.easeOut(duration: 0.12), value: searchPresented)
+      // La recherche s'ouvre AU-DESSUS de la page : un panneau de page ouvert dessous se referme
+      // d'abord, sinon son Échap passerait avant celui de la palette (cf. `PagePanelPresence`).
+      .onChange(of: searchPresented) { _, presented in
+        if presented {
+          NotificationCenter.default.post(name: PagePanelPresence.closeRequest, object: nil)
+        }
+      }
       .animation(.easeOut(duration: 0.2), value: sidebarVisible)
       // Ce que la barre de menus atteint dans cette fenêtre. ⌘B passait par un bouton CACHÉ posé
       // ici : il marchait, mais rien ne l'annonçait — un raccourci qu'on ne peut pas découvrir
@@ -322,12 +343,11 @@ struct ContentView: View {
       // seulement au prochain réveil venu d'ailleurs (un remaniement iCloud, un retour au premier
       // plan), soit une quinzaine de secondes en moyenne, mesurées à l'usage le 6 août 2026.
       // `ModelContext.didSave` est le pendant exact de la notification d'EventKit, côté nous.
+      //
+      // Le même signal recolle les raccourcis d'une liste renommée tout de suite, pas seulement
+      // quand les Réglages passent dessus (cf. `reconcileShortcuts`) : UN abonnement, pas deux.
       .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
         syncWithReminders()
-      }
-      // Une liste renommée doit recoller ses raccourcis tout de suite, pas seulement quand les
-      // Réglages passent dessus (cf. `reconcileShortcuts`).
-      .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
         reconcileShortcuts()
       }
       .onReceive(
@@ -349,25 +369,57 @@ struct ContentView: View {
         // Rien à faire avant macOS 26, qui n'a pas ce fond.
         if !sidebarVisible, onboarding == nil {
           if #available(macOS 26, *) {
-            ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
+            ToolbarItem(placement: .principal) { sidebarMenu }
               .sharedBackgroundVisibility(.hidden)
           } else {
-            ToolbarItem(placement: .principal) { SidebarMenu(selection: $selection) }
+            ToolbarItem(placement: .principal) { sidebarMenu }
           }
         }
-        ToolbarItem(placement: .primaryAction) {
-          // 1 pt et non 0 : une taille nulle rend la mesure de l'item AMBIGUË pour AppKit, qui s'en
-          // plaint deux fois à chaque lancement (« ambiguous height or width … zero height or
-          // width »). Un point transparent ne se voit pas davantage et la mesure est nette.
-          Color.clear
-            .frame(width: 1, height: 1)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        if onboarding == nil {
+          if #available(macOS 26, *) {
+            ToolbarItem(placement: .navigation) { breadcrumb }
+              .sharedBackgroundVisibility(.hidden)
+          } else {
+            ToolbarItem(placement: .navigation) { breadcrumb }
+          }
+        }
+        // macOS 26 pose une capsule de verre autour de CHAQUE élément, même de 1 pt : sans
+        // l'opt-out, un trait vertical traînait en haut à droite de la fenêtre.
+        if #available(macOS 26, *) {
+          ToolbarItem(placement: .primaryAction) { toolbarAnchor }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+          ToolbarItem(placement: .primaryAction) { toolbarAnchor }
         }
       }
       .toolbarBackground(.hidden, for: .windowToolbar)
       .background(WindowConfigurator())
   }
+
+  /// La pilule de la barre de titre : ouvre la recherche rapide DE LA FENÊTRE, pas un popover.
+  private var sidebarMenu: some View {
+    SidebarMenu(selection: selection, onOpen: { searchPresented = true })
+  }
+
+  private var toolbarAnchor: some View {
+    // 1 pt et non 0 : une taille nulle rend la mesure de l'item AMBIGUË pour AppKit, qui s'en
+    // plaint deux fois à chaque lancement (« ambiguous height or width … zero height or
+    // width »). Un point transparent ne se voit pas davantage et la mesure est nette.
+    Color.clear
+      .frame(width: 1, height: 1)
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+  }
+
+  /// La barre de titre commence après les feux (~80 pt) ; la page, après la sidebar. Le fil se cale
+  /// 12 pt dans la page, comme celui de Notion.
+  private var breadcrumb: some View {
+    ToolbarBreadcrumb(
+      selection: $selection, leading: effectiveWidth + 12 - Self.toolbarLeadingInset)
+  }
+
+  /// Où AppKit pose le premier élément `.navigation` d'une barre unifiée, feux compris.
+  private static let toolbarLeadingInset: CGFloat = 80
 
   /// Curseur cohérent avec ce que le geste permet réellement (comme un NSSplitView) : main quand
   /// seul le clic agit, flèche vers la gauche seule en butée de largeur max.
@@ -424,8 +476,7 @@ struct ContentView: View {
     Capsule()
       .fill(Color.secondary.opacity(0.55))
       .frame(width: 8, height: 40)
-      .opacity(grabberVisible ? 1 : 0)
-      .animation(.easeOut(duration: 0.15), value: grabberVisible)
+      .modifier(GrabberReveal(hover: edgeHover))
       // Cible de clic élargie autour d'un visuel volontairement fin. Asymétrique : la bande démarre
       // 1 pt DANS la sidebar (cf. l'offset, plus bas), ce pt est repris ici pour que la pilule reste
       // posée au même endroit qu'avant, juste à droite du séparateur.
@@ -476,7 +527,7 @@ struct ContentView: View {
       .frame(maxHeight: .infinity)
       .contentShape(Rectangle())
       .onHover {
-        grabberHovered = $0
+        edgeHover.grabber = $0
         // `.set()` plutôt que push/pop : la pile de curseurs se déséquilibre dès qu'un survol se
         // termine pendant un drag, et le curseur reste bloqué en flèche.
         $0 ? grabberCursor.set() : NSCursor.arrow.set()
@@ -484,7 +535,7 @@ struct ContentView: View {
       // La bande démarre 1 pt DANS la sidebar, pas après : au pixel près, deux zones seulement
       // adjacentes laissent un liseré que ni l'une ni l'autre ne revendique, et la pilule y
       // clignotait. Ce chevauchement les soude — les deux survols sont vrais en même temps, et
-      // `grabberVisible` est un OU. Sidebar repliée, la bande se colle au bord gauche de la fenêtre.
+      // `SidebarEdgeHover.visible` est un OU. Sidebar repliée, la bande se colle au bord gauche de la fenêtre.
       .offset(x: effectiveWidth - 1)
   }
 
@@ -506,12 +557,19 @@ struct ContentView: View {
   /// Fetch à la demande et pas un `@Query` : même raison que `RemindersSyncPass.linkedTasks`, posé sur cette vue
   /// racine il ferait dépendre tout l'arbre de la moindre mutation d'une liste.
   private func reconcileShortcuts() {
-    let titles = ((try? modelContext.fetch(FetchDescriptor<TodoList>())) ?? []).map(\.title)
+    let lists = (try? modelContext.fetch(FetchDescriptor<TodoList>())) ?? []
     // Aucun titre = on ne sait RIEN, pas « plus aucune liste n'existe ». Le `try?` ci-dessus rend
     // `[]` aussi bien pour un fetch en échec que pour un store pas encore prêt — et sans cette
     // garde, `reconciled` juge alors mort CHAQUE raccourci de liste et les efface tous, pour de
     // bon. Élaguer demande de savoir ce qui reste ; ici on ne le sait pas.
-    guard !titles.isEmpty else { return }
+    guard !lists.isEmpty else { return }
+    // Chaque enregistrement passe ici, et la plupart n'ont rien changé aux listes : ne décoder deux
+    // fois du JSON que si l'ensemble (liste, titre) a bougé depuis la dernière passe. Posée AVANT la
+    // réconciliation : elle n'écrit que les raccourcis, jamais un titre, elle ne peut pas la périmer.
+    let seen = Dictionary(uniqueKeysWithValues: lists.map { ($0.persistentModelID, $0.title) })
+    guard seen != shortcutTitles.last else { return }
+    shortcutTitles.last = seen
+    let titles = lists.map(\.title)
 
     let text = TextShortcut.decode(textShortcutData)
     let reconciledText = text.reconciled(against: titles)
@@ -600,5 +658,28 @@ private struct SidebarDropGhost: View {
           .background(Circle().fill(Color.red))
           .offset(x: Self.badge / 2.5, y: -Self.badge / 2.5)
       }
+  }
+}
+
+/// Les deux survols du bord. SÉPARÉS (et pas un seul drapeau posé des deux côtés) : les deux zones
+/// se touchent, et rien ne garantit que SwiftUI livre la sortie de l'une avant l'entrée dans
+/// l'autre — un seul drapeau clignoterait au passage de la frontière.
+@Observable
+@MainActor
+final class SidebarEdgeHover {
+  var sidebar = false
+  var grabber = false
+  /// Le mors se montre dès que la souris est sur la sidebar OU sur la bande qui la longe.
+  var visible: Bool { sidebar || grabber }
+}
+
+/// Le seul lecteur de `SidebarEdgeHover` : un survol n'invalide que le mors.
+private struct GrabberReveal: ViewModifier {
+  let hover: SidebarEdgeHover
+
+  func body(content: Content) -> some View {
+    content
+      .opacity(hover.visible ? 1 : 0)
+      .animation(.easeOut(duration: 0.15), value: hover.visible)
   }
 }

@@ -40,6 +40,7 @@ en-tête AVANT d'écrire.
 | `Models/TaskPageRows.swift` (`TaskPageBlock`)            | ce qu'une page affiche : des pans de lignes, visibles ou repliés             |
 | `Models/TaskPageReorder.swift`                           | l'état d'un glissement : cadres, séquence figée, décalages, ordre obtenu     |
 | `Models/ListDragMotion.swift`                            | ce qu'un glissement de LISTE change par image, hors du corps de la page      |
+| `Models/SidebarDragMotion.swift`                         | ce qu'un glissement de la SIDEBAR change par image, hors de son corps        |
 | `Models/SidebarDrop.swift`                               | lâcher une tâche sur la barre latérale + `TaskItem.move(to:)`                |
 | `Models/TodayPage.swift`, `AllTasksPage`, `UpcomingPage`, `ArchivePage` | ce que chaque page intelligente présente                       |
 | `Views/TaskList/TaskPageChrome.swift` (`TaskPageBase`)   | le socle de TOUTE page de tâches : ⌫, ↑/↓, clic dans le vide, cadres         |
@@ -114,7 +115,10 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
   pages et toute la sidebar au cadre de la ligne en vol, réécrit à chaque image. Stockée et
   réécrite seulement quand elle change, elle n'invalide plus rien pour rien.
 - **Le corps d'une vue qui porte un `@Query` se rejoue bien plus souvent qu'on ne le croit** :
-  SwiftData l'invalide sans qu'AUCUNE écriture n'ait lieu. Il doit être **bon marché**, pas rare.
+  il doit être **bon marché**, pas rare. Et **un champ lié à un `@Model` passe par
+  `Binding.changesOnly`** : au focus, un `TextField` réécrit sa valeur à l'identique, l'objet
+  devient « modifié » et l'autosave part 0 à 20 s plus tard, en plein geste suivant — c'était le
+  saccadé aléatoire du double-clic (→ `PIEGES.md` § SwiftData).
 - **Tout nouveau tri sur un `@Model` passe par `sortedByKey`**, jamais par `.sorted { }` — une
   comparaison ordinaire relit ses clés à travers SwiftData. (Inutile sur des types de valeur.)
 - **Pas de `spring` pour une animation qui se joue à chaque geste courant** (coche, ajout, anneau,
@@ -183,7 +187,12 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
 - **Le store contient de la VRAIE donnée** : `~/Library/Application Support/Today/default.store`.
   Compter avant d'y toucher : `sqlite3 default.store "select count(*) from ZTASKITEM;"`.
 - **EventKit s'écrit APRÈS SwiftData, jamais pendant** : lire les identifiants → supprimer et
-  enregistrer → effacer les rappels.
+  enregistrer → effacer les rappels. **Et seulement si l'enregistrement a RÉUSSI** — sinon
+  `runAfterNextSave`. Jamais `rollback()` sur le contexte de l'interface : mesuré, il fait tomber
+  SwiftData après une cascade et laisse un état incohérent sinon (→ `PIEGES.md` § SwiftData).
+- **Rien d'Apple ne s'efface sans PREUVES** (`VanishEvidence`) : vu vivant dans la session, absent
+  ≥ 120 s ET sur ≥ 3 passes, hors de toute disparition en masse. Ne jamais raccourcir ces seuils
+  « pour que ça réagisse plus vite » : c'est le seul endroit qui détruit sans qu'on le demande.
 - **Une suppression écrite hors du chemin de l'affichage** (synchro, ménage au lancement, import)
   passe par `deleteCascadeAndSave` : sans instantané en mémoire, l'`UndoManager` fait tomber le
   process.
@@ -345,9 +354,13 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   « Inves… » en vraie base le 14 septembre 2026, avant que le titre ne traverse.
   **Et le miroir tient aussi pour la suppression** : un événement supprimé dans le Calendrier retire
   la DURÉE de la tâche (`RemindersSync.shouldDropDuration`), qui redevient un rappel — la tâche,
-  elle, reste. Mêmes deux preuves que `shouldDelete` (`RemindersService.eventPresence` : vu vivant dans la
-  session, puis absent deux passes) : sur un simple « introuvable », on ne retire RIEN, et on ne
-  réécrit rien non plus tant que l'absence n'est pas confirmée — réécrire effacerait la preuve.
+  elle, reste. Mêmes preuves que `shouldDelete`, tenues par `VanishEvidence` : vu vivant dans la
+  session, puis absent depuis ≥ 120 s ET sur ≥ 3 passes, la passe étant RETENUE (rien n'est
+  compté) si la liste-pont ou le calendrier manque, ou si plus du quart des éléments vivants (et
+  trois au moins) manquent d'un coup — une resynchro iCloud, pas une suppression. « Deux passes de
+  suite » tranchait en 2 à 3 s. Sur un simple « introuvable », on ne retire RIEN, et on ne réécrit
+  rien non plus tant que l'absence n'est pas confirmée — réécrire effacerait la preuve. La passe
+  se réarme sur l'échéance de la prochaine preuve (`VanishEvidence.nextCheck`), pas à 1 Hz.
 - **`HUDWindow`** ne parle QUE des gestes dont le résultat n'est pas à l'écran — une tâche déposée par
   la capsule depuis une autre app, un pomodoro piloté au clavier (`!pomodoro…` d'`AppCommand`, qui
   n'active délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux, l'y ajouter en

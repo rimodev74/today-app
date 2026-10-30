@@ -6,8 +6,8 @@ import SwiftUI
 ///
 /// Un `NSPanel` hors de l'arbre de vues, pour la même raison que la pastille et la capsule : il
 /// doit couvrir n'importe quelle app de premier plan. Contrairement à la pastille, il PREND les
-/// clics et la touche clavier — c'est son bouton qui ouvre la phase suivante. Fabriqué une fois et
-/// resservi ; seul son contenu est neuf à chaque fin d'étape.
+/// clics — c'est son bouton qui ouvre la phase suivante — mais PAS le clavier à son apparition (cf.
+/// `present`). Fabriqué une fois et resservi ; seul son contenu est neuf à chaque fin d'étape.
 @MainActor
 final class PomodoroAlertWindow {
   static let shared = PomodoroAlertWindow()
@@ -95,7 +95,13 @@ final class PomodoroAlertWindow {
     }
     panel.contentView = container
 
-    panel.makeKeyAndOrderFront(nil)
+    // `orderFrontRegardless` et pas `makeKeyAndOrderFront` : la fin d'étape tombe pendant que
+    // l'utilisateur travaille, souvent en pleine frappe. Devenu clé d'office, le panneau recevait
+    // la suite de sa phrase — un Entrée ou un Échap destinés à l'autre app déclenchaient « Commencer
+    // la pause » ou « Fermer » (`.defaultAction` / `.cancelAction` n'agissent que dans la fenêtre clé).
+    // Il le devient au premier CLIC posé dessus, ce qui est le geste qui dit « je l'ai vu » : à
+    // partir de là, Entrée et Échap marchent. Sans clic, il s'efface seul au bout de 30 s.
+    panel.orderFrontRegardless()
     fade(container, from: 0, to: 1, duration: Self.fadeIn)
 
     // Reprogrammé à CHAQUE ouverture : une fin d'étape qui en suit une autre ne doit pas hériter du
@@ -186,7 +192,8 @@ final class PomodoroAlertWindow {
 }
 
 /// `.borderless` ne devient jamais clé tout seul — et sans la clé, ni ⏎ ni Échap n'atteignent les
-/// boutons. `.nonactivatingPanel` fait qu'il la prend SANS ramener Today au premier plan.
+/// boutons. `canBecomeKey` l'autorise ; il la prend au premier clic (cf. `present`), et
+/// `.nonactivatingPanel` fait que c'est SANS ramener Today au premier plan.
 private final class AlertPanel: NSPanel {
   override var canBecomeKey: Bool { true }
 }

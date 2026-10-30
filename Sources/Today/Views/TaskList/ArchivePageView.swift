@@ -17,6 +17,9 @@ struct ArchivePageView: View {
   /// La sélection, comme sur toute autre page de tâches (cf. `TaskFocus`). Cette page n'a pas
   /// d'édition : on ne renomme pas une tâche terminée, on la décoche ou on la jette.
   @State private var focus = TaskFocus()
+  /// Combien de mois sont rendus (cf. `ArchivePage.monthsPerStep`). Local à la page et remis à son
+  /// départ en la quittant : revenir aux archives repart des trois mois les plus récents.
+  @State private var shownMonths = ArchivePage.monthsPerStep
 
   var body: some View {
     // Construite UNE fois par rendu, puis distribuée. Avant, `archived` était une propriété
@@ -31,13 +34,20 @@ struct ArchivePageView: View {
             Text("Aucune tâche archivée.")
               .foregroundStyle(.tertiary)
           } else {
-            ForEach(page.months) { month in
+            ForEach(page.visibleMonths(shownMonths)) { month in
               ArchiveMonthSection(
                 month: month,
                 onToggle: { restore($0) },
                 onDelete: { delete($0) },
                 focus: $focus
               )
+            }
+            if page.hiddenMonthCount(after: shownMonths) > 0 {
+              Button("Afficher les mois précédents") { shownMonths += ArchivePage.monthsPerStep }
+                .font(.app(.subheadline).weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.top, 18)
             }
           }
         }
@@ -46,16 +56,18 @@ struct ArchivePageView: View {
       .padding(.horizontal, gutter)
       .padding(.top, 30)
     }
+    .onDisappear { shownMonths = ArchivePage.monthsPerStep }
     // Le socle commun : ⌫ pour jeter la sélection, ↑/↓ pour la déplacer, clic dans le vide pour la
     // relâcher. Un pan par mois, dans l'ordre affiché — aucun n'est repliable ici.
     .taskPageBase(
       focus: $focus,
-      blocks: { page.blocks },
+      blocks: { page.blocks(showing: shownMonths) },
       delete: delete,
       // Pas de réordonnancement ici, et rien à créer : la page se prononce sur les deux, elle ne
       // peut pas les oublier. ⌘N ne fait donc RIEN sur les archives — on n'y ajoute pas de tâche.
       reorder: nil,
-      newTask: nil
+      newTask: nil,
+      locatesClicks: true
     )
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
@@ -96,14 +108,14 @@ struct ArchivePageView: View {
   private func delete(_ task: TaskItem) {
     focus.forget(task)
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
+      _ = modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
     }
   }
 
   private func emptyArchive(_ tasks: [TaskItem]) {
     focus.dismiss()
     withAnimation(taskInsert) {
-      modelContext.deleteTasksAndSave(tasks, forget: remindersService.forgetAppleItems)
+      _ = modelContext.deleteTasksAndSave(tasks, forget: remindersService.forgetAppleItems)
     }
   }
 }
@@ -195,12 +207,5 @@ struct ArchiveRow: View {
       Divider()
       Button("Supprimer définitivement", role: .destructive, action: onDelete)
     }
-  }
-
-  /// D'où venait la tâche : son projet s'il y en a un, sinon sa liste. Sans ce rappel, une archive
-  /// n'est qu'un tas de titres sans contexte (« Appeler le client » — pour quel projet ?).
-  private var parent: String? {
-    let title = task.project?.title ?? task.list?.title
-    return (title?.isEmpty ?? true) ? nil : title
   }
 }

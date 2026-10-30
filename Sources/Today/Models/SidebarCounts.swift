@@ -14,11 +14,12 @@ import SwiftData
 /// Et elle se reconstruit bien plus souvent qu'on ne le croit. Mesuré le 6 août 2026 avec
 /// `Self._printChanges()` : SwiftData ré-invalide le `@Query` sur `TodoList` à CHAQUE ouverture et
 /// à chaque fermeture d'une carte de tâche —
-/// `_QueryController<TodoList, String>.<computed (Bool)> changed` — alors qu'**aucune écriture
-/// n'a lieu** : vérifié en écoutant `ModelContext.didSave`, `willSave` et
-/// `NSManagedObjectContextObjectsDidChange`, aucune des trois ne sonne. C'est une sur-notification
-/// de SwiftData, qu'on ne peut pas empêcher depuis ici. Ce qu'on peut, c'est rendre bon marché ce
-/// qu'elle relance : une reconstruction de sidebar coûtait ~13 ms, soit plus d'une image entière à
+/// `_QueryController<TodoList, String>.<computed (Bool)> changed`.
+///
+/// La cause, trouvée le 29 octobre 2026 : le champ titre réécrivait sa valeur à l'identique au
+/// focus (cf. `Binding.changesOnly`, `PIEGES.md` § SwiftData). Elle est fermée, mais d'autres
+/// invalidations restent possibles ; ce qu'on garde, c'est de rendre bon marché ce qu'elles
+/// relancent : une reconstruction de sidebar coûtait ~13 ms, soit plus d'une image entière à
 /// 120 Hz, pile au démarrage de l'animation d'ouverture.
 struct SidebarCounts: Equatable {
   /// Ce qu'une rangée de liste a besoin de savoir, et rien de plus. `Equatable` à dessein : une

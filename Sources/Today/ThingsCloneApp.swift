@@ -6,12 +6,14 @@ import SwiftUI
 struct TodayApp: App {
   @State private var pomodoroTimer = PomodoroTimer.shared
   @State private var remindersService = RemindersService()
+  @State private var covers = ProjectCovers()
   @State private var profile = UserProfile()
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
 
   init() {
     CrashLog.install()  // en premier : tout ce qui suit peut lever
     NSApplication.shared.setActivationPolicy(.regular)
+    // Cf. `AppCommand.activate` : l'activation coopérative peut être refusée.
     NSApplication.shared.activate(ignoringOtherApps: true)
     _ = SparkleUpdater.shared
     // Saisie rapide : le raccourci global vit indépendamment des fenêtres (il doit répondre app en
@@ -201,6 +203,7 @@ struct TodayApp: App {
         .environment(pomodoroTimer)
         .environment(remindersService)
         .environment(profile)
+        .environment(covers)
     }
     .modelContainer(Self.container)
     // Le thème de TOUTE l'app, fenêtres, Réglages et panneaux compris (cf. `AppAppearance`, qui dit
@@ -255,7 +258,7 @@ private struct MenuBarTimerLabel: View {
       // .font()/.frame() sur un Text : la largeur suit la chasse réelle des glyphes (SF est
       // proportionnel, "11:11" = 27.6pt vs "88:88" = 36.7pt) et toute la barre de menu se
       // décale à chaque seconde. Une Image a une taille intrinsèque non négociable.
-      Image(nsImage: MenuBarTimerImage.make(timer.formattedRemaining, paused: !timer.isRunning))
+      Image(nsImage: MenuBarTimerImage.make(timer.menuBarText, paused: !timer.isRunning))
     } else {
       Image(systemName: "timer")
     }

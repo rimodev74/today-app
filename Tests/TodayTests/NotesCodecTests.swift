@@ -45,4 +45,23 @@ final class NotesCodecTests: XCTestCase {
       NSAttributedString(string: "Créer les dossiers\net ranger les rushes"))
     XCTAssertEqual(NotesCodec.plainText(data), "Créer les dossiers et ranger les rushes")
   }
+
+  /// L'aperçu est mémoïsé par contenu : le second appel sort du cache, et une note modifiée (autres
+  /// octets) obtient son propre aperçu au lieu de réutiliser l'ancien.
+  func testPlainTextIsMemoizedByContent() {
+    let first = NotesCodec.encode(NSAttributedString(string: "mémo  A\nsuite"))
+    let second = NotesCodec.encode(NSAttributedString(string: "mémo B"))
+    XCTAssertFalse(NotesCodec.hasCachedPreview(for: first))
+    XCTAssertEqual(NotesCodec.plainText(first), "mémo A suite")
+    XCTAssertTrue(NotesCodec.hasCachedPreview(for: first))
+    XCTAssertEqual(NotesCodec.plainText(first), "mémo A suite")
+    XCTAssertFalse(NotesCodec.hasCachedPreview(for: second))
+    XCTAssertEqual(NotesCodec.plainText(second), "mémo B")
+    XCTAssertEqual(NotesCodec.plainText(first), "mémo A suite")
+  }
+
+  func testEmptyNotesNeverEnterTheCache() {
+    XCTAssertEqual(NotesCodec.plainText(Data()), "")
+    XCTAssertFalse(NotesCodec.hasCachedPreview(for: Data()))
+  }
 }

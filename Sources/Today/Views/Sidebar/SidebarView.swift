@@ -13,6 +13,7 @@ struct SidebarView: View {
   /// Supprimer une liste ou un projet emporte ses tâches ; leurs rappels Apple doivent partir avec
   /// elles (cf. `TodoList.delete(from:in:forget:)`).
   @Environment(RemindersService.self) private var remindersService
+  @Environment(ProjectCovers.self) private var covers
   /// Le rangement par glisser : la sidebar y publie ses lignes d'accueil et lit celle qu'on
   /// survole. Elle n'écrit RIEN au relâchement — c'est la page qui tire qui conclut son geste
   /// (cf. `dropTaskDrag`), comme c'est elle qui l'a commencé.
@@ -71,11 +72,16 @@ struct SidebarView: View {
   // repos, ligne soulevée qui suit le curseur, voisines qui s'écartent, ordre écrit au drop),
   // adapté à la hiérarchie. Un PROJET se réordonne entre projets en emmenant ses listes comme un
   // bloc (jamais dans une liste) ; une LISTE se réordonne et peut CHANGER de projet.
-  // `dragID` = ligne empoignée ; `draggedKeys` = son groupe ; `dragOffset` sa translation sous le
-  // curseur ; `rowFrames` la position de repos mesurée de chaque ligne (gelée pendant le drag).
+  // `dragID` = ligne empoignée ; `draggedKeys` = son groupe ; `motion` sa translation sous le
+  // curseur, les décalages des autres lignes et le trou ; `rowFrames` la position de repos mesurée
+  // de chaque ligne (gelée pendant le drag).
+  //
+  // `motion` change à CHAQUE IMAGE du geste : le corps ne le lit JAMAIS, seuls les modificateurs
+  // `SidebarRowDragOffset` et `SidebarReorderPlaceholder` le font (cf. `SidebarDragMotion`). Le lire
+  // ici rejouerait toute la sidebar à chaque image.
   @State private var dragID: PersistentIdentifier?
   @State private var dragIsProject = false
-  @State private var dragOffset: CGSize = .zero
+  @State private var motion = SidebarDragMotion<RowKey>()
   @State private var draggedKeys: [RowKey] = []
   @State private var rowFrames: [RowKey: CGRect] = [:]
 
@@ -157,7 +163,14 @@ struct SidebarView: View {
       }
     }
     .safeAreaInset(edge: .bottom) { bottomBar }
-    .background { SidebarTallySource(tally: tally) }
+    .background {
+      // Le jour et le réglage de l'anneau entrent dans l'égalité : sans eux, `.equatable()`
+      // figeait les compteurs à minuit ou au changement du réglage, jusqu'à la prochaine écriture.
+      SidebarTallySource(
+        tally: tally, day: Calendar.current.startOfDay(for: Date()),
+        resetsDaily: TaskItem.progressResetsDaily
+      ).equatable()
+    }
     // Ce que le menu *Fichier* atteint ici. Les deux créations n'existaient qu'en bas de la
     // sidebar et au clic droit : rien ne les annonçait, et aucune n'avait de raccourci.
     .focusedSceneValue(\.newProject, MenuAction(id: "newProject", run: addProject))
@@ -221,8 +234,8 @@ struct SidebarView: View {
 
   // MARK: Recherche
 
-  /// Ce n'est plus un champ mais un bouton : la saisie et les résultats vivent dans un
-  /// popover (cf. `SearchPopover`), pas dans la sidebar. Il garde l'allure d'un champ de
+  /// Ce n'est plus un champ mais un bouton : la saisie et les résultats vivent dans la recherche
+  /// rapide révélée dans la fenêtre (cf. `QuickFindPanel`), pas dans la sidebar. Il garde l'allure d'un champ de
   /// recherche (capsule, loupe, placeholder gris) pour rester lisible comme tel.
   private var searchButton: some View {
     Button {
@@ -252,6 +265,8 @@ struct SidebarView: View {
   /// espacement, sinon il se détacherait des listes intelligentes dès qu'on le resserre.
   private var smartListGroup: some View {
     VStack(alignment: .leading, spacing: 2) {
+      // En TÊTE : la vue d'ensemble d'abord, puis le détail.
+      projectsRow
       ForEach(smartLists, id: \.self) { list in
         sidebarRow(isSelected: { selection == .smartList(list) }) {
           navigate(to: .smartList(list))
@@ -272,6 +287,19 @@ struct SidebarView: View {
     }
   }
 
+  private var projectsRow: some View {
+    sidebarRow(isSelected: { selection == .projects }) {
+      navigate(to: .projects)
+    } label: {
+      Label {
+        Text("Projets")
+      } icon: {
+        Image(systemName: "square.grid.2x2.fill").foregroundStyle(PageTint.projects)
+      }
+      .font(.system(size: 14, weight: .medium))
+    }
+  }
+
   private var pomodoroRow: some View {
     sidebarRow(isSelected: { selection == .pomodoro }) {
       navigate(to: .pomodoro)
@@ -288,12 +316,7 @@ struct SidebarView: View {
   // MARK: Projets et to-do lists
 
   private var projectsGroup: some View {
-    let layout = dragLayout()
-    // Les décalages sont calculés UNE fois par rendu et distribués aux lignes, plutôt que
-    // recherchés ligne par ligne : chaque rangée devait sinon balayer la séquence pour se trouver,
-    // soit un coût quadratique à chaque image de glissement.
-    let offsets = layout?.offsets() ?? [:]
-    return VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 6) {
       if projects.isEmpty {
         Text("Aucun projet")
           .font(.callout)
@@ -302,7 +325,7 @@ struct SidebarView: View {
           .padding(.vertical, 4)
       }
       ForEach(sortedProjects) { project in
-        projectRow(project, offsets: offsets)
+        projectRow(project)
         if !project.isCollapsed {
           // Petit fondu à l'ouverture, EXPLICITE — cf. convention dans CLAUDE.md : un retrait/insertion
           // réel se fond par défaut, mais laissé au défaut implicite de SwiftUI, un ancêtre qui pose
@@ -310,9 +333,9 @@ struct SidebarView: View {
           // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
           Group {
             ForEach(project.activeLists) { list in
-              listRow(list, offsets: offsets)
+              listRow(list)
             }
-            addListRow(project, offsets: offsets)
+            addListRow(project)
           }
           .transition(.opacity)
         }
@@ -323,15 +346,8 @@ struct SidebarView: View {
     // Placeholder du trou d'insertion, derrière les lignes (visible seulement dans l'écart ouvert).
     // MÊME rectangle que la surbrillance de sélection d'une ligne (`sidebarRow` : même couleur,
     // même rayon, même gabarit mesuré) — juste vide, sans anneau ni titre.
-    .background(alignment: .topLeading) {
-      if let layout, let r = placeholderRect(layout: layout) {
-        RoundedRectangle(cornerRadius: rowRadius, style: .continuous)
-          .fill(rowSelectionFill)
-          .frame(width: r.width, height: r.height)
-          .offset(x: r.minX, y: r.minY)
-          .allowsHitTesting(false)
-      }
-    }
+    // Le rectangle se lit DANS le modificateur, jamais ici (cf. `SidebarDragMotion`).
+    .modifier(SidebarReorderPlaceholder(motion: motion))
     // Gel des cadres pendant le drag : réinjecter des cadres déjà décalés relancerait la boucle
     // offset→cadre→offset (même piège que côté TaskListView).
     .onPreferenceChange(RowFrameKey.self) { frames in
@@ -416,7 +432,7 @@ struct SidebarView: View {
       }
   }
 
-  private func projectRow(_ project: Project, offsets: [RowKey: CGFloat]) -> some View {
+  private func projectRow(_ project: Project) -> some View {
     let id = project.persistentModelID
     let row = sidebarRow(
       id: id, isSelected: { selection == .project(project) }, verticalPadding: 5
@@ -497,7 +513,7 @@ struct SidebarView: View {
 
     return reorderable(
       dropTarget(rowAndPalette, SidebarFiling.dropRow(for: project)),
-      key: .project(id), id: id, isProject: true, offsets: offsets)
+      key: .project(id), id: id, isProject: true)
   }
 
   /// Ouvrir et fermer la palette passent par la MUTATION enveloppée, jamais par un
@@ -514,7 +530,7 @@ struct SidebarView: View {
 
   /// L'anneau, le badge et « Archiver » lisent `tally` dans leurs PROPRES vues, jamais ici : lu
   /// dans cette fonction, le compte abonnerait tout le corps de la sidebar (cf. `SidebarTally`).
-  private func listRow(_ list: TodoList, offsets: [RowKey: CGFloat]) -> some View {
+  private func listRow(_ list: TodoList) -> some View {
     let id = list.persistentModelID
     let row = sidebarRow(id: id, isSelected: { selection == .list(list) }) {
       navigate(to: .list(list))
@@ -546,12 +562,12 @@ struct SidebarView: View {
     // cadre qui dimensionne le placeholder → il coïncide pile avec une liste sélectionnée.
     return reorderable(
       dropTarget(row, SidebarFiling.dropRow(for: list)),
-      key: .list(id), id: id, isProject: false, offsets: offsets
+      key: .list(id), id: id, isProject: false
     )
     .padding(.leading, 18)
   }
 
-  private func addListRow(_ project: Project, offsets: [RowKey: CGFloat]) -> some View {
+  private func addListRow(_ project: Project) -> some View {
     let button = Button {
       addList(to: project)
     } label: {
@@ -572,7 +588,7 @@ struct SidebarView: View {
     // projet tiré, et sa hauteur doit entrer dans les écarts. Pendant N'IMPORTE QUEL drag (liste
     // ou projet), toutes les rangées « + Nouvelle liste » s'effacent — elles encombreraient le
     // déplacement. `opacity` (et pas un retrait) : elles gardent leur place dans le calcul d'écart.
-    return measured(button, key: .addList(project.persistentModelID), offsets: offsets)
+    return measured(button, key: .addList(project.persistentModelID))
       .opacity(dragID != nil ? 0 : 1)
       .animation(.easeInOut(duration: 0.2), value: dragID != nil)
   }
@@ -852,6 +868,7 @@ struct SidebarView: View {
     // On ne retient que les IDENTIFIANTS des rappels, pas les tâches : de simples chaînes, qui
     // survivent à ce que la cascade efface. Lues ici, tant que tout est debout.
     let doomedItems = RemindersService.appleIdentifiers(of: project.lists.flatMap(\.tasks))
+    let coverID = project.uuid
 
     let hitsSelection: Bool =
       switch selection {
@@ -863,7 +880,17 @@ struct SidebarView: View {
     // `deleteCascadeAndSave` et pas `delete` + `save` : c'est la cascade la plus profonde de l'app,
     // et l'`UndoManager` branché sur le contexte la fait tomber pendant l'enregistrement. Le
     // pourquoi, avec la mesure, est en tête du helper.
-    modelContext.deleteCascadeAndSave(project)
+    // Enregistrement raté : rappels et couverture attendent le prochain enregistrement réussi —
+    // le projet est encore sur le disque, il ne doit rien perdre d'ici là.
+    guard modelContext.deleteCascadeAndSave(project) else {
+      let service = remindersService
+      let covers = covers
+      modelContext.runAfterNextSave {
+        service.forgetAppleItems(doomedItems)
+        covers.remove(for: coverID)
+      }
+      return
+    }
     // EventKit APRÈS, jamais pendant : effacer un rappel fait poster `.EKEventStoreChanged`, qui
     // relance la synchro, qui réenregistre le MÊME contexte SwiftData. Écrire dans un contexte
     // pendant qu'on l'enregistre n'a rien à faire là — mais que ce soit clair : ce n'est PAS ce qui
@@ -871,6 +898,8 @@ struct SidebarView: View {
     // crash est resté identique, à la ligne près. La vraie cause était l'annulation, cf.
     // `deleteCascadeAndSave`.
     remindersService.forgetAppleItems(doomedItems)
+    // La couverture aussi, APRÈS l'enregistrement : c'est le seul chemin qui supprime un projet.
+    covers.remove(for: coverID)
   }
 
   private func delete(_ list: TodoList) {
@@ -921,9 +950,7 @@ struct SidebarView: View {
   // changé de parent), puis les décalages retombent à 0 : rien ne saute.
 
   /// Enveloppe mesure + décalage d'une ligne NON empoignable (la rangée « + »), sans geste.
-  private func measured(_ content: some View, key: RowKey, offsets: [RowKey: CGFloat])
-    -> some View
-  {
+  private func measured(_ content: some View, key: RowKey) -> some View {
     content
       .background {
         GeometryReader { g in
@@ -932,12 +959,12 @@ struct SidebarView: View {
         }
       }
       .opacity(folding(key) ? 0 : 1)
-      .offset(offset(for: key, offsets: offsets))
-      .zIndex(draggedKeys.contains(key) ? 1 : 0)
-      .animation(
-        draggedKeys.contains(key) ? nil : .snappy(duration: 0.22),
-        value: offset(for: key, offsets: offsets)
+      // Le décalage se lit DANS le modificateur, jamais ici : `draggedKeys` ne change qu'à
+      // l'empoignade et au dépôt, `motion` à chaque image (cf. `SidebarDragMotion`).
+      .modifier(
+        SidebarRowDragOffset(motion: motion, key: key, lifted: draggedKeys.contains(key))
       )
+      .zIndex(draggedKeys.contains(key) ? 1 : 0)
       .animation(.easeInOut(duration: 0.2), value: folding(key))
   }
 
@@ -951,15 +978,14 @@ struct SidebarView: View {
 
   /// Idem `measured`, plus le soulevé (ombre/échelle de la ligne empoignée) et le geste de drag.
   private func reorderable(
-    _ content: some View, key: RowKey, id: PersistentIdentifier, isProject: Bool,
-    offsets: [RowKey: CGFloat]
+    _ content: some View, key: RowKey, id: PersistentIdentifier, isProject: Bool
   ) -> some View {
     let grabbed = dragID == id
     // `simultaneousGesture` + `minimumDistance` : un simple clic (sélection) et le double-clic
     // (renommage) posés par `sidebarRow` restent prioritaires ; le drag ne s'arme qu'au-delà du
     // seuil de mouvement. Sur macOS, un glisser dans une ScrollView ne la fait pas défiler → aucun
     // conflit avec le scroll.
-    return measured(content, key: key, offsets: offsets)
+    return measured(content, key: key)
       .scaleEffect(grabbed ? 1.02 : 1)
       .shadow(
         color: .black.opacity(grabbed ? 0.18 : 0), radius: grabbed ? 8 : 0, y: grabbed ? 4 : 0
@@ -977,7 +1003,13 @@ struct SidebarView: View {
           draggedKeys = groupKeys(id: id, isProject: isProject)
         }
         guard dragID == id else { return }
-        dragOffset = value.translation
+        // Le plan de l'image se calcule ICI, une fois, et part dans `motion` : c'est ce qui évite de
+        // le recalculer dans le corps de la sidebar — donc de le rejouer en entier.
+        let layout = dragLayout(translation: value.translation.height)
+        motion.update(
+          translation: value.translation,
+          offsets: layout?.offsets() ?? [:],
+          placeholder: layout.flatMap(placeholderRect))
       }
       .onEnded { _ in
         guard dragID == id else { return }
@@ -1040,7 +1072,7 @@ struct SidebarView: View {
   /// L'arithmétique (repli, écartement, trou) vit dans `ReorderLayout`, partagée avec la page d'une
   /// liste : ce qui reste ici est ce que la sidebar SEULE sait — quelles lignes forment le groupe
   /// tiré, et où il a le droit de se poser (cf. `projectInsert` / `listInsert`).
-  private func dragLayout() -> ReorderLayout<RowKey>? {
+  private func dragLayout(translation: CGFloat) -> ReorderLayout<RowKey>? {
     guard dragID != nil, !draggedKeys.isEmpty,
       let groupRect = rect(of: draggedKeys),
       let firstFrame = rowFrames[draggedKeys[0]]
@@ -1054,7 +1086,7 @@ struct SidebarView: View {
     // le groupe se confond avec sa ligne, et le repli vaut donc 0 de lui-même.
     let collapse = groupRect.height - firstFrame.height
     // Centre de ce qui VOYAGE, sous le curseur.
-    let center = firstFrame.midY + dragOffset.height
+    let center = firstFrame.midY + translation
     let insert =
       dragIsProject
       ? projectInsert(center: center, others: others, collapse: collapse, origin: origin)
@@ -1118,13 +1150,6 @@ struct SidebarView: View {
     return ReorderTarget.byBlockStart(center: center, blocks: blocks, fallback: others.count)
   }
 
-  /// Le groupe tiré suit le curseur ; les autres prennent le décalage calculé une fois pour toutes
-  /// par `ReorderLayout.offsets()` (cf. `projectsGroup`).
-  private func offset(for key: RowKey, offsets: [RowKey: CGFloat]) -> CGSize {
-    if draggedKeys.contains(key) { return dragOffset }
-    return CGSize(width: 0, height: offsets[key] ?? 0)
-  }
-
   /// Rectangle du trou d'insertion, dans l'espace de la sidebar. Présent DÈS l'empoignade, à
   /// l'emplacement d'origine : la ligne s'en détache en suivant le curseur, le trou reste visible et
   /// se déplace au fil du drag. Sa hauteur est celle de ce qui voyage, sa largeur celle de la ligne
@@ -1141,7 +1166,7 @@ struct SidebarView: View {
   /// le réordonnancement et la retombée des offsets se produisent dans le même pas : les lignes sont
   /// déjà à leur cible, la bascule ordre↔offset ne saute pas (même mécanique que TaskListView).
   private func commitDrag() {
-    let layout = dragLayout()
+    let layout = dragLayout(translation: motion.translation.height)
     let movedID = dragID
     let isProject = dragIsProject
     withAnimation(.snappy(duration: 0.22)) {
@@ -1153,7 +1178,7 @@ struct SidebarView: View {
         }
       }
       dragID = nil
-      dragOffset = .zero
+      motion.clear()
       draggedKeys = []
     }
     try? modelContext.save()
@@ -1202,6 +1227,48 @@ extension View {
   }
 }
 
+/// Le décalage d'une ligne de la sidebar pendant un glissement, lu DANS le modificateur.
+///
+/// La différence avec un `.offset(…)` écrit dans le corps de la sidebar est tout le sujet : ici
+/// `content` est un jeton opaque, donc le contenu de la rangée n'est pas reconstruit quand le
+/// décalage change (cf. `SidebarDragMotion`, et `ListRowDragOffset` pour la page d'une liste).
+private struct SidebarRowDragOffset<Key: Hashable>: ViewModifier {
+  let motion: SidebarDragMotion<Key>
+  let key: Key
+  /// La ligne fait partie du groupe tiré : elle colle au curseur, sans animation — une ligne qui le
+  /// « rattrape » avec 0,22 s de retard donne l'impression que le geste patine.
+  let lifted: Bool
+
+  func body(content: Content) -> some View {
+    let offset = motion.offset(of: key, lifted: lifted)
+    return
+      content
+      .offset(offset)
+      .animation(lifted ? nil : .snappy(duration: 0.22), value: offset)
+  }
+}
+
+/// Le trou d'insertion du glissement, derrière les lignes (visible seulement dans l'écart ouvert).
+/// Même règle que `SidebarRowDragOffset` : le rectangle se lit ici, pas dans le corps.
+///
+/// MÊME rectangle que la surbrillance de sélection d'une ligne (`sidebarRow` : même couleur, même
+/// rayon, même gabarit mesuré) — juste vide, sans anneau ni titre.
+private struct SidebarReorderPlaceholder<Key: Hashable>: ViewModifier {
+  let motion: SidebarDragMotion<Key>
+
+  func body(content: Content) -> some View {
+    content.background(alignment: .topLeading) {
+      if let r = motion.placeholder {
+        RoundedRectangle(cornerRadius: rowRadius, style: .continuous)
+          .fill(rowSelectionFill)
+          .frame(width: r.width, height: r.height)
+          .offset(x: r.minX, y: r.minY)
+          .allowsHitTesting(false)
+      }
+    }
+  }
+}
+
 /// Les compteurs de la barre latérale — anneaux, badges, « Aujourd'hui » —, tenus HORS de son corps.
 ///
 /// Ce corps construit TOUTES les rangées, et il lisait `allTasks` : chaque écriture sur n'importe
@@ -1223,8 +1290,18 @@ private final class SidebarTally {
 ///
 /// Un `@Query` et pas les tâches de chaque liste par la relation : essayé et mesuré le 8 octobre
 /// 2026, la relation coûte huit fois le refetch (801 échantillons contre 94 sur le même banc).
-private struct SidebarTallySource: View {
+///
+/// `Equatable` par l'IDENTITÉ de `tally` : sans ça, chaque rendu de la sidebar (un survol, une
+/// sélection) le rejouait et recomptait toute la table — ~7 ms par passe mesuré le 29 octobre
+/// 2026. Son `@Query`, lui, l'invalide toujours quand une tâche change.
+private struct SidebarTallySource: View, Equatable {
   let tally: SidebarTally
+  let day: Date
+  let resetsDaily: Bool
+
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.tally === rhs.tally && lhs.day == rhs.day && lhs.resetsDaily == rhs.resetsDaily
+  }
   @Query private var allTasks: [TaskItem]
 
   var body: some View {

@@ -175,6 +175,12 @@ struct MainMenuCommands: Commands {
     // ⌘⇧1, puisque le chiffre y est en majuscule. Le défaut stocke « & », « é », « " »… : le menu
     // les affiche tels quels, et la touche répond seule, comme dans Chrome ou Firefox.
     CommandMenu("Aller") {
+      // Dans l'ordre de la barre latérale : Projets en tête (la vue d'ensemble d'abord, puis le
+      // détail), Pomodoro en pied. Les raccourcis, eux, ne suivent pas cet ordre : Projets a ⌘6
+      // parce que Pomodoro avait déjà ⌘5 avant que cette vue existe, et on ne déplace pas un
+      // raccourci déjà appris.
+      Button("Projets") { AppCommand.reveal(.projects) }
+        .keyboardShortcut("6", modifiers: .command)
       Button(SmartList.all.label) { AppCommand.reveal(.smartList(.all)) }
         .keyboardShortcut("1", modifiers: .command)
       Button(SmartList.today.label) { AppCommand.reveal(.smartList(.today)) }
