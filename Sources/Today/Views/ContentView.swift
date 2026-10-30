@@ -347,6 +347,7 @@ struct ContentView: View {
       // Le même signal recolle les raccourcis d'une liste renommée tout de suite, pas seulement
       // quand les Réglages passent dessus (cf. `reconcileShortcuts`) : UN abonnement, pas deux.
       .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+        if selection?.pointsAtDeletedModel == true { selection = .smartList(.all) }
         syncWithReminders()
         reconcileShortcuts()
       }

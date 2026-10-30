@@ -170,6 +170,18 @@ enum SidebarSelection: Hashable {
   case projects
   case pomodoro
 
+  /// La destination désigne-t-elle un objet supprimé ? La barre latérale déplace sa sélection
+  /// AVANT de supprimer ; une suppression venue d'ailleurs (le serveur MCP) ne le peut pas, et la
+  /// page continuerait d'afficher un fantôme sur lequel taper créerait des tâches dans le vide.
+  var pointsAtDeletedModel: Bool {
+    switch self {
+    case .project(let project): project.isDeleted || project.modelContext == nil
+    case .list(let list):
+      list.isDeleted || list.modelContext == nil || list.project?.isDeleted == true
+    default: false
+    }
+  }
+
   /// La couleur que la fenêtre pousse dans l'environnement pour la destination courante
   /// (cf. `EnvironmentValues.pageTint`). Une liste hérite de son projet : c'est déjà la couleur que
   /// portent son anneau de progression et sa pastille de provenance, elle ne peut pas en avoir deux.

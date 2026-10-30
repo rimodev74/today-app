@@ -260,8 +260,41 @@ struct MCPRouter {
     return try saved(.object(["id": .string(id.uuidString), "updated": .bool(true)]))
   }
 
+  /// `deleteCascadeAndSave` pour les QUATRE types, tâche comprise : ce que le MCP supprime n'a
+  /// peut-être jamais été rendu (des sous-tâches jamais lues), et c'est l'instantané manquant qui
+  /// fait tomber SwiftData avec l'`UndoManager` branché. Identifiants Apple lus AVANT la mutation.
   private func deleteItem(_ args: JSONValue) throws -> JSONValue {
-    throw ToolError("Pas encore disponible.")
+    let id = try uuid(args, "id")
+    let ok: Bool
+    if let project = fetch(Project.self, #Predicate { $0.uuid == id }) {
+      ok = project.delete(
+        in: context, forget: effects.forgetAppleItems, removeCover: effects.removeCover)
+    } else if let list = fetch(TodoList.self, #Predicate { $0.uuid == id }) {
+      // La boîte de réception est un singleton que l'app recrée au lancement : la supprimer
+      // effacerait toutes les tâches non classées pour rien.
+      if list.isInbox { throw ToolError("La boîte de réception ne se supprime pas.") }
+      ok = cascade(list, apple: RemindersService.appleIdentifiers(of: list.tasks))
+    } else if let task = fetch(TaskItem.self, #Predicate { $0.uuid == id }) {
+      ok = cascade(task, apple: RemindersService.appleIdentifiers(of: [task]))
+    } else if let sub = fetch(Subtask.self, #Predicate { $0.uuid == id }) {
+      ok = cascade(sub, apple: [])
+    } else {
+      throw ToolError("Aucun élément avec l'id \(id.uuidString).")
+    }
+    guard ok else {
+      throw ToolError("Enregistrement en échec : la suppression sera réessayée par l'app.")
+    }
+    return .object(["id": .string(id.uuidString), "deleted": .bool(true)])
+  }
+
+  private func cascade(_ model: some PersistentModel, apple: [String]) -> Bool {
+    let forget = effects.forgetAppleItems
+    guard context.deleteCascadeAndSave(model) else {
+      if !apple.isEmpty { context.runAfterNextSave { forget(apple) } }
+      return false
+    }
+    if !apple.isEmpty { forget(apple) }
+    return true
   }
 
   // MARK: - Aides

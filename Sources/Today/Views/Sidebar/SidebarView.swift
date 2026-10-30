@@ -868,18 +868,6 @@ struct SidebarView: View {
     // d'afficher une liste qui n'existe plus — un fantôme lisible (SwiftData sert l'ancien
     // instantané au lieu de planter) sur lequel taper créait des tâches dans le vide.
     let doomed = Set(project.lists.map(\.persistentModelID))
-    // TOUT ce qu'on aura besoin de lire dans SwiftData est lu ICI, avant la moindre mutation.
-    //
-    // La cascade la plus large de l'app : un projet emporte ses listes, qui emportent leurs tâches.
-    // Leurs rappels Apple doivent partir avec elles — sans ça ils restent dans la liste-pont sans
-    // être rattachés à personne, et reviennent s'afficher dans les sections « Rappels » de l'app
-    // comme si les tâches y avaient été envoyées.
-    //
-    // On ne retient que les IDENTIFIANTS des rappels, pas les tâches : de simples chaînes, qui
-    // survivent à ce que la cascade efface. Lues ici, tant que tout est debout.
-    let doomedItems = RemindersService.appleIdentifiers(of: project.lists.flatMap(\.tasks))
-    let coverID = project.uuid
-
     let hitsSelection: Bool =
       switch selection {
       case .project(let p): p.persistentModelID == project.persistentModelID
@@ -887,29 +875,10 @@ struct SidebarView: View {
       default: false
       }
     if hitsSelection { selection = .smartList(.all) }
-    // `deleteCascadeAndSave` et pas `delete` + `save` : c'est la cascade la plus profonde de l'app,
-    // et l'`UndoManager` branché sur le contexte la fait tomber pendant l'enregistrement. Le
-    // pourquoi, avec la mesure, est en tête du helper.
-    // Enregistrement raté : rappels et couverture attendent le prochain enregistrement réussi —
-    // le projet est encore sur le disque, il ne doit rien perdre d'ici là.
-    guard modelContext.deleteCascadeAndSave(project) else {
-      let service = remindersService
-      let covers = covers
-      modelContext.runAfterNextSave {
-        service.forgetAppleItems(doomedItems)
-        covers.remove(for: coverID)
-      }
-      return
-    }
-    // EventKit APRÈS, jamais pendant : effacer un rappel fait poster `.EKEventStoreChanged`, qui
-    // relance la synchro, qui réenregistre le MÊME contexte SwiftData. Écrire dans un contexte
-    // pendant qu'on l'enregistre n'a rien à faire là — mais que ce soit clair : ce n'est PAS ce qui
-    // faisait planter l'app le 6 août 2026. Cette piste-là a été suivie et corrigée d'abord, et le
-    // crash est resté identique, à la ligne près. La vraie cause était l'annulation, cf.
-    // `deleteCascadeAndSave`.
-    remindersService.forgetAppleItems(doomedItems)
-    // La couverture aussi, APRÈS l'enregistrement : c'est le seul chemin qui supprime un projet.
-    covers.remove(for: coverID)
+    // Rappels, événements et couverture partent avec lui, APRÈS l'enregistrement : cf.
+    // `Project.delete(in:forget:removeCover:)`, chemin partagé avec le serveur MCP.
+    project.delete(
+      in: modelContext, forget: remindersService.forgetAppleItems, removeCover: covers.remove(for:))
   }
 
   private func delete(_ list: TodoList) {

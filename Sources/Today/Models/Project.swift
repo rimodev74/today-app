@@ -57,6 +57,37 @@ final class Project {
     return list
   }
 
+  /// Supprime le projet et tout ce qu'il contient, puis ce qui vit HORS de la base : rappels et
+  /// événements Apple de ses tâches (`forget`), couverture sur le disque (`removeCover`).
+  ///
+  /// Seul chemin de suppression d'un projet : la barre latérale et le MCP. Il vivait en privé dans
+  /// `SidebarView` : un second appelant aurait laissé couvertures et rappels orphelins.
+  /// `deleteCascadeAndSave` (cascade la plus large de l'app, cf. son en-tête), identifiants lus
+  /// AVANT la mutation ; enregistrement raté ⇒ les effets attendent le prochain réussi.
+  @discardableResult
+  func delete(
+    in context: ModelContext, forget: @escaping ([String]) -> Void,
+    removeCover: @escaping (UUID) -> Void
+  ) -> Bool {
+    let doomedItems = RemindersService.appleIdentifiers(of: lists.flatMap(\.tasks))
+    let coverID = uuid
+    guard context.deleteCascadeAndSave(self) else {
+      context.runAfterNextSave {
+        forget(doomedItems)
+        removeCover(coverID)
+      }
+      return false
+    }
+    // EventKit APRÈS, jamais pendant : effacer un rappel fait poster `.EKEventStoreChanged`, qui
+    // relance la synchro, qui réenregistre le MÊME contexte SwiftData. Ce n'est PAS ce qui faisait
+    // planter l'app le 6 août 2026 (la vraie cause était l'annulation, cf.
+    // `deleteCascadeAndSave`), mais écrire dans un contexte pendant qu'on l'enregistre n'a rien à
+    // faire là.
+    forget(doomedItems)
+    removeCover(coverID)
+    return true
+  }
+
   /// Progression du JOUR du projet = celle de toutes ses tâches confondues, en-têtes exclues. Même
   /// règle que `TodoList.progress` — ancrée sur le jour calendaire, pas sur `CompletedTaskRetention`.
   /// Plus affichée depuis que la page projet montre l'avancement CUMULÉ (`ProjectBoard.total`) ;

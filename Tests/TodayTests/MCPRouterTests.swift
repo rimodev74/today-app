@@ -198,4 +198,56 @@ final class MCPRouterTests: XCTestCase {
     XCTAssertTrue(isError)
     XCTAssertEqual(count(TaskItem.self), 1)
   }
+
+  // MARK: - Suppression
+
+  func testDeleteTaskCascadesSubtasks() {
+    let list = makeList(makeProject())
+    let id = call(
+      "create_task",
+      ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("a"), .string("b")])]
+    ).0["id"]!
+    try! context.fetch(FetchDescriptor<TaskItem>()).first!.reminderIdentifier = "r1"
+    let (_, isError) = call("delete_item", ["id": id])
+    XCTAssertFalse(isError)
+    XCTAssertEqual(count(TaskItem.self), 0)
+    XCTAssertEqual(count(Subtask.self), 0)
+    XCTAssertEqual(forgotten, [["r1"]])
+  }
+
+  func testDeleteListCascades() {
+    let list = makeList(makeProject())
+    call("create_task", ["list_id": .string(list), "title": .string("T")])
+    XCTAssertFalse(call("delete_item", ["id": .string(list)]).1)
+    XCTAssertEqual(count(TodoList.self), 0)
+    XCTAssertEqual(count(TaskItem.self), 0)
+  }
+
+  func testDeleteProjectCascadesAndRemovesCover() {
+    let project = makeProject()
+    call("create_task", ["list_id": .string(makeList(project)), "title": .string("T")])
+    XCTAssertFalse(call("delete_item", ["id": .string(project)]).1)
+    XCTAssertEqual(count(Project.self), 0)
+    XCTAssertEqual(count(TodoList.self), 0)
+    XCTAssertEqual(count(TaskItem.self), 0)
+    XCTAssertEqual(removedCovers.map(\.uuidString), [project])
+  }
+
+  func testDeleteRefusesInbox() {
+    let inbox = TodoList(title: "Tâches")
+    inbox.isInbox = true
+    context.insert(inbox)
+    XCTAssertTrue(call("delete_item", ["id": .string(inbox.uuid.uuidString)]).1)
+    XCTAssertEqual(count(TodoList.self), 1)
+  }
+
+  func testSelectionNoticesDeletedList() {
+    let list = makeList(makeProject())
+    let model = try! context.fetch(FetchDescriptor<TodoList>()).first!
+    let selection = SidebarSelection.list(model)
+    XCTAssertFalse(selection.pointsAtDeletedModel)
+    call("delete_item", ["id": .string(list)])
+    XCTAssertTrue(selection.pointsAtDeletedModel)
+    XCTAssertFalse(SidebarSelection.projects.pointsAtDeletedModel)
+  }
 }
