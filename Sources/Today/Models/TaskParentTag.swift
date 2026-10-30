@@ -22,7 +22,7 @@ struct TaskParentTag: Equatable {
   /// Teinte de la pastille : celle du projet de la liste. `nil` pour une liste hors projet — une
   /// liste ne porte pas de couleur à elle (cf. `Project.color`) — et pour un projet dont la couleur
   /// n'est pas choisie : la pastille se peint alors en gris.
-  let color: PaletteColor?
+  let color: ProjectColor?
 
   init?(of task: TaskItem) {
     guard let list = task.list, !list.isInbox, !list.title.isEmpty else { return nil }

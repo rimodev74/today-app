@@ -14,8 +14,8 @@ final class Project {
   /// Repli du dossier dans la sidebar. Dans le modèle et pas en `@State` : l'état doit survivre au
   /// relancement, et c'est le seul stockage déjà persistant indexé par projet.
   var isCollapsed: Bool = false
-  /// Stocke `PaletteColor.rawValue` — voir `color` ci-dessous, même pattern que
-  /// `TaskItem.headerColorRaw`. Optionnel : `nil` = teinte d'accent du système.
+  /// Stocke `ProjectColor.raw` — un nom de la palette (`"blue"`, comme `TaskItem.headerColorRaw`)
+  /// ou une couleur libre (`"#3A7BD5"`). Optionnel : `nil` = teinte d'accent du système.
   var colorRaw: String?
   @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
 
@@ -29,9 +29,9 @@ final class Project {
   /// La teinte du projet : son icône dans la sidebar, et les anneaux de progression de TOUTES ses
   /// listes (une liste ne porte pas de couleur à elle — elle hérite de son projet, sinon deux
   /// endroits diraient la même chose et finiraient par se contredire).
-  var color: PaletteColor? {
-    get { colorRaw.flatMap(PaletteColor.init(rawValue:)) }
-    set { colorRaw = newValue?.rawValue }
+  var color: ProjectColor? {
+    get { colorRaw.flatMap(ProjectColor.init(raw:)) }
+    set { colorRaw = newValue?.raw }
   }
 
   /// TOUTES les listes, archivées comprises, dans l'ordre manuel. Ce que la barre latérale, la

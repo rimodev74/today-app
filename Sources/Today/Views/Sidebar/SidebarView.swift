@@ -506,8 +506,18 @@ struct SidebarView: View {
     let rowAndPalette = VStack(alignment: .leading, spacing: 0) {
       row
       if palettePickerID == id {
-        PalettePicker(selection: Bindable(project).color, dismiss: closePalette)
-          .transition(.opacity)
+        PalettePicker(
+          // La palette ne voit que SES couleurs : une couleur libre en place n'y coche rien, c'est
+          // la pastille « Personnalisée… » qui la montre.
+          selection: Binding(
+            get: { project.color?.palette },
+            set: { project.color = $0.map(ProjectColor.palette) }),
+          custom: PalettePicker.CustomSlot(
+            current: project.color?.palette == nil ? project.color?.color : nil,
+            choose: { ProjectColorPanel.shared.open(for: project, in: modelContext) }),
+          dismiss: closePalette
+        )
+        .transition(.opacity)
       }
     }
 

@@ -17,12 +17,12 @@ final class TaskParentTagTests: XCTestCase {
   /// pourtant tout ce qu'on demande à une pastille de provenance.
   func testTheListNamesAndTheProjectTints() {
     let project = Project(title: "Refonte site")
-    project.color = .blue
+    project.color = .palette(.blue)
     let list = TodoList(title: "Maquettes", project: project)
     let tag = TaskParentTag(of: TaskItem(title: "Appeler le client", list: list))
 
     XCTAssertEqual(tag?.title, "Maquettes")
-    XCTAssertEqual(tag?.color, .blue)
+    XCTAssertEqual(tag?.color, .palette(.blue))
   }
 
   /// Une liste hors projet ne porte pas de couleur à elle : la pastille se peint en gris.

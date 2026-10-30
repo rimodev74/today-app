@@ -41,16 +41,28 @@ import SwiftUI
 /// raison.
 struct PalettePicker: View {
   @Binding var selection: PaletteColor?
+  /// La pastille « Personnalisée… », pour un porteur qui accepte une couleur libre (un projet).
+  /// `nil` = palette seule (une en-tête de section).
+  var custom: CustomSlot? = nil
   /// Refermer est au porteur : c'est lui qui tient le booléen de révélation.
   var dismiss: () -> Void
 
+  struct CustomSlot {
+    /// La couleur libre en place, `nil` si le porteur est sur la palette ou sans couleur.
+    let current: Color?
+    /// Ouvre le sélecteur de couleur de macOS.
+    let choose: () -> Void
+  }
+
   // Assez petites pour tenir dans une sidebar à sa largeur MINIMALE (200 pt, cf.
-  // `ContentView.minSidebarWidth`) : 8 pastilles + le séparateur + les marges y tombent à ~185 pt.
-  // ponytail: si la palette gagne une couleur, elle déborde — passer en grille deux rangées.
-  private static let dot: CGFloat = 13
+  // `ContentView.minSidebarWidth`) : 8 pastilles + le séparateur + les marges y tombent à ~185 pt ;
+  // avec la neuvième (« Personnalisée… »), pastilles et écarts se resserrent d'un point pour
+  // rester sous cette largeur (~183 pt).
+  // ponytail: si la palette gagne encore une couleur, elle déborde — passer en grille deux rangées.
+  private var dot: CGFloat { custom == nil ? 13 : 12 }
 
   var body: some View {
-    HStack(spacing: 3) {
+    HStack(spacing: custom == nil ? 3 : 2) {
       // « Par défaut » d'abord, à gauche : c'est l'état de départ de tout projet, et le seul qu'on
       // ne peut pas désigner par une couleur. Le cercle barré dit « aucune », pas « noir ».
       button(color: nil) {
@@ -62,13 +74,41 @@ struct PalettePicker: View {
               .foregroundStyle(.tertiary)
           }
       }
-      Divider().frame(height: Self.dot)
+      Divider().frame(height: dot)
       ForEach(PaletteColor.allCases) { option in
         button(color: option) { Circle().fill(option.color) }
       }
+      if let custom { customButton(custom) }
     }
     .padding(.horizontal, 6)
     .padding(.vertical, 4)
+  }
+
+  /// La couleur libre : remplie de sa couleur quand elle est en place (et cerclée, comme une
+  /// pastille choisie), arc-en-ciel sinon — le repère du sélecteur de couleur de macOS.
+  private func customButton(_ custom: CustomSlot) -> some View {
+    Button {
+      dismiss()
+      custom.choose()
+    } label: {
+      Group {
+        if let current = custom.current {
+          Circle().fill(current)
+        } else {
+          Circle().fill(
+            AngularGradient(
+              colors: [.red, .orange, .yellow, .green, .blue, .purple, .red], center: .center))
+        }
+      }
+      .frame(width: dot, height: dot)
+      .padding(2.5)
+      .overlay {
+        Circle().strokeBorder(Color.accentColor, lineWidth: custom.current != nil ? 1.5 : 0)
+      }
+      .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .help("Couleur personnalisée…")
   }
 
   /// Une pastille : le rond, l'anneau de sélection, l'infobulle et le clic. Écrit une fois — les
@@ -81,7 +121,7 @@ struct PalettePicker: View {
       dismiss()
     } label: {
       fill()
-        .frame(width: Self.dot, height: Self.dot)
+        .frame(width: dot, height: dot)
         // L'anneau se pose EN DEHORS du rond (padding + overlay au-delà), sinon il rogne la
         // couleur qu'il est censé désigner et la pastille choisie paraît plus petite que les autres.
         .padding(2.5)
