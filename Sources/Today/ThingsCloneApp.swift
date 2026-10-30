@@ -33,9 +33,8 @@ struct TodayApp: App {
     ) { _ in
       MainActor.assumeIsolated { server.stop() }
     }
-    NSApplication.shared.setActivationPolicy(.regular)
-    // Cf. `AppCommand.activate` : l'activation coopérative peut être refusée.
-    NSApplication.shared.activate(ignoringOtherApps: true)
+    // Pose aussi l'activation : cf. `AppCommand.activate`, la coopérative peut être refusée.
+    DockIcon.apply()
     _ = SparkleUpdater.shared
     // Saisie rapide : le raccourci global vit indépendamment des fenêtres (il doit répondre app en
     // arrière-plan), il est donc posé ici et pas dans une vue.
@@ -334,5 +333,21 @@ enum MenuBarTimerImage {
     }
     image.isTemplate = true  // suit la couleur de la barre : clair/sombre et état sélectionné
     return image
+  }
+}
+
+/// L'icône du Dock, masquable (Réglages ▸ Général). Masquée, l'app passe en `.accessory` : elle
+/// garde ses fenêtres, mais perd Dock, ⌘⇥ et sa barre de menus affichée. On la rouvre par l'icône
+/// de barre de menus (« Ouvrir Today »), le raccourci global, ou Spotlight — qui rejoue le reopen.
+@MainActor
+enum DockIcon {
+  static let hiddenKey = "dockIconHidden"
+
+  static var isHidden: Bool { UserDefaults.standard.bool(forKey: hiddenKey) }
+
+  static func apply(hidden: Bool = isHidden) {
+    NSApplication.shared.setActivationPolicy(hidden ? .accessory : .regular)
+    // Changer de politique désactive l'app : la fenêtre en cours (les Réglages) passait derrière.
+    NSApplication.shared.activate(ignoringOtherApps: true)
   }
 }

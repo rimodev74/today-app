@@ -33,6 +33,8 @@ struct QuickPalette {
     /// Aujourd'hui » puisse avoir : le jour est une DATE portée par la tâche, pas un rangement.
     case today
     case list(TodoList)
+    /// La boîte de réception, datée d'un AUTRE jour : ce que vise un raccourci « dem » → `@demain`.
+    case dated(Date)
 
     /// La liste où écrire et la date à poser. `lists` sert à retrouver la boîte de réception, que
     /// ce type ne peut pas connaître seul.
@@ -43,6 +45,7 @@ struct QuickPalette {
       case .inbox: return (lists.first(where: \.isInbox), nil)
       case .today: return (lists.first(where: \.isInbox), calendar.startOfDay(for: now))
       case .list(let list): return (list, nil)
+      case .dated(let day): return (lists.first(where: \.isInbox), calendar.startOfDay(for: day))
       }
     }
 
@@ -52,6 +55,7 @@ struct QuickPalette {
       case .inbox: return SmartList.all.label
       case .today: return SmartList.today.label
       case .list(let list): return list.title.isEmpty ? "Sans titre" : list.title
+      case .dated(let day): return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
       }
     }
   }
@@ -150,7 +154,7 @@ struct QuickPalette {
   /// plupart des appels : un minuteur au repos ne propose rien de plus que ses commandes.
   static func search(
     _ query: String, lists: [TodoList], projects: [Project], tasks: [TaskItem],
-    pomodoro: PomodoroSnapshot? = nil
+    pomodoro: PomodoroSnapshot? = nil, shortcuts: [TextShortcut] = [], now: Date = Date()
   ) -> QuickPalette {
     let needle = fold(query)
     guard !needle.isEmpty else { return QuickPalette(rows: []) }
@@ -224,7 +228,44 @@ struct QuickPalette {
     var makers = places.map(\.make)
     makers.insert(
       contentsOf: commandMakers, at: places.firstIndex { $0.weight == taskWeight } ?? places.count)
-    return QuickPalette(rows: makers.prefix(limit).map { $0() })
+    var rows = makers.prefix(limit).map { $0() }
+    // Un raccourci tapé EN ENTIER passe devant tout : c'est la ligne que ↩ vise d'office. Sans
+    // elle, la recherche ne cherchait que dans les titres et « ajd » ↩ ne faisait rien.
+    if let shortcut = shortcuts.first(where: { fold($0.trigger) == needle }),
+      let row = shortcutRow(shortcut, lists: lists, projects: projects, now: now)
+    {
+      rows.removeAll { $0.id == row.id }
+      rows = Array(([row] + rows).prefix(limit))
+    }
+    return QuickPalette(rows: rows)
+  }
+
+  /// Ce que vise un raccourci : une commande, une liste (un dossier → sa première liste, comme
+  /// `QuickEntry`) ou une date. `nil` si sa cible n'existe plus.
+  private static func shortcutRow(
+    _ shortcut: TextShortcut, lists: [TodoList], projects: [Project], now: Date
+  ) -> Row? {
+    let token = shortcut.expansion
+    if let command = AppCommand(token: token) { return commandRow(command) }
+    if token.hasPrefix("#") {
+      // Même comparaison que `QuickEntry.fold` : sans espaces, un jeton n'en porte jamais.
+      func key(_ text: String) -> String { fold(text).filter { !$0.isWhitespace } }
+      let wanted = key(String(token.dropFirst()))
+      guard !wanted.isEmpty else { return nil }
+      let candidates = lists.filter { !$0.isInbox && $0.project != nil && !$0.isArchived }
+      let list =
+        candidates.first { key($0.title) == wanted }
+        ?? candidates.first { key($0.title).hasPrefix(wanted) }
+        ?? projects.first { key($0.title).hasPrefix(wanted) }?.activeLists.first
+      return list.map(listRow)
+    }
+    guard let day = QuickEntry(parsing: token, now: now).when else { return nil }
+    if Calendar.current.isDate(day, inSameDayAs: now) { return smartRow(.today, target: .today) }
+    let target = TaskTarget.dated(day)
+    return Row(
+      id: AnyHashable("dated-" + token), title: target.label.capitalized, kind: "Date",
+      systemImage: "calendar", detail: nil, isCompleted: false, action: .addTask(target),
+      destination: .smartList(.upcoming))
   }
 
   /// Le poids d'une tâche dans le classement. Nommé parce qu'il sert DEUX fois : à ranger, et à
@@ -239,6 +280,8 @@ struct QuickPalette {
     case .inbox: scoped = lists.first(where: \.isInbox)?.orderedTasks ?? []
     case .today: scoped = TodayPage.build(from: tasks).tasks
     case .list(let list): scoped = list.orderedTasks
+    case .dated(let day):
+      scoped = tasks.filter { $0.when.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }
     }
     return QuickPalette(rows: scoped.filter { !$0.isHeader }.prefix(limit).map(taskRow))
   }

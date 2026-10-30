@@ -38,6 +38,35 @@ final class QuickPaletteTests: XCTestCase {
     palette.rows.first { $0.title == title }?.action
   }
 
+  // MARK: Les raccourcis texte
+
+  /// **Un raccourci tapé en entier passe en TÊTE, et ↩ fait ce qu'il vise.** La recherche ne
+  /// lisait que les titres : « ajd » ↩ ne faisait rien, au mieux cochait une tâche nommée pareil.
+  func testShortcutTriggerLeadsThePalette() {
+    let courses = TodoList(title: "Courses", project: Project(title: "Maison"))
+    let shortcuts = [
+      TextShortcut(trigger: "ajd", expansion: "@today"),
+      TextShortcut(trigger: "dem", expansion: "@demain"),
+      TextShortcut(trigger: "crs", expansion: "#Courses"),
+      TextShortcut(trigger: "op", expansion: "!show"),
+    ]
+    func first(_ query: String) -> QuickPalette.Row? {
+      QuickPalette.search(
+        query, lists: [inbox(), courses], projects: [], tasks: [task("ajd truc")],
+        shortcuts: shortcuts
+      ).rows.first
+    }
+
+    guard case .addTask(.today) = first("ajd")?.action else { return XCTFail("ajd") }
+    guard case .addTask(.dated) = first("DEM")?.action else { return XCTFail("dem") }
+    guard case .addTask(.list(let list)) = first("crs")?.action, list === courses else {
+      return XCTFail("crs")
+    }
+    guard case .run(.show) = first("op")?.action else { return XCTFail("op") }
+    // Un préfixe de déclencheur n'est pas le déclencheur : la recherche ordinaire reprend la main.
+    if case .addTask(.dated) = first("de")?.action { XCTFail("de") }
+  }
+
   // MARK: L'ouverture
 
   /// **La capsule s'ouvre sur une barre NUE.** Rien en dessous tant qu'on n'a rien demandé — et

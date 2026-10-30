@@ -803,7 +803,8 @@ private struct QuickEntryView: View {
     switch step {
     case .search:
       return QuickPalette.search(
-        title, lists: reachable, projects: projects, tasks: allTasks, pomodoro: pomodoroSnapshot)
+        title, lists: reachable, projects: projects, tasks: allTasks, pomodoro: pomodoroSnapshot,
+        shortcuts: shortcuts)
     case .addTask(let target):
       return QuickPalette.inside(target, lists: reachable, tasks: allTasks)
     case .createList(let project):
@@ -1574,6 +1575,8 @@ private struct QuickEntryView: View {
     case .search: return .search
     case .addTask(.inbox): return .addTask(.inbox)
     case .addTask(.today): return .addTask(.today)
+    // La date survit dans `when`, que le brouillon garde à part : seul le libellé du chip se perd.
+    case .addTask(.dated): return .addTask(.inbox)
     case .addTask(.list(let list)): return .addTask(.list(list.persistentModelID))
     case .createList(let project): return .createList(project.persistentModelID)
     }

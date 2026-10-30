@@ -149,6 +149,7 @@ private struct ClaudeCodeSettingsTab: View {
 private struct GeneralSettingsTab: View {
   @Environment(UserProfile.self) private var profile
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
+  @AppStorage(DockIcon.hiddenKey) private var dockIconHidden = false
   @State private var autoCheckUpdates = SparkleUpdater.shared.automaticallyChecksForUpdates
 
   private var version: String {
@@ -170,6 +171,11 @@ private struct GeneralSettingsTab: View {
           }
         }
 
+        Toggle("Masquer l'icône du Dock", isOn: $dockIconHidden)
+          .onChange(of: dockIconHidden) { _, hidden in DockIcon.apply(hidden: hidden) }
+        Text("Today reste ouvrable depuis son icône de barre de menus ou le raccourci de saisie rapide.")
+          .font(.app(.caption))
+          .foregroundStyle(.secondary)
       }
 
       Section("Mises à jour") {

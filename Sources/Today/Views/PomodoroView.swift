@@ -61,6 +61,11 @@ struct PomodoroMenuBarView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
+      // La porte d'entrée quand l'icône du Dock est masquée (cf. `DockIcon`).
+      Button("Ouvrir Today") { AppCommand.show.run() }
+
+      Divider()
+
       Text(timer.phase.label)
         .font(.app(.headline))
       Button(timer.isRunning ? "Pause" : "Démarrer") {
