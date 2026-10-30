@@ -197,6 +197,25 @@ struct HeaderRow: View {
         .focused($titleFocused)
         .allowsHitTesting(isEditing)
         .onSubmit(onEndEditing)
+        // Au repos, c'est un `Text` qu'on voit, comme le titre d'une tâche (cf. `TaskRow.titleText`).
+        // Le champ reste monté ; seule l'opacité bascule.
+        .opacity(isEditing ? 1 : 0)
+        .overlay(alignment: .leading) {
+          Text(task.title.isEmpty ? "Nouvel en-tête" : task.title)
+            .font(.app(.headline))
+            .foregroundStyle(
+              task.title.isEmpty
+                ? AnyShapeStyle(.tertiary)
+                : AnyShapeStyle((task.headerColor?.color ?? Color.accentColor).opacity(0.85))
+            )
+            .lineLimit(1)
+            // Sans transition de contenu : cf. `TaskRow.titleText`.
+            .contentTransition(.identity)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(isEditing ? 0 : 1)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
       Spacer(minLength: 0)
       // MONTÉS au survol seulement, pas cachés par une opacité nulle (même règle que
       // `TaskRow.trailing`) : le ••• est un menu AppKit, une vraie vue native créée pour chaque

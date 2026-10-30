@@ -98,6 +98,8 @@ struct TaskRow: View {
 
   @FocusState private var titleFocused: Bool
   @State private var hovering = false
+  /// La rangée est atténuée le temps de changer de place après une coche (cf. `toggleCompletion`).
+  @State private var relocating = false
   /// Numéro de la session d'édition : le focus du titre, posé en fin d'ouverture, ne se pose que si
   /// la session qui l'a demandé est toujours la bonne (fermeture ou réouverture rapide entre-temps).
   @State private var editSession = 0
@@ -140,18 +142,7 @@ struct TaskRow: View {
     let subtasks = SubtaskTally(task)
     return VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 10) {
-        TaskCheckbox(isCompleted: task.isCompleted) {
-          withAnimation(taskInsert) {
-            task.toggleCompletion()
-            if task.isCompleted {
-              task.list?.moveToEndOfSection(task)
-            } else {
-              task.list?.moveAboveCompleted(task)
-            }
-          }
-          Task { await remindersService.pushCompletion(for: task) }
-          onCompletionChanged()
-        }
+        TaskCheckbox(isCompleted: task.isCompleted, onToggle: toggleCompletion)
         // Durée estimée, à gauche du titre. Rien tant que rien n'est estimé — la page
         // « Aujourd'hui » est le seul endroit qui réclame l'absence de durée.
         if !isEditing, let estimate = Estimate.label(task.estimateMinutes) {
@@ -267,6 +258,8 @@ struct TaskRow: View {
     // d'autant à gauche pour que la case ne BOUGE PAS au clic — la carte s'ouvre autour d'elle, en
     // débordant seulement de ce qu'elle a gagné en respiration.
     .padding(.leading, isEditing ? taskRowColumn - Self.editInset : taskContentColumn)
+    // La rangée ENTIÈRE s'atténue pendant qu'elle change de place (cf. `toggleCompletion`).
+    .opacity(relocating ? Self.relocatingOpacity : 1)
     .contentShape(Rectangle())
     // Survol : révèle le ••• à droite. Clic droit : même menu que le •••, via contentShape ;
     // bascule aussi en édition, via `RightClickObserver` posé par la page (cf. ce type).
@@ -375,6 +368,45 @@ struct TaskRow: View {
 
   // MARK: Titre
 
+  /// La coche : la rangée GLISSE à sa nouvelle place, atténuée le temps du trajet — elle passe
+  /// « derrière » les autres au lieu de les recouvrir de son texte — puis retrouve sa pleine opacité
+  /// en arrivant.
+  ///
+  /// Le glissement n'est possible que parce que la rangée voyage d'UN bloc : titre et case sont
+  /// tous deux dessinés par SwiftUI au repos (cf. `titleView`). Avant, le titre était le champ
+  /// AppKit, qui sautait à l'arrivée pendant que la case glissait (30 octobre 2026) ; on avait
+  /// alors remplacé le glissement par un fondu, abandonné une fois la cause corrigée.
+  ///
+  /// Garde `relocating` : un second clic pendant le trajet est ignoré, sinon deux séquences
+  /// s'entrelaceraient et la rangée pourrait rester atténuée.
+  private func toggleCompletion() {
+    guard !relocating else { return }
+    withAnimation(Self.relocateDim) { relocating = true }
+    withAnimation(taskInsert) {
+      task.toggleCompletion()
+      if task.isCompleted {
+        task.list?.moveToEndOfSection(task)
+      } else {
+        task.list?.moveAboveCompleted(task)
+      }
+    }
+    Task { await remindersService.pushCompletion(for: task) }
+    onCompletionChanged()
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.relocateRestoreDelay) {
+      withAnimation(Self.relocateRestore) { relocating = false }
+    }
+  }
+
+  /// Atténuée tout de suite : c'est elle qui dit « je passe derrière ».
+  private static let relocateDim = Animation.easeOut(duration: 0.08)
+  /// L'opacité revient sur la fin du glissement (`taskInsert`, 0,35 s) : à 0,2 s la rangée est
+  /// presque arrivée, et elle s'y pose pleine.
+  private static let relocateRestoreDelay: TimeInterval = 0.2
+  private static let relocateRestore = Animation.easeOut(duration: 0.15)
+  /// Opacité pendant le trajet : assez basse pour que les textes croisés ne se mêlent pas, assez
+  /// haute pour qu'on suive la tâche des yeux.
+  static let relocatingOpacity = 0.3
+
   /// Le titre est UN SEUL et même `TextField` pour le repos (tâche active) ET l'édition : aucune
   /// bascule d'identité de vue entre les deux, donc SwiftUI n'échange rien. C'est ce qui
   /// supprime l'impression de « rechargement » — un `Text` au repos puis un `TextField` en
@@ -382,9 +414,9 @@ struct TaskRow: View {
   /// shimmer sur une donnée pourtant identique.
   ///
   /// Au repos le champ ne capte pas les clics (`allowsHitTesting(false)`) : le clic va à la ligne
-  /// (sélection), pas au curseur. Seule exception, une tâche complétée au repos : un `TextField`
-  /// ne sait pas barrer son contenu, on rend alors un `Text` barré — cas hors de la transition.
-  /// Titre : TOUJOURS le même `TextField`, y compris pour une tâche complétée. Aucune bascule
+  /// (sélection), pas au curseur.
+  /// Titre : TOUJOURS le même `TextField`, y compris pour une tâche complétée — invisible au repos,
+  /// où un `Text` le recouvre (cf. plus bas pour pourquoi). Aucune bascule
   /// `Text` ↔ `TextField` — ce qui garantit une identité de vue stable (pas de shimmer) ET une
   /// gestion clavier cohérente : un champ recréé à l'édition d'une tâche complétée avait un field
   /// editor « frais » qui avalait le premier Échap, d'où le double appui pour fermer.
@@ -397,6 +429,12 @@ struct TaskRow: View {
   /// défaut (le field editor absorbe Entrée avant `onSubmit`, qui ne se déclenche plus dans ce
   /// mode), d'où l'interception : Entrée termine TOUJOURS l'édition, comme avant.
   private var titleView: some View {
+    // Le champ donne sa taille au titre (il grandit pendant la frappe), le `Text` se pose dessus.
+    titleField
+      .overlay(alignment: .leading) { titleText }
+  }
+
+  private var titleField: some View {
     TextField("Nouvelle tâche", text: $task.title.changesOnly, axis: .vertical)
       .textFieldStyle(.plain)
       .font(.app(.body))
@@ -419,25 +457,44 @@ struct TaskRow: View {
         onEndEditing()
         return .handled
       }
-      // Le champ s'efface DERRIÈRE le barré, il ne disparaît pas. Un `if` entre `Text` et
-      // `TextField` échangerait deux identités de vue (shimmer + field editor neuf, cf. plus haut) ;
-      // l'opacité garde la même vue, le même focus, la même hauteur. Sans ça, les deux textes se
-      // superposaient — le champ affichant toujours le sien sous celui de l'overlay, et les deux ne
-      // se repliant pas forcément aux mêmes endroits sur un titre long.
-      .opacity(isStruck ? 0 : 1)
-      .overlay(alignment: .leading) {
-        if isStruck {
-          // Un `Text` réel plutôt que le `TextField` : lui seul rend `.strikethrough`, et il
-          // revient à la ligne comme le champ qu'il recouvre — un simple trait tracé à la main
-          // n'aurait barré qu'une ligne sur un titre replié en plusieurs.
-          Text(task.title).font(.app(.body)).foregroundStyle(titleColor).strikethrough()
-        }
-      }
+      // AU REPOS, ce n'est PAS le champ qu'on voit : il s'efface derrière un `Text`, et ne
+      // reparaît qu'en édition. Lui seul sait BARRER (un `TextField` ne barre pas son contenu), et
+      // c'est un `Text` ordinaire, rendu par SwiftUI comme la case.
+      //
+      // Le champ reste MONTÉ, et c'est l'opacité qui bascule — jamais un `if` entre `Text` et
+      // `TextField` : ce serait échanger deux identités de vue (shimmer, field editor neuf qui
+      // avale le premier Échap, cf. plus haut). Même vue, même focus, même hauteur : c'est le champ
+      // invisible donne sa taille à la rangée, le `Text` se pose dessus.
+      .opacity(isEditing ? 1 : 0)
   }
 
-  /// Le titre se rend barré : tâche cochée, et pas en cours d'édition (on édite un titre lisible,
-  /// jamais un titre barré).
-  private var isStruck: Bool { task.isCompleted && !isEditing }
+  private var titleText: some View {
+    // TOUJOURS monté, et c'est l'opacité qui bascule — jamais un `if`. Une vue INSÉRÉE pendant
+    // une transaction qui déplace la rangée ne suit pas le déplacement : SwiftUI la fait
+    // paraître directement à sa place d'arrivée (c'était le titre barré en double).
+    //
+    // Barré pour une tâche cochée : lui seul sait barrer, et il revient à la ligne comme le
+    // champ qu'il recouvre (même police, même largeur).
+    //
+    // ponytail: un `Text` par rangée en plus du champ — mesuré négligeable (un `Text` à la
+    // place du champ ne changeait rien au coût par image, cf. `PIEGES.md`). Le reprendre si un
+    // banc dit le contraire sur une très longue liste.
+    Text(task.title.isEmpty ? "Nouvelle tâche" : task.title)
+      .font(.app(.body))
+      .foregroundStyle(titleColor)
+      .strikethrough(task.isCompleted)
+      // LE correctif du décalage titre/case (30 octobre 2026). Un `Text` dont le contenu change dans
+      // une transaction animée — ici le barré et le gris de la coche — joue sa propre transition de
+      // contenu, qui ne suit pas le déplacement de la rangée : image par image, seul le titre de
+      // la tâche cochée filait devant sa case, les rangées dont le texte ne changeait pas restaient
+      // d'un bloc. Sans elle, l'aspect change d'un coup et le titre voyage avec sa case.
+      .contentTransition(.identity)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .opacity(isEditing ? 0 : 1)
+      .allowsHitTesting(false)
+      // Le champ reste l'élément accessible : le lire deux fois serait du bruit.
+      .accessibilityHidden(true)
+  }
 
   private var titleColor: HierarchicalShapeStyle {
     task.isCompleted ? .secondary : (task.title.isEmpty ? .tertiary : .primary)

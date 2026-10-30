@@ -152,6 +152,11 @@ AVANT la première ligne de code — sinon on rachète un défaut déjà payé.
   changer change TOUTES les pages. Besoin local ⇒ courbe nommée, pas un ajustement en douce.
 - **Tout dépliant : `disclosureFlow` sur la MUTATION + un fondu EXPLICITE sur le contenu.** Jamais un
   `@AppStorage` comme état — son écriture échappe à la transaction animée. → `PIEGES.md` § Animations.
+- **Une rangée qui bouge doit bouger d'un bloc.** Un `Text` dont le contenu change DANS la
+  transaction qui déplace (barré, couleur) part sur sa propre transition : `.contentTransition(.identity)`.
+  Rien ne s'INSÈRE pendant cette transaction — la vue insérée paraît d'emblée à l'arrivée (opacité,
+  jamais un `if`). Et `.animation(value:)` anime aussi le DÉPLACEMENT de son contenu : un effet
+  local passe par `animation(_:body:)`. → `PIEGES.md` § Animations.
 - **L'entrée et la sortie d'une FENÊTRE se jouent sur le CALQUE, pas en SwiftUI.** Une échelle animée
   fait re-rendre tout le sous-arbre à chaque image — mesuré sur la capsule : 543 ms de CPU par cycle
   contre 89 une fois confiée à une `CASpringAnimation` (`QuickEntryWindow.animate`). La frontière

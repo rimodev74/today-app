@@ -966,6 +966,37 @@ s'ouvrir autour d'un contenu qui, lui, ne bouge pas au clic.
 
 ## Animations et dépliants
 
+### Une rangée qui bouge doit bouger d'UN bloc : trois causes, une coche
+
+(30 octobre 2026, vu au ralenti à l'écran.) Cocher une tâche la fait changer de place ; titre et
+case ne voyageaient pas ensemble, et le titre paraissait en double. Trois causes empilées :
+
+1. **Une vue insérée DANS la transaction qui déplace ne voyage pas.** Le titre barré était un
+   `if isStruck { Text… }` : créé au moment de la coche, SwiftUI le faisait paraître directement à
+   la place d'arrivée pendant que le champ glissait encore — deux titres. Monté en permanence,
+   opacité basculée.
+2. **`.animation(_:value:)` anime TOUT son contenu, déplacement compris.** Le rebond de la case
+   (`PressBounceButtonStyle`) était un `.animation(bounce, value: isPressed)` : au relâchement, la
+   case descendait sur la courbe du rebond, le titre sur celle de la page. `animation(_:body:)`
+   (macOS 14) limite la courbe à l'échelle.
+3. **Un `Text` dont le CONTENU change pendant le déplacement joue sa propre transition.** À la
+   coche, le titre devient barré et gris dans la même transaction que le glissement : SwiftUI
+   interpole ce changement de contenu à part, et le titre filait DEVANT sa case — vu image par
+   image sur « Tâches », alors que les rangées dont le texte ne changeait pas restaient d'un bloc.
+   `.contentTransition(.identity)` sur le titre : l'aspect change d'un coup, la position voyage
+   avec la case. Même ligne sur les sous-tâches et les en-têtes.
+
+   Fausse piste suivie d'abord, et à ne pas reprendre : croire que le champ AppKit (`NSTextField`)
+   sautait à l'arrivée. Le titre au repos est bien devenu un `Text` posé sur le champ invisible
+   (c'est ce qui permet de le barrer), mais le texte en overlay du champ, en frère dans une pile,
+   puis le champ en overlay du texte décalaient TOUS les trois — tant que la transition de contenu
+   restait là. C'est elle, et elle seule, que le ralenti a départagée.
+
+Un fondu (s'effacer, puis réapparaître à l'arrivée) a remplacé le glissement le temps de trouver
+la cause n°3, puis a été abandonné : d'un bloc, le glissement redevient beau. La rangée s'y atténue
+le temps du trajet (`TaskRow.toggleCompletion`) — sans fond opaque sur le verre, elle passe ainsi
+« derrière » les autres au lieu de mêler son texte au leur.
+
 ### Tout dépliant s'anime avec `disclosureFlow`
 
 Un chevron qui tourne et un contenu qui apparaît, c'est le MÊME geste partout : repli d'un projet

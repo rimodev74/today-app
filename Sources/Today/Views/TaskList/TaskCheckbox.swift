@@ -119,9 +119,16 @@ struct PressBounceButtonStyle: ButtonStyle {
   /// pile pendant que la tâche cochée descend (cf. `taskInsert`, même diagnostic).
   static let bounce = Animation.timingCurve(0.6, 1.6, 0.05, 1.2, duration: 0.36)
 
+  /// Le rebond ne vise QUE l'échelle — `animation(_:body:)`, pas `.animation(_:value:)`. Ce dernier
+  /// anime TOUT ce qui change dans la case au moment où `isPressed` bascule, déplacement compris :
+  /// au relâchement, la coche fait descendre la rangée dans la même mise à jour, et la case
+  /// descendait sur la courbe du rebond (lente au départ, puis au-delà de sa cible) pendant que le
+  /// titre suivait `taskInsert`. Le titre arrivait d'abord, la case après (vu au ralenti le
+  /// 30 octobre 2026). Ici, la position reste à la transaction de la page.
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed ? 0.8 : 1)
-      .animation(Self.bounce, value: configuration.isPressed)
+      .animation(Self.bounce) { content in
+        content.scaleEffect(configuration.isPressed ? 0.8 : 1)
+      }
   }
 }

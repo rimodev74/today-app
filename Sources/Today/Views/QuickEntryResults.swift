@@ -46,6 +46,9 @@ private struct QuickEntryResultRow: View {
         .font(.app(14))
         .lineLimit(1)
         .strikethrough(row.isCompleted, color: .secondary)
+        // Sans transition de contenu : barrée d'un coup, la ligne reste d'un bloc si elle bouge
+        // (cf. `TaskRow.titleText`).
+        .contentTransition(.identity)
         .foregroundStyle(row.isCompleted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
       kindBadge
       Spacer(minLength: 10)

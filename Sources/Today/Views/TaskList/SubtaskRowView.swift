@@ -52,13 +52,20 @@ struct SubtaskRowView: View {
           onEnter()
           return .handled
         }
-        // Le barré, qu'un `TextField` ne rend pas : le champ s'efface derrière un `Text` barré,
-        // il ne disparaît pas (même identité, même hauteur).
-        .opacity(isStruck ? 0 : 1)
+        // Au repos, c'est un `Text` qu'on voit, pas le champ (lui seul sait barrer) — même règle que
+        // `TaskRow.titleText`. Le champ reste monté (même identité, même hauteur) ; seule
+        // l'opacité bascule, jamais un `if`.
+        .opacity(isEditing ? 1 : 0)
         .overlay(alignment: .leading) {
-          if isStruck {
-            Text(subtask.title).strikethrough().foregroundStyle(.secondary)
-          }
+          Text(subtask.title.isEmpty ? "Sous-tâche" : subtask.title)
+            .strikethrough(subtask.isDone)
+            // Sans transition de contenu : cf. `TaskRow.titleText`.
+            .contentTransition(.identity)
+            .foregroundStyle(subtask.title.isEmpty ? .tertiary : .secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(isEditing ? 0 : 1)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
 
       Spacer(minLength: 0)
@@ -82,9 +89,6 @@ struct SubtaskRowView: View {
       Button("Supprimer", role: .destructive, action: onDelete)
     }
   }
-
-  /// Barrée au repos seulement : on édite un titre lisible, comme celui d'une tâche.
-  private var isStruck: Bool { subtask.isDone && !isEditing }
 
   /// Case carrée mais NETTEMENT plus arrondie que celle d'une tâche (rayon 5,5 sur 14 vs 4,5 sur 16).
   /// Cochée : contour + ✓ à la couleur de la page sur fond léger — assez marqué pour se lire d'un
