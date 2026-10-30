@@ -207,8 +207,7 @@ struct MCPRouter {
   private func createTask(_ args: JSONValue) throws -> JSONValue {
     let list = try fetchList(try uuid(args, "list_id"))
     let title = try nonEmpty(args, "title")
-    if let existing = list.tasks.first(where: { !$0.isHeader && Self.sameTitle($0.title, title) })
-    {
+    if let existing = list.tasks.first(where: { !$0.isHeader && Self.sameTitle($0.title, title) }) {
       return created(existing.uuid, false)
     }
     let task = TaskItem(title: title, notes: notes(args) ?? Data(), list: list)

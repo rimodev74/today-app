@@ -205,7 +205,10 @@ final class MCPRouterTests: XCTestCase {
     let list = makeList(makeProject())
     let id = call(
       "create_task",
-      ["list_id": .string(list), "title": .string("T"), "subtasks": .array([.string("a"), .string("b")])]
+      [
+        "list_id": .string(list), "title": .string("T"),
+        "subtasks": .array([.string("a"), .string("b")]),
+      ]
     ).0["id"]!
     try! context.fetch(FetchDescriptor<TaskItem>()).first!.reminderIdentifier = "r1"
     let (_, isError) = call("delete_item", ["id": id])

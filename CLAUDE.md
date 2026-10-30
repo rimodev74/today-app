@@ -366,6 +366,15 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   suite » tranchait en 2 à 3 s. Sur un simple « introuvable », on ne retire RIEN, et on ne réécrit
   rien non plus tant que l'absence n'est pas confirmée — réécrire effacerait la preuve. La passe
   se réarme sur l'échéance de la prochaine preuve (`VanishEvidence.nextCheck`), pas à 1 Hz.
+- **Le serveur MCP** (Réglages ▸ Claude Code, éteint par défaut) : Claude Code lit et écrit
+  projets, listes, tâches et sous-tâches quand l'utilisateur le lui demande. HTTP sur 127.0.0.1
+  (`MCPServer`, port 48631 ; 48632 pour `TodayDev`), clé dans les défauts, toute requête avec
+  `Origin` refusée — c'est ce qui ferme la porte aux navigateurs. Le routeur (`MCPRouter`) écrit
+  sur le `mainContext` : ce que Claude crée apparaît en direct. Les `create_*` sont IDEMPOTENTS par
+  titre — relancer une synchro ne duplique rien. `delete_item` est un outil à part pour que Claude
+  Code demande confirmation à chaque suppression ; il passe par `deleteCascadeAndSave` pour les
+  quatre types (rien de ce qu'il efface n'a forcément été rendu). Today ne connaît aucun fichier :
+  la correspondance roadmap ↔ projet est l'affaire de Claude.
 - **`HUDWindow`** ne parle QUE des gestes dont le résultat n'est pas à l'écran — une tâche déposée par
   la capsule depuis une autre app, un pomodoro piloté au clavier (`!pomodoro…` d'`AppCommand`, qui
   n'active délibérément pas la fenêtre). Là où la rangée apparaît sous les yeux, l'y ajouter en

@@ -40,7 +40,7 @@ final class MCPServer {
     do {
       listener = try NWListener(using: parameters)
     } catch {
-      state = .failed("Port \(port) indisponible (\(error.localizedDescription)).")
+      state = .failed(Self.describe(error, port: port))
       return
     }
     let route: @Sendable (JSONValue) async -> JSONValue? = { [weak self] request in
@@ -52,8 +52,9 @@ final class MCPServer {
       Self.receive(on: connection, buffer: Data(), key: key, route: route)
     }
     listener.stateUpdateHandler = { [weak self, weak listener] update in
-      let bound = listener?.port?.rawValue ?? port
-      Task { @MainActor in self?.apply(update, port: bound) }
+      // Le port réel n'est connu qu'une fois lié (`port: 0`) ; en échec, `listener.port` vaut 0.
+      let bound = listener?.port?.rawValue ?? 0
+      Task { @MainActor in self?.apply(update, port: bound == 0 ? port : bound) }
     }
     self.listener = listener
     listener.start(queue: queue)
@@ -73,11 +74,19 @@ final class MCPServer {
     switch update {
     case .ready: state = .listening(port: port)
     case .failed(let error):
-      state = .failed("Port \(port) indisponible (\(error.localizedDescription)).")
+      state = .failed(Self.describe(error, port: port))
       listener?.cancel()
       listener = nil
     default: break
     }
+  }
+
+  /// Le cas courant dit en clair ; le reste garde le message système, qui est ce qu'on a de mieux.
+  private static func describe(_ error: Error, port: UInt16) -> String {
+    if case NWError.posix(.EADDRINUSE) = error {
+      return "Port \(port) déjà utilisé par un autre programme."
+    }
+    return "Port \(port) indisponible : \(error.localizedDescription)"
   }
 
   private func route(_ request: JSONValue) -> JSONValue? {

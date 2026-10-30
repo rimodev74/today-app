@@ -5,13 +5,34 @@ import SwiftUI
 @main
 struct TodayApp: App {
   @State private var pomodoroTimer = PomodoroTimer.shared
-  @State private var remindersService = RemindersService()
-  @State private var covers = ProjectCovers()
+  @State private var remindersService: RemindersService
+  @State private var covers: ProjectCovers
+  /// Le serveur MCP (Réglages ▸ Claude Code). Créé ici parce qu'il écrit dans la base hors de
+  /// toute fenêtre et doit emmener avec lui les MÊMES service Rappels et couvertures que l'UI.
+  @State private var mcpServer: MCPServer
   @State private var profile = UserProfile()
   @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
 
   init() {
     CrashLog.install()  // en premier : tout ce qui suit peut lever
+    let reminders = RemindersService()
+    let covers = ProjectCovers()
+    let server = MCPServer(
+      container: Self.container,
+      effects: MCPEffects(
+        forgetAppleItems: reminders.forgetAppleItems, removeCover: covers.remove(for:)))
+    _remindersService = State(initialValue: reminders)
+    _covers = State(initialValue: covers)
+    _mcpServer = State(initialValue: server)
+    if UserDefaults.standard.bool(forKey: MCPSettings.enabledKey) {
+      server.start(port: MCPSettings.port(), key: MCPSettings.key())
+    }
+    // Ce qui s'installe se démonte : l'écoute s'arrête avec l'app.
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { server.stop() }
+    }
     NSApplication.shared.setActivationPolicy(.regular)
     // Cf. `AppCommand.activate` : l'activation coopérative peut être refusée.
     NSApplication.shared.activate(ignoringOtherApps: true)
@@ -230,6 +251,7 @@ struct TodayApp: App {
         .environment(profile)
         // Le pont avec Rappels se règle ici : l'onglet Tâches doit pouvoir énumérer les listes.
         .environment(remindersService)
+        .environment(mcpServer)
     }
     // Les raccourcis texte proposent les listes comme destination : cette Scene a besoin du MÊME
     // container que la fenêtre principale, elle ne l'héritait pas.

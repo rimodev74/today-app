@@ -14,6 +14,7 @@ enum SettingsTab: String {
   case shortcuts
   case tasks
   case pomodoro
+  case claudeCode
 
   static let storageKey = "settingsTab"
 
@@ -45,6 +46,10 @@ struct SettingsView: View {
       PomodoroSettingsTab()
         .tabItem { Label("Pomodoro", systemImage: "timer") }
         .tag(SettingsTab.pomodoro.rawValue)
+
+      ClaudeCodeSettingsTab()
+        .tabItem { Label("Claude Code", systemImage: "terminal") }
+        .tag(SettingsTab.claudeCode.rawValue)
     }
     .frame(width: 460)
     // Sans ça, `TabView` fait fondre l'ancien panneau dans le nouveau à chaque clic d'onglet.
@@ -64,6 +69,65 @@ private struct SettingsPane<Content: View>: View {
     Form { content }
       .formStyle(.grouped)
       .frame(height: height)
+  }
+}
+
+/// Le branchement de Claude Code sur le serveur MCP de Today (cf. `MCPServer`, `MCPSettings`).
+private struct ClaudeCodeSettingsTab: View {
+  @Environment(MCPServer.self) private var server
+  @AppStorage(MCPSettings.enabledKey) private var enabled = false
+  @State private var key = MCPSettings.key()
+
+  private var command: String {
+    MCPSettings.command(name: MCPSettings.serverName(), port: MCPSettings.port(), key: key)
+  }
+
+  var body: some View {
+    SettingsPane(height: 400) {
+      Section {
+        Toggle("Autoriser Claude Code à modifier Today", isOn: $enabled)
+        LabeledContent("État") { status }
+      } footer: {
+        Text(
+          "Claude Code peut alors lire et modifier tes projets, listes et tâches, quand tu le lui "
+            + "demandes. Today doit être ouvert.")
+      }
+      if enabled {
+        Section {
+          Text(command)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+          HStack {
+            Button("Copier la commande") {
+              NSPasteboard.general.clearContents()
+              NSPasteboard.general.setString(command, forType: .string)
+            }
+            Button("Régénérer la clé") {
+              key = MCPSettings.regenerateKey()
+              server.start(port: MCPSettings.port(), key: key)
+            }
+          }
+        } header: {
+          Text("Brancher Claude Code, une seule fois")
+        } footer: {
+          Text(
+            "À coller dans un terminal. Régénérer la clé débranche l'ancienne commande. Ne mets "
+              + "jamais delete_item en « toujours autoriser » : chaque suppression doit te demander "
+              + "confirmation.")
+        }
+      }
+    }
+    .onChange(of: enabled) { _, on in
+      if on { server.start(port: MCPSettings.port(), key: key) } else { server.stop() }
+    }
+  }
+
+  @ViewBuilder private var status: some View {
+    switch server.state {
+    case .off: Text("Éteint").foregroundStyle(.secondary)
+    case .listening(let port): Text("Écoute sur le port \(port)").foregroundStyle(.secondary)
+    case .failed(let message): Text(message).foregroundStyle(.red)
+    }
   }
 }
 

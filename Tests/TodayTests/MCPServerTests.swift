@@ -5,7 +5,9 @@ import XCTest
 @testable import Today
 
 final class MCPServerTests: XCTestCase {
-  private func raw(_ text: String) -> Data { Data(text.replacingOccurrences(of: "\n", with: "\r\n").utf8) }
+  private func raw(_ text: String) -> Data {
+    Data(text.replacingOccurrences(of: "\n", with: "\r\n").utf8)
+  }
 
   private func request(
     method: String = "POST", path: String = "/mcp", headers: [String: String]
@@ -17,7 +19,8 @@ final class MCPServerTests: XCTestCase {
 
   func testParseCompleteRequest() {
     let result = HTTPRequest.parse(
-      raw("POST /mcp HTTP/1.1\nHost: x\nContent-Length: 2\nAuthorization: Bearer k\n\n") + Data("{}".utf8))
+      raw("POST /mcp HTTP/1.1\nHost: x\nContent-Length: 2\nAuthorization: Bearer k\n\n")
+        + Data("{}".utf8))
     guard case .complete(let request) = result else { return XCTFail("\(result)") }
     XCTAssertEqual(request.method, "POST")
     XCTAssertEqual(request.path, "/mcp")
@@ -53,9 +56,11 @@ final class MCPServerTests: XCTestCase {
   }
 
   func testGateRejectsBadKey() {
-    XCTAssertEqual(MCPGate.status(for: request(headers: ["authorization": "Bearer x"]), key: "k"), 401)
+    XCTAssertEqual(
+      MCPGate.status(for: request(headers: ["authorization": "Bearer x"]), key: "k"), 401)
     XCTAssertEqual(MCPGate.status(for: request(headers: [:]), key: "k"), 401)
-    XCTAssertEqual(MCPGate.status(for: request(headers: ["authorization": "Bearer "]), key: ""), 401)
+    XCTAssertEqual(
+      MCPGate.status(for: request(headers: ["authorization": "Bearer "]), key: ""), 401)
   }
 
   func testGateRejectsGet() {
@@ -82,7 +87,10 @@ final class MCPServerTests: XCTestCase {
     defer { server.stop() }
     var port: UInt16 = 0
     for _ in 0..<100 {
-      if case .listening(let p) = server.state { port = p; break }
+      if case .listening(let p) = server.state {
+        port = p
+        break
+      }
       try await Task.sleep(nanoseconds: 20_000_000)
     }
     XCTAssertNotEqual(port, 0, "état : \(server.state)")
@@ -96,7 +104,8 @@ final class MCPServerTests: XCTestCase {
       for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
       let (data, response) = try await URLSession.shared.data(for: request)
       return (
-        (response as! HTTPURLResponse).statusCode, try? JSONDecoder().decode(JSONValue.self, from: data)
+        (response as! HTTPURLResponse).statusCode,
+        try? JSONDecoder().decode(JSONValue.self, from: data)
       )
     }
 
@@ -107,5 +116,58 @@ final class MCPServerTests: XCTestCase {
     XCTAssertEqual(forbidden, 403)
     let (unauthorized, _) = try await post([:])
     XCTAssertEqual(unauthorized, 401)
+  }
+
+  @MainActor
+  func testBusyPortReportsTheRequestedPort() async throws {
+    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let container = try ModelContainer(
+      for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+    let effects = MCPEffects(forgetAppleItems: { _ in }, removeCover: { _ in })
+    let first = MCPServer(container: container, effects: effects)
+    first.start(port: 0, key: "k")
+    defer { first.stop() }
+    var port: UInt16 = 0
+    for _ in 0..<100 {
+      if case .listening(let p) = first.state {
+        port = p
+        break
+      }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    let second = MCPServer(container: container, effects: effects)
+    second.start(port: port, key: "k")
+    defer { second.stop() }
+    for _ in 0..<100 {
+      if case .failed = second.state { break }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    XCTAssertEqual(second.state, .failed("Port \(port) déjà utilisé par un autre programme."))
+  }
+}
+
+final class MCPSettingsTests: XCTestCase {
+  private let defaults = UserDefaults(suiteName: "MCPSettingsTests")!
+
+  override func setUp() { defaults.removePersistentDomain(forName: "MCPSettingsTests") }
+
+  func testKeyIsGeneratedOnceThenStable() {
+    let key = MCPSettings.key(in: defaults)
+    XCTAssertEqual(key.count, 64)
+    XCTAssertTrue(key.allSatisfy(\.isHexDigit))
+    XCTAssertEqual(MCPSettings.key(in: defaults), key)
+    XCTAssertNotEqual(MCPSettings.regenerateKey(in: defaults), key)
+  }
+
+  func testPortSeparatesDevInstance() {
+    XCTAssertEqual(MCPSettings.port(environment: [:]), 48631)
+    XCTAssertEqual(MCPSettings.port(environment: ["TODAY_APP_SUPPORT_DIR": "TodayDev"]), 48632)
+  }
+
+  func testCommand() {
+    XCTAssertEqual(
+      MCPSettings.command(name: "today", port: 48631, key: "abc"),
+      #"claude mcp add --transport http --scope user today http://127.0.0.1:48631/mcp --header "Authorization: Bearer abc""#
+    )
   }
 }
