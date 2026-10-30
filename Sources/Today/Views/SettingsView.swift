@@ -99,10 +99,17 @@ private struct ClaudeCodeSettingsTab: View {
             .font(.system(.caption, design: .monospaced))
             .textSelection(.enabled)
           HStack {
-            Button(copied ? "Copié !" : "Copier la commande") {
+            Button {
               NSPasteboard.general.clearContents()
               NSPasteboard.general.setString(command, forType: .string)
               copied = true
+            } label: {
+              // Les deux libellés sont toujours là, l'un transparent : le bouton garde la largeur
+              // du plus long et ne rétrécit pas sous le doigt au « Copié ! ».
+              ZStack {
+                Text("Copier la commande").opacity(copied ? 0 : 1)
+                Text("Copié !").opacity(copied ? 1 : 0)
+              }
             }
             // Le libellé revient seul : un « Copié ! » figé ne dirait plus rien au clic suivant.
             .task(id: copied) {
