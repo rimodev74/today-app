@@ -84,10 +84,16 @@ struct RichTextEditor: NSViewRepresentable {
     else { return nil }
     // Le retrait intérieur est pris sur la largeur ET rendu à la hauteur : c'est de la place que
     // la vue texte occupe, pas de la place qu'on lui donne en plus.
+    // Suivi de largeur coupé LE TEMPS de la mesure : sinon AppKit rabat le conteneur sur la largeur
+    // ACTUELLE de la vue — 0 sur une vue neuve, que SwiftUI n'a pas encore posée. Mesurée à 0 de
+    // large, la note fait 0 de haut, le cadre retombe à une ligne, SwiftUI garde ce résultat en
+    // cache et le texte déborde du cadre. Rétabli aussitôt : le cadre réel le recale ensuite.
+    textContainer.widthTracksTextView = false
     textContainer.containerSize = NSSize(
       width: max(width - 2 * insets.width, 1), height: .greatestFiniteMagnitude)
     layoutManager.ensureLayout(for: textContainer)
     let contentHeight = layoutManager.usedRect(for: textContainer).height
+    textContainer.widthTracksTextView = true
     let lineHeight = layoutManager.defaultLineHeight(for: nsView.font ?? font)
     return CGSize(width: width, height: ceil(max(contentHeight, lineHeight)) + 2 * insets.height)
   }
