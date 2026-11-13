@@ -1021,16 +1021,13 @@ struct ListPageView: View {
           placeholder: state.flatMap(dragPlaceholderRect))
       }
       .onEnded { value in
-        defer {
-          pressID = nil
-          if dragCollapse.isCollapsing {
-            withAnimation(disclosureFlow) { dragCollapse.reset() }
-          }
-        }
+        defer { pressID = nil }
         if draggingID == task.persistentModelID {
           endDrag()
           return
         }
+        // Aucun glissement armé : rien n'atterrit, les sous-tâches se rouvrent tout de suite.
+        reopenAfterDrag($dragCollapse)
         let moved = abs(value.translation.width) > 4 || abs(value.translation.height) > 4
         guard !moved, !focus.isEditing(task) else { return }
         if pressWasSelected {
@@ -1063,6 +1060,8 @@ struct ListPageView: View {
       motion.clear()
       draggedGroup = []
       dragSequences = nil
+      // Dans la MÊME transaction : cf. `TaskDragCollapse.reset`.
+      dragCollapse.reset()
     }
     try? modelContext.save()
   }

@@ -202,8 +202,11 @@ struct TaskDragCollapse {
 
   /// Au relâchement, et sans condition : le dépliant se rouvre en partant, y compris quand le geste
   /// s'est arrêté entre le repli et l'empoignade — sinon un quasi-clic laisserait la ligne fermée.
-  /// À envelopper dans `withAnimation(disclosureFlow)` PAR L'APPELANT : la réécriture d'un `@State`
-  /// de type valeur n'a lieu qu'au retour de cette méthode, donc hors d'un `withAnimation` posé ici.
+  /// Après un glissement ARMÉ, DANS la transaction qui pose la tâche (cf. `dropTaskDrag`) : la ligne
+  /// reprend sa hauteur avec le reste, les voisines s'écartent une seule fois, et les sous-tâches —
+  /// restées montées, cf. `TaskRow.mountsSubtasks` — suivent leur parente en se fondant. Rouvertes
+  /// APRÈS l'atterrissage, les voisines restaient à la hauteur repliée et se faisaient recouvrir ;
+  /// attendre la fin du ressort laissait un temps mort visible.
   mutating func reset() {
     taskID = nil
   }
@@ -501,10 +504,13 @@ struct TaskReorderPlaceholder: ViewModifier {
 /// qu'elle quitte ne veut rien dire. Le geste est le même des deux côtés (cf. `SidebarDrop`), c'est
 /// donc ici, à l'endroit unique où il se termine, que la question se tranche — et pas dans chacune
 /// des trois pages qui glissent.
+///
+/// Les sous-tâches repliées pour le geste se rouvrent DANS la transaction (cf.
+/// `TaskDragCollapse.reset`).
 @MainActor
 func dropTaskDrag(
   _ reorder: TaskPageReorder, onto filing: SidebarDrop, lists: [TodoList],
-  in context: ModelContext, write: ([TaskItem]) -> Void
+  in context: ModelContext, collapse: Binding<TaskDragCollapse>, write: ([TaskItem]) -> Void
 ) {
   let ordered = reorder.dropped()
   let dragged = reorder.draggedTask
@@ -518,7 +524,17 @@ func dropTaskDrag(
       write(ordered)
     }
     reorder.end()
+    collapse.wrappedValue.reset()
   }
+}
+
+/// Rouvre les sous-tâches repliées quand le geste s'est arrêté entre le repli et l'empoignade :
+/// aucun glissement armé, donc pas de transaction de dépôt pour les rouvrir (cf.
+/// `TaskDragCollapse.reset`).
+@MainActor
+func reopenAfterDrag(_ collapse: Binding<TaskDragCollapse>) {
+  guard collapse.wrappedValue.isCollapsing else { return }
+  withAnimation(disclosureFlow) { collapse.wrappedValue.reset() }
 }
 
 // MARK: - Le socle commun d'une page de tâches

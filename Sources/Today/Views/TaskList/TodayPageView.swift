@@ -250,12 +250,12 @@ struct TodayPageView: View {
   /// Relâchement. La mécanique (lire le plan avant de désarmer, tout écrire en une transaction)
   /// est dans `dropTaskDrag` ; ici il ne reste que ce qui appartient à cette page — le rang.
   private func dropDraggedTask() {
-    dropTaskDrag(reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
+    guard reorder.draggedTask != nil else { return reopenAfterDrag($dragCollapse) }
+    dropTaskDrag(
+      reorder, onto: filing, lists: activeLists, in: modelContext, collapse: $dragCollapse
+    ) { ordered in
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
-    }
-    if dragCollapse.isCollapsing {
-      withAnimation(disclosureFlow) { dragCollapse.reset() }
     }
   }
 

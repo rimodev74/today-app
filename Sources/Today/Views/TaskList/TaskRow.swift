@@ -208,7 +208,7 @@ struct TaskRow: View {
       // Sous-tâches : montées au repos comme en édition, APRÈS l'éditeur de notes pour respecter
       // l'ordre titre → notes → sous-tâches. Repliées, elles ne sont pas montées du tout — un bloc
       // vide laisserait sa marge haute et gonflerait la ligne fermée de quelques points.
-      if showsSubtasks(subtasks) { subtasksSection }
+      if mountsSubtasks(subtasks) { subtasksSection }
 
       // La rangée d'actions ferme la carte, SOUS les sous-tâches. Elle était entre la note et
       // elles — donc au milieu, détachée des deux blocs qu'elle séparait. En bas et au bord droit,
@@ -662,7 +662,17 @@ struct TaskRow: View {
   /// est piloté par `isSubtasksExpanded` — et le temps d'un glissement, par `collapsedForDrag`, qui
   /// l'emporte sur les deux.
   private func showsSubtasks(_ subtasks: SubtaskTally) -> Bool {
-    !collapsedForDrag && !subtasks.isEmpty && (isEditing || isSubtasksExpanded)
+    !collapsedForDrag && mountsSubtasks(subtasks)
+  }
+
+  /// Montées, mais pas forcément visibles : un glissement les garde dans l'arbre, à hauteur nulle
+  /// et transparentes (cf. `subtasksSection`). Démontées au repli puis remontées au dépôt, elles
+  /// naissaient à leur place FINALE pendant que le titre, lui, finissait son trajet : elles
+  /// sortaient du flux de leur parente au lieu de la suivre.
+  /// ponytail: une rangée tirée garde ses sous-tâches construites — quelques lignes, une seule
+  /// rangée, et `TaskRow.body` n'est pas rejoué par image (cf. `TaskRowDragLayer`).
+  private func mountsSubtasks(_ subtasks: SubtaskTally) -> Bool {
+    !subtasks.isEmpty && (isEditing || isSubtasksExpanded)
   }
 
   private var subtasksSection: some View {
@@ -675,9 +685,13 @@ struct TaskRow: View {
           onEnter: { enterOnSubtask(subtask) },
           onDelete: { removeSubtask(subtask) }
         )
-        // La rangée se fond en glissant depuis le haut pendant que la carte s'ouvre ; sans
-        // transition elle apparaît nette d'un coup au milieu d'une hauteur encore en mouvement.
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        // En ÉDITION, la rangée se fond en glissant depuis le haut pendant que la carte s'ouvre ;
+        // sans transition elle apparaît nette d'un coup au milieu d'une hauteur encore en mouvement.
+        // AU REPOS, fondu seul : la réouverture d'après un glissement se joue pendant que la tâche
+        // atterrit, et le glissé depuis le haut faisait de chaque sous-tâche une seconde ligne
+        // déplacée. Seule la parente se déplace ; ses sous-tâches la suivent déjà (le décalage du
+        // glissement s'applique à la rangée entière) et ne font que paraître.
+        .transition(isEditing ? .opacity.combined(with: .move(edge: .top)) : .opacity)
       }
     }
     .transition(.opacity)
@@ -698,6 +712,14 @@ struct TaskRow: View {
         .padding(.top, 2)
     }
     .padding(.top, isEditing ? 10 : 5)
+    // APRÈS la flèche, qu'elle couvre aussi. Transparente le temps du geste ; au dépôt, elle se
+    // fond en suivant sa parente (cf. `TaskDragCollapse.reset`).
+    .opacity(collapsedForDrag ? 0 : 1)
+    // Le repli du glissement : hauteur NULLE, la vue reste montée. C'est ce qui la fait suivre sa
+    // parente au dépôt — elle existe déjà, sa position s'anime avec la rangée au lieu de naître à
+    // l'arrivée. Le débordement est transparent et ne prend aucune place.
+    .frame(height: collapsedForDrag ? 0 : nil, alignment: .top)
+    .allowsHitTesting(!collapsedForDrag)
   }
 
   /// Résumé du dépliant, POSÉ SUR LA LIGNE DU TITRE (à droite) et non dans un bloc sous elle :

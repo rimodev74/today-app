@@ -87,12 +87,18 @@ struct RichTextEditor: NSViewRepresentable {
     // Suivi de largeur coupé LE TEMPS de la mesure : sinon AppKit rabat le conteneur sur la largeur
     // ACTUELLE de la vue — 0 sur une vue neuve, que SwiftUI n'a pas encore posée. Mesurée à 0 de
     // large, la note fait 0 de haut, le cadre retombe à une ligne, SwiftUI garde ce résultat en
-    // cache et le texte déborde du cadre. Rétabli aussitôt : le cadre réel le recale ensuite.
+    // cache et le texte déborde du cadre.
+    // La taille d'avant est RENDUE après la mesure : SwiftUI sonde aussi des largeurs qu'il ne
+    // posera jamais (étroites, sur la page d'un projet), et le suivi rétabli ne recale le conteneur
+    // qu'au prochain CHANGEMENT de cadre. Si le cadre ne bouge plus, le texte restait enroulé sur la
+    // largeur sondée : une colonne de 60 pt qui débordait d'un cadre d'une ligne.
+    let restoredSize = textContainer.containerSize
     textContainer.widthTracksTextView = false
     textContainer.containerSize = NSSize(
       width: max(width - 2 * insets.width, 1), height: .greatestFiniteMagnitude)
     layoutManager.ensureLayout(for: textContainer)
     let contentHeight = layoutManager.usedRect(for: textContainer).height
+    textContainer.containerSize = restoredSize
     textContainer.widthTracksTextView = true
     let lineHeight = layoutManager.defaultLineHeight(for: nsView.font ?? font)
     return CGSize(width: width, height: ceil(max(contentHeight, lineHeight)) + 2 * insets.height)

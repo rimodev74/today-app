@@ -186,13 +186,11 @@ struct AllTasksPageView: View {
   /// déjà à l'Inbox, et déplacer une tâche AILLEURS se fait par la barre latérale ou par
   /// ▸ *Déplacer vers…*.
   private func dropDraggedTask() {
-    // AVANT le garde ci-dessous : les sous-tâches se rouvrent même quand le geste s'est arrêté sur
-    // le repli, sans avoir armé le moindre glissement.
-    if dragCollapse.isCollapsing {
-      withAnimation(disclosureFlow) { dragCollapse.reset() }
-    }
-    guard reorder.draggedTask != nil else { return }
-    dropTaskDrag(reorder, onto: filing, lists: activeLists, in: modelContext) { ordered in
+    // Sans glissement armé, les sous-tâches se rouvrent tout de suite : rien n'atterrit.
+    guard reorder.draggedTask != nil else { return reopenAfterDrag($dragCollapse) }
+    dropTaskDrag(
+      reorder, onto: filing, lists: activeLists, in: modelContext, collapse: $dragCollapse
+    ) { ordered in
       // Toutes comparables entre elles (même liste) : renuméroter la séquence entière est juste.
       TaskItem.stampSmartOrder(ordered)
       try? modelContext.save()
