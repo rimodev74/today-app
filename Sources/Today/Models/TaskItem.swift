@@ -75,6 +75,17 @@ final class TaskItem {
   /// un rappel toutes les secondes, indéfiniment. Deux champs, au plus un rempli à la fois.
   var eventIdentifier: String?
   var list: TodoList?
+  /// Le projet d'une tâche de l'INBOX, rattachée sans être rangée dans une liste (schéma 8.0.0).
+  ///
+  /// La tâche reste dans l'Inbox (`list`), et c'est voulu : « Tâches » montre ce qui n'est rangé
+  /// dans AUCUNE liste, et toute la mécanique de l'Inbox (rang, création, glisser) continue de
+  /// valoir sans une ligne de plus. Le projet s'ajoute par-dessus : la pastille sur « Tâches », la
+  /// section en tête de la page du projet.
+  ///
+  /// **Jamais non nul hors de l'Inbox** : ranger la tâche dans une vraie liste l'efface
+  /// (`TaskItem.move(to:)`), la liste dit déjà d'où elle vient. Supprimer le projet la rend à l'Inbox
+  /// nue (`.nullify` côté `Project.inboxTasks`) — on ne détruit pas une tâche qu'on n'a pas rangée.
+  var inboxProject: Project?
   /// Couleur de l'en-tête (uniquement significatif si `isHeader`). `nil` = style par défaut.
   /// Stocke `PaletteColor.rawValue` — voir `headerColor` ci-dessous, même pattern que `priority`.
   var headerColorRaw: String?
@@ -123,7 +134,8 @@ final class TaskItem {
     set { headerColorRaw = newValue?.rawValue }
   }
 
-  var project: Project? { list?.project }
+  /// Le projet de la tâche : celui de sa liste, ou — dans l'Inbox — celui auquel elle est rattachée.
+  var project: Project? { list?.project ?? inboxProject }
 
   /// Une tâche qui ne porte RIEN : refermer son édition la supprime plutôt que de laisser une
   /// ligne « Sans titre » derrière soi (cf. `TaskPageBase`).
@@ -216,6 +228,8 @@ final class TaskItem {
     // les lire ici rend la liste des champs à recopier vérifiable d'un coup d'œil sur le modèle.
     clone.priorityRaw = priorityRaw
     clone.headerColorRaw = headerColorRaw
+    // Le projet ne suit que dans l'Inbox : ailleurs, c'est la liste qui le dit (cf. `inboxProject`).
+    if list?.isInbox == true { clone.inboxProject = inboxProject }
     for sub in orderedSubtasks {
       let subCopy = Subtask(title: sub.title)
       subCopy.isDone = sub.isDone

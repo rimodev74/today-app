@@ -1,8 +1,8 @@
 import Foundation
 import SwiftData
 
-/// Conteneur de plus haut niveau. Ne porte pas de tâche directement : un projet
-/// contient des to-do lists, et ce sont elles qui portent les tâches.
+/// Conteneur de plus haut niveau : il contient des to-do lists, qui portent les tâches — plus les
+/// tâches de l'Inbox qui lui sont rattachées sans liste (`inboxTasks`, cf. `TaskItem.inboxProject`).
 @Model
 final class Project {
   /// Identité stable entre appareils — mêmes raisons et mêmes contraintes que `TaskItem.uuid`.
@@ -18,6 +18,10 @@ final class Project {
   /// ou une couleur libre (`"#3A7BD5"`). Optionnel : `nil` = teinte d'accent du système.
   var colorRaw: String?
   @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
+  /// Les tâches de l'Inbox rattachées à ce projet. `.nullify` et pas `.cascade` : supprimer le projet
+  /// les rend à l'Inbox nue — elles n'ont jamais été rangées ici, elles ne partent pas avec lui.
+  @Relationship(deleteRule: .nullify, inverse: \TaskItem.inboxProject) var inboxTasks: [TaskItem] =
+    []
 
   init(title: String, notes: Data = Data()) {
     self.title = title

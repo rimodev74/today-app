@@ -133,9 +133,9 @@ struct AllTasksPageView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  /// La MÊME `TaskRow` que partout ailleurs. La date compte (rien ne la rend implicite ici) ; le
-  /// rattachement, non : toutes ces tâches sont dans l'Inbox, la pilule dirait la même chose à
-  /// chaque ligne.
+  /// La MÊME `TaskRow` que partout ailleurs. La date compte (rien ne la rend implicite ici), et la
+  /// pilule ne parle que des tâches rattachées à un projet (cf. `TaskParentTag`) : toutes sont dans
+  /// l'Inbox, c'est le projet qui les distingue.
   private func taskRow(for task: TaskItem, moveIndex: MoveTargetIndex, rows: [TaskItem] = [])
     -> some View
   {
@@ -145,7 +145,7 @@ struct AllTasksPageView: View {
       isEditing: focus.isEditing(task),
       moveTargets: moveIndex.excluding(task.list?.persistentModelID),
       showsDate: true,
-      parentTag: nil,
+      parentTag: TaskParentTag(of: task),
       onBeginEditing: { beginEditing(task) },
       onEndEditing: { endEditing(task) },
       onMove: { move(task, to: $0) },
@@ -228,9 +228,9 @@ struct AllTasksPageView: View {
     withAnimation(taskFlow) { focus.endEditing(task) }
   }
 
-  private func move(_ task: TaskItem, to target: TodoList) {
+  private func move(_ task: TaskItem, to target: TaskDestination) {
     focus.forget(task)
-    task.move(to: target)
+    task.file(to: target, in: modelContext)
     try? modelContext.save()
   }
 

@@ -40,7 +40,7 @@ struct ListPageView: View {
   // Toutes les listes, archivées comprises : `#Nom` les vise encore. Le « Déplacer vers… » du menu
   // d'une tâche, lui, en écarte les archivées (cf. `moveTargets` en tête du body).
   @Query private var allLists: [TodoList]
-  // Idem pour la saisie rapide `#projet`, qui vise la première liste du projet.
+  // Idem pour la saisie rapide `#projet`, qui rattache la tâche au projet sans liste.
   @Query private var allProjects: [Project]
   // Un brouillon de saisie par bloc (clé = `TaskBlock.id`) : chaque champ « Nouvelle tâche » garde
   // son texte indépendamment des autres.
@@ -688,13 +688,17 @@ struct ListPageView: View {
     guard !entry.title.isEmpty, entry.when != nil || entry.target != nil else { return }
     task.title = entry.title
     if let when = entry.when { task.when = when }
-    if let destination = entry.target.flatMap(resolveQuickEntryTarget),
-      destination.persistentModelID != task.list?.persistentModelID
-    {
-      // La tâche quitte la page affichée : purge sélection/édition qui pointeraient dessus
-      // (même précaution que `moveHeader`).
-      focus.forget(task)
-      move(task, to: destination)
+    if let destination = entry.target.flatMap(resolveQuickEntryTarget) {
+      if case .list(let target) = destination,
+        target.persistentModelID == task.list?.persistentModelID
+      {
+        // Déjà là : rien à ranger.
+      } else {
+        // La tâche quitte la page affichée : purge sélection/édition qui pointeraient dessus
+        // (même précaution que `moveHeader`).
+        focus.forget(task)
+        move(task, to: destination)
+      }
     }
     try? modelContext.save()
   }
@@ -1045,14 +1049,14 @@ struct ListPageView: View {
     // La cible de la barre latérale se lit de même — avant, et sans condition : `drop` désarme
     // aussi le geste côté sidebar. Rien à tester sur l'en-tête ici : elle ne publie pas de cadre
     // en vol (cf. `publishTaskDrag` sur la rangée), donc rien ne peut être survolé quand on la tire.
-    let filed = filing.drop(in: allLists)
+    let filed = filing.drop(in: allLists, context: modelContext)
     let grabbed = draggedGroup.first
     withAnimation(.snappy(duration: 0.22)) {
       // Un rangement l'emporte sur le rang : la tâche quitte la page, écrire aussi sa place dedans
       // ne voudrait rien dire (même règle que `dropTaskDrag`, pour les pages qui, elles, partagent
       // le moteur du socle).
       if let filed, let grabbed {
-        grabbed.move(to: filed)
+        grabbed.file(to: filed, in: modelContext)
       } else if let state {
         TodoList.renumber(state.tasks.reordered(state.dragged, among: state.others))
       }
@@ -1171,7 +1175,17 @@ struct ListPageView: View {
       if refocus { focusedDraft = nil }
       return
     }
-    let destination = (entry.target ?? tokens?.target).flatMap(resolveQuickEntryTarget) ?? list
+    let target = (entry.target ?? tokens?.target).flatMap(resolveQuickEntryTarget)
+    // `#Projet` : la tâche part dans l'Inbox, rattachée au projet (cf. `TaskItem.inboxProject`).
+    var attached: Project?
+    let destination: TodoList
+    switch target {
+    case .list(let found): destination = found
+    case .project(let project):
+      attached = project
+      destination = modelContext.inboxList ?? list
+    case nil: destination = list
+    }
     // Le jeton encore dans le texte l'emporte sur la pastille déjà posée, comme pour la date. Une
     // heure sans jour se complète par aujourd'hui (cf. `QuickEntry.day`).
     let minutes = entry.minutes ?? tokens?.minutes
@@ -1186,6 +1200,7 @@ struct ListPageView: View {
       let task = TaskItem(
         title: entry.title, when: when, whenMinutes: minutes, list: destination)
       task.sortIndex = rank
+      if destination.isInbox { task.inboxProject = attached }
       modelContext.insertAndSave(task)
     } else {
       // Insère à la fin des tâches non cochées du bloc — avant ses cochées, avant le bloc suivant.
@@ -1198,6 +1213,7 @@ struct ListPageView: View {
         let task = TaskItem(
           title: entry.title, when: when, whenMinutes: minutes, list: destination)
         task.sortIndex = rank
+        if destination.isInbox { task.inboxProject = attached }
         modelContext.insertAndSave(task)
       }
     }
@@ -1223,16 +1239,15 @@ struct ListPageView: View {
 
   private var shortcuts: [TextShortcut] { TextShortcut.decode(shortcutData) }
 
-  /// Destinations reconnues après `#`, listes d'abord : un projet ne porte pas de tâche, `#projet`
-  /// vise donc sa première liste.
-  // ponytail: le projet vide est ignoré (pas de création de liste implicite).
+  /// Destinations reconnues après `#`, listes d'abord. `#projet` rattache la tâche au projet SANS
+  /// liste : elle part dans l'Inbox (cf. `TaskItem.inboxProject`).
   private var quickEntryNames: [String] {
     allLists.map(\.title) + allProjects.map(\.title)
   }
 
-  private func resolveQuickEntryTarget(_ name: String) -> TodoList? {
-    allLists.first { $0.title == name }
-      ?? allProjects.first { $0.title == name }?.activeLists.first
+  private func resolveQuickEntryTarget(_ name: String) -> TaskDestination? {
+    if let list = allLists.first(where: { $0.title == name }) { return .list(list) }
+    return allProjects.first { $0.title == name }.map { .project($0) }
   }
 
   // MARK: En-tête de liste
@@ -1464,10 +1479,10 @@ struct ListPageView: View {
   }
 
   /// Déplace une tâche vers une autre liste, en la posant à la fin de sa nouvelle liste.
-  private func move(_ task: TaskItem, to target: TodoList) {
+  private func move(_ task: TaskItem, to target: TaskDestination) {
     // Comme les autres pages : la tâche quitte celle-ci, sélection/édition ne doivent plus la viser.
     focus.forget(task)
-    task.move(to: target)
+    task.file(to: target, in: modelContext)
     try? modelContext.save()
   }
 

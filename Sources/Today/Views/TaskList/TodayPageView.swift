@@ -277,9 +277,9 @@ struct TodayPageView: View {
   }
 
   /// Pose la tâche à la fin de sa nouvelle liste, comme `ListPageView.move`.
-  private func move(_ task: TaskItem, to target: TodoList) {
+  private func move(_ task: TaskItem, to target: TaskDestination) {
     focus.forget(task)
-    task.move(to: target)
+    task.file(to: target, in: modelContext)
     try? modelContext.save()
   }
 

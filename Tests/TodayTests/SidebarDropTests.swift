@@ -30,9 +30,9 @@ final class SidebarDropTests: XCTestCase {
     XCTAssertEqual(row.list, list.persistentModelID)
   }
 
-  /// Une tâche appartient à une LISTE, jamais à un projet en direct : lâcher sur un projet ne range
-  /// donc RIEN, même s'il a des listes — l'utilisateur doit viser l'une d'elles.
-  func testAProjectRowNeverAcceptsADrop() throws {
+  /// Lâcher sur un projet le RATTACHE sans liste (cf. `TaskItem.inboxProject`) — pas dans sa
+  /// première liste, qui ne dit pas où l'utilisateur voulait la classer.
+  func testAProjectRowAttachesWithoutAList() throws {
     let ctx = try makeContext()
     let project = Project(title: "Maison")
     ctx.insert(project)
@@ -43,20 +43,8 @@ final class SidebarDropTests: XCTestCase {
     let row = SidebarFiling.dropRow(for: project)
 
     XCTAssertEqual(row.row, project.persistentModelID, "c'est la ligne du PROJET qui est publiée")
-    XCTAssertNil(row.list, "aucun dépôt ne doit résoudre vers ce projet")
-  }
-
-  /// Un projet vide reste survolable — c'est ce qui permet de le déplier au survol — mais il n'y a
-  /// toujours rien à y ranger : même traitement que pourvu de listes, seules SES listes rangent.
-  func testAnEmptyProjectRowIsStillHoverableButNeverATarget() throws {
-    let ctx = try makeContext()
-    let project = Project(title: "Vide")
-    ctx.insert(project)
-
-    let row = SidebarFiling.dropRow(for: project)
-
-    XCTAssertEqual(row.row, project.persistentModelID)
-    XCTAssertNil(row.list)
+    XCTAssertNil(row.list, "le dépôt ne vise aucune de ses listes")
+    XCTAssertEqual(row.project, project.persistentModelID)
   }
 
   // MARK: Où l'on vise
@@ -231,14 +219,16 @@ final class SidebarDropTests: XCTestCase {
     filing.track(CGRect(x: 40, y: 0, width: 400, height: 30))
     XCTAssertEqual(filing.hovered, SidebarFiling.dropRow(for: list))
 
-    XCTAssertEqual(filing.drop(in: [list])?.persistentModelID, list.persistentModelID)
+    guard case .list(let filed) = filing.drop(in: [list], context: ctx) else {
+      return XCTFail("la liste survolée doit être la destination")
+    }
+    XCTAssertEqual(filed.persistentModelID, list.persistentModelID)
     XCTAssertNil(filing.hovered, "le geste est terminé")
   }
 
-  /// Survoler la ligne d'un projet puis relâcher ne range rien : `list` y vaut `nil`, et `drop`
-  /// désarme quand même le geste.
+  /// Survoler la ligne d'un projet puis relâcher vise le PROJET, pas l'une de ses listes.
   @MainActor
-  func testDroppingOnAProjectRowResolvesNothing() throws {
+  func testDroppingOnAProjectRowTargetsTheProject() throws {
     let ctx = try makeContext()
     let project = Project(title: "Maison")
     ctx.insert(project)
@@ -252,7 +242,10 @@ final class SidebarDropTests: XCTestCase {
     ])
     filing.track(CGRect(x: 40, y: 0, width: 400, height: 30))
 
-    XCTAssertNil(filing.drop(in: [list]))
+    guard case .project(let filed) = filing.drop(in: [list], context: ctx) else {
+      return XCTFail("le projet survolé doit être la destination")
+    }
+    XCTAssertTrue(filed === project)
     XCTAssertNil(filing.hovered, "le geste est terminé")
   }
 

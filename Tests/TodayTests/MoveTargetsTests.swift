@@ -62,12 +62,15 @@ final class MoveTargetsTests: XCTestCase {
     XCTAssertEqual(groups(index.excluding(a1.persistentModelID)), ["B:b1", "A:a2"])
   }
 
-  func testUnProjetDontToutesLesListesSontEcarteesDisparait() {
+  /// Le projet reste proposé, sans liste, en fin de projets : « Sans liste » y rattache la tâche
+  /// (cf. `TaskItem.inboxProject`). Il disparaissait avant, et sortir une tâche de la seule liste
+  /// de son projet était impossible.
+  func testUnProjetDontToutesLesListesSontEcarteesResteSansListe() {
     let a = project("A")
     let a1 = list("a1", in: a)
     let libre = list("libre")
     let targets = MoveTargetIndex([a1, libre]).excluding(a1.persistentModelID)
-    XCTAssertEqual(groups(targets), ["-:libre"])
+    XCTAssertEqual(groups(targets), ["A:", "-:libre"])
   }
 
   func testIsEmptyQuandIlNeResteQueLaListeDeLaTache() {

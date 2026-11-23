@@ -13,6 +13,8 @@ struct MoveTargetIndex: Equatable {
     let id: PersistentIdentifier
     /// Le titre du projet de la liste, lu une fois. `nil` = liste libre.
     let project: String?
+    /// Le projet lui-même : c'est la cible de « Sans liste » (cf. `TaskDestination.project`).
+    let projectModel: Project?
   }
 
   let entries: [Entry]
@@ -21,7 +23,11 @@ struct MoveTargetIndex: Equatable {
   let ids: [PersistentIdentifier]
 
   init(_ lists: [TodoList]) {
-    entries = lists.map { Entry(list: $0, id: $0.persistentModelID, project: $0.project?.title) }
+    entries = lists.map {
+      let project = $0.project
+      return Entry(
+        list: $0, id: $0.persistentModelID, project: project?.title, projectModel: project)
+    }
     ids = entries.map(\.id)
   }
 
@@ -47,22 +53,39 @@ struct MoveTargets: Equatable {
     index.entries.filter { $0.id != excluded }.map(\.list)
   }
 
-  var isEmpty: Bool { !index.ids.contains { $0 != excluded } }
+  /// Vide seulement s'il n'y a ni autre liste ni projet : un projet reste une destination même
+  /// quand sa seule liste est celle de la tâche (« Sans liste » la sort de la liste).
+  var isEmpty: Bool {
+    !index.ids.contains { $0 != excluded } && !index.entries.contains { $0.projectModel != nil }
+  }
 
   /// Les cibles groupées par projet, les listes libres en dernier — un projet est ce qu'on cherche
   /// d'abord quand on range une tâche qui traîne. Les projets suivent leur première apparition
   /// PARMI LES LISTES PROPOSÉES (d'où un groupement par rangée, sur des valeurs déjà lues : écarter
   /// la liste de la tâche peut changer quel projet vient en premier). `filter` plutôt qu'un
   /// `sorted` : le tri de Swift n'est pas stable, il aurait mélangé l'ordre des projets entre eux.
-  var byProject: [(project: String?, lists: [TodoList])] {
+  ///
+  /// Un projet dont la SEULE liste est celle de la tâche reste proposé, sans liste, en fin de
+  /// projets : c'est le cas même qui sort une tâche utile de sa liste pour la rattacher au projet.
+  ///
+  /// ponytail: groupé par TITRE, comme avant — deux projets homonymes fusionnent leurs listes, et
+  /// « Sans liste » vise le premier. À grouper par identité le jour où ça arrive.
+  var byProject: [(project: String?, model: Project?, lists: [TodoList])] {
     var order: [String?] = []
     var buckets: [String?: [TodoList]] = [:]
-    for entry in index.entries where entry.id != excluded {
+    var models: [String: Project] = [:]
+    for entry in index.entries {
+      if let title = entry.project, models[title] == nil { models[title] = entry.projectModel }
+      guard entry.id != excluded else { continue }
       if buckets[entry.project] == nil { order.append(entry.project) }
       buckets[entry.project, default: []].append(entry.list)
     }
-    let sorted = order.filter { $0 != nil } + order.filter { $0 == nil }
-    return sorted.map { (project: $0, lists: buckets[$0] ?? []) }
+    let orphaned = index.entries.first { $0.id == excluded }?.project.flatMap {
+      buckets[$0] == nil ? $0 : nil
+    }
+    let sorted =
+      order.filter { $0 != nil } + (orphaned.map { [$0] } ?? []) + order.filter { $0 == nil }
+    return sorted.map { (project: $0, model: $0.flatMap { models[$0] }, lists: buckets[$0] ?? []) }
   }
 
   static func == (a: MoveTargets, b: MoveTargets) -> Bool {

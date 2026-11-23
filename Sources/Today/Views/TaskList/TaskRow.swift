@@ -39,7 +39,7 @@ struct TaskRow: View {
   var parentTag: TaskParentTag? = nil
   var onBeginEditing: () -> Void
   var onEndEditing: () -> Void
-  var onMove: (TodoList) -> Void
+  var onMove: (TaskDestination) -> Void
   var onDuplicate: () -> Void
   var onDelete: () -> Void
   /// Cocher/décocher : la page décide ce qu'elle en fait (ici, programmer l'archivage).
@@ -959,17 +959,21 @@ struct TaskRow: View {
       } else {
         // Un projet est ce qu'on cherche d'abord en rangeant une tâche : cf. `MoveTargets.byProject`.
         ForEach(moveTargets.byProject, id: \.project) { group in
-          // Un projet ne porte pas de tâche directement (cf. `Project`) : l'« assigner à un
-          // projet » revient à choisir l'une de ses listes, d'où le sous-menu.
+          // « Sans liste » en tête : la tâche reste dans « Tâches », rattachée au projet (cf.
+          // `TaskItem.inboxProject`). Les listes du projet suivent.
           if let project = group.project {
             Menu(project) {
+              if let model = group.model {
+                Button("Sans liste") { onMove(.project(model)) }
+                if !group.lists.isEmpty { Divider() }
+              }
               ForEach(group.lists) { target in
-                Button(target.title) { onMove(target) }
+                Button(target.title) { onMove(.list(target)) }
               }
             }
           } else {
             ForEach(group.lists) { target in
-              Button(target.title) { onMove(target) }
+              Button(target.title) { onMove(.list(target)) }
             }
           }
         }

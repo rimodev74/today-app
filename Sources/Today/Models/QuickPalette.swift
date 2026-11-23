@@ -240,8 +240,9 @@ struct QuickPalette {
     return QuickPalette(rows: rows)
   }
 
-  /// Ce que vise un raccourci : une commande, une liste (un dossier → sa première liste, comme
-  /// `QuickEntry`) ou une date. `nil` si sa cible n'existe plus.
+  /// Ce que vise un raccourci : une commande, une liste (un dossier → sa première liste ; la saisie
+  /// `#projet` de `QuickEntry`, elle, rattache sans liste) ou une date. `nil` si sa cible n'existe
+  /// plus.
   private static func shortcutRow(
     _ shortcut: TextShortcut, lists: [TodoList], projects: [Project], now: Date
   ) -> Row? {

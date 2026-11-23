@@ -9,7 +9,10 @@ import Foundation
 /// est précisément ce qu'on veut distinguer. Le projet n'est pas perdu pour autant : il donne sa
 /// teinte, et c'est la même que son icône dans la sidebar.
 ///
-/// `nil` quand il n'y a rien à dire — et la **boîte de réception** en fait partie. C'est le
+/// **Une tâche de l'Inbox rattachée à un projet** (`TaskItem.inboxProject`) annonce le PROJET : elle
+/// n'a pas de liste à nommer, et c'est précisément ce que la pastille vient dire sur « Tâches ».
+///
+/// `nil` quand il n'y a rien à dire — et la **boîte de réception** nue en fait partie. C'est le
 /// rangement par défaut de toute tâche non classée (l'onglet « Tâches ») : l'écrire sur chaque
 /// ligne d'« Aujourd'hui » ne distingue rien, ça ne fait qu'ajouter du gris à côté d'un titre.
 ///
@@ -25,7 +28,14 @@ struct TaskParentTag: Equatable {
   let color: ProjectColor?
 
   init?(of task: TaskItem) {
-    guard let list = task.list, !list.isInbox, !list.title.isEmpty else { return nil }
+    guard let list = task.list else { return nil }
+    if list.isInbox {
+      guard let project = task.inboxProject, !project.title.isEmpty else { return nil }
+      title = project.title
+      color = project.color
+      return
+    }
+    guard !list.title.isEmpty else { return nil }
     title = list.title
     color = list.project?.color
   }

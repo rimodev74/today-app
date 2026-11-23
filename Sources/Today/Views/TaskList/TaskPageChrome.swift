@@ -515,10 +515,10 @@ func dropTaskDrag(
   let ordered = reorder.dropped()
   let dragged = reorder.draggedTask
   // Lue AVANT de désarmer, comme l'ordre, et pour la même raison.
-  let filed = filing.drop(in: lists)
+  let filed = filing.drop(in: lists, context: context)
   withAnimation(taskDrop) {
     if let filed, let dragged {
-      dragged.move(to: filed)
+      dragged.file(to: filed, in: context)
       try? context.save()
     } else if let ordered {
       write(ordered)

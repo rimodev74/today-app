@@ -20,31 +20,29 @@ import SwiftData
 /// glissement, et y mettre un `@Model` ferait relire ses propriétés à travers la machinerie
 /// SwiftData à chaque comparaison — exactement le coût que `sortedByKey` documente.
 struct SidebarDropRow: Hashable {
-  /// La ligne elle-même. C'est elle qui s'allume au survol — sauf une ligne de PROJET, qui ne
-  /// s'allume JAMAIS (cf. `list`) mais reste publiée : c'est ce qui la rend survolable.
+  /// La ligne elle-même, celle qui s'allume au survol.
   let row: PersistentIdentifier
-  /// La liste où la tâche atterrit. `nil` pour une ligne de PROJET : une tâche appartient à une
-  /// liste et jamais à un projet en direct (`TaskItem.project` se déduit de `list?.project`), donc
-  /// lâcher sur un projet ne range RIEN — l'utilisateur doit viser une de ses listes. La ligne du
-  /// projet reste malgré tout publiée : c'est ce qui la rend SURVOLABLE, pour la déplier
-  /// (cf. `SidebarView`'s `.onChange(of: filing.hovered)`) et révéler ses listes, les seules vraies
-  /// destinations.
+  /// La liste où la tâche atterrit. `nil` pour une ligne de PROJET (cf. `project`).
   let list: PersistentIdentifier?
+  /// Le projet auquel la tâche se RATTACHE, sans liste (cf. `TaskItem.inboxProject`). `nil` pour une
+  /// ligne de liste. Survoler un projet le déplie aussi (cf. `SidebarView`'s
+  /// `.onChange(of: filing.hovered)`) : on peut viser ses listes ou le projet lui-même.
+  let project: PersistentIdentifier?
 }
 
 /// La règle du dépôt : ce qui peut accueillir, et où l'on vise.
 enum SidebarFiling {
   /// Ce qu'une ligne de liste accueille : elle-même.
   static func dropRow(for list: TodoList) -> SidebarDropRow {
-    SidebarDropRow(row: list.persistentModelID, list: list.persistentModelID)
+    SidebarDropRow(row: list.persistentModelID, list: list.persistentModelID, project: nil)
   }
 
-  /// Ce qu'une ligne de projet accueille : **rien**. Une tâche se range dans une LISTE, jamais dans
-  /// un projet — même la première venue ne dit pas où l'utilisateur voulait vraiment la classer.
-  /// Publiée quand même (même pour un projet sans liste) : c'est ce qui la rend survolable, et le
-  /// survol la DÉPLIE pour révéler ses listes — la seule façon de viser un vrai dépôt.
+  /// Ce qu'une ligne de projet accueille : la tâche, rattachée au projet SANS liste — elle reste
+  /// dans « Tâches » (cf. `TaskItem.inboxProject`). Ce n'est pas « sa première liste » : la première
+  /// venue ne dit pas où l'utilisateur voulait la classer.
   static func dropRow(for project: Project) -> SidebarDropRow {
-    SidebarDropRow(row: project.persistentModelID, list: nil)
+    SidebarDropRow(
+      row: project.persistentModelID, list: nil, project: project.persistentModelID)
   }
 
   /// Le point d'accroche : le bord avant d'un cadre, à mi-hauteur — c'est là que le calque
@@ -114,6 +112,9 @@ extension TaskItem {
     let first = target.tasks.map(\.sortIndex).min() ?? 1
     list = target
     sortIndex = first - 1
+    // Rangée dans une vraie liste, la tâche n'a plus de projet à elle : c'est sa liste qui le dit
+    // (cf. `TaskItem.inboxProject`).
+    if !target.isInbox, inboxProject != nil { inboxProject = nil }
   }
 }
 
@@ -233,20 +234,25 @@ final class SidebarDrop {
     arm(grabOffsetX: start.x - restingFrame.minX)
   }
 
-  /// **Le relâchement du geste** : la liste où ranger, s'il y en a une, et fin du vol.
+  /// **Le relâchement du geste** : où ranger, s'il y a lieu, et fin du vol.
   ///
-  /// Rend la LISTE et pas la ligne visée, parce que c'est la seule chose qu'un appelant en fasse —
-  /// les deux moteurs de glissement de l'app résolvaient sinon le même identifiant chacun de son
-  /// côté. Et elle désarme au passage : la cible se déduit d'un geste qui n'existe plus après, il
-  /// n'y a donc pas d'ordre correct autre que celui-là.
-  func drop(in lists: [TodoList]) -> TodoList? {
+  /// Rend la DESTINATION et pas la ligne visée, parce que c'est la seule chose qu'un appelant en
+  /// fasse — les deux moteurs de glissement de l'app résolvaient sinon le même identifiant chacun
+  /// de son côté. Et elle désarme au passage : la cible se déduit d'un geste qui n'existe plus
+  /// après, il n'y a donc pas d'ordre correct autre que celui-là.
+  func drop(in lists: [TodoList], context: ModelContext) -> TaskDestination? {
     defer {
       draggedFrame = nil
       grabOffsetX = 0
       refresh()
     }
-    // `list` vaut `nil` pour une ligne de PROJET : la survoler la déplie, elle ne range rien.
-    guard let hovered, let listID = hovered.list else { return nil }
-    return lists.first { $0.persistentModelID == listID }
+    guard let hovered else { return nil }
+    if let listID = hovered.list {
+      return lists.first { $0.persistentModelID == listID }.map { .list($0) }
+    }
+    guard let projectID = hovered.project,
+      let project: Project = context.registeredModel(for: projectID)
+    else { return nil }
+    return .project(project)
   }
 }
