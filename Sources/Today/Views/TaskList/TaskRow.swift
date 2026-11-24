@@ -614,7 +614,7 @@ struct TaskRow: View {
     }
   }
 
-  /// La provenance de la tâche, en pastille : un point de la couleur du projet, puis son nom.
+  /// La provenance de la tâche, en pastille teintée à la couleur du projet, avec son nom.
   ///
   /// Teintée plutôt que grise parce que c'est ce que la couleur sert déjà à dire ailleurs — c'est
   /// la même que l'icône du projet dans la sidebar et que ses anneaux de progression. Une page qui
@@ -627,19 +627,15 @@ struct TaskRow: View {
     // Toutes dynamiques (`PaletteColor` passe par les `systemXxx`, `.primary`/`.secondary` sont
     // hiérarchiques) : rien à doubler pour le mode sombre.
     let tint = tag.color?.color
-    return HStack(spacing: 4) {
-      Circle()
-        .fill(tint ?? Color.secondary)
-        .frame(width: 5, height: 5)
-      Text(tag.title)
-        .font(.app(11, weight: .medium))
-        .lineLimit(1)
-    }
-    .foregroundStyle(tint ?? Color.secondary)
-    .padding(.horizontal, 6)
-    .padding(.vertical, 2)
-    .background(tint?.opacity(0.12) ?? Color.primary.opacity(0.06), in: Capsule())
-    .fixedSize()
+    // Pas de point devant le nom : la capsule teintée dit déjà la couleur, le point la répétait.
+    return Text(tag.title)
+      .font(.app(11, weight: .medium))
+      .lineLimit(1)
+      .foregroundStyle(tint ?? Color.secondary)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(tint?.opacity(0.12) ?? Color.primary.opacity(0.06), in: Capsule())
+      .fixedSize()
   }
 
   private var dateControl: some View {

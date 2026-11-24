@@ -9,7 +9,7 @@ final class TodoListTests: XCTestCase {
   /// `orderedTasks` lit la VRAIE relation `TodoList.tasks` : un objet détaché (jamais inséré dans
   /// un contexte) ne la remplit pas, cf. `AllTasksPageTests`.
   private func makeContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return ModelContext(try ModelContainer(for: schema, configurations: config))
   }

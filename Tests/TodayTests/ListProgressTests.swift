@@ -27,7 +27,7 @@ final class ListProgressTests: XCTestCase {
   private var context: ModelContext!
 
   override func setUpWithError() throws {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     context = ModelContext(try ModelContainer(for: schema, configurations: config))
   }

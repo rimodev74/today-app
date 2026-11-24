@@ -28,7 +28,7 @@ final class CascadeDeleteTests: XCTestCase {
   }
 
   private func openContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     return ModelContext(
       try ModelContainer(
         for: schema, configurations: ModelConfiguration(schema: schema, url: storeURL)))
@@ -162,7 +162,7 @@ final class CascadeDeleteTests: XCTestCase {
   /// Un contexte sur la même base, mais qui REFUSE d'enregistrer : la façon la plus sûre de faire
   /// échouer `save()` sans abîmer le disque.
   private func readOnlyContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     return ModelContext(
       try ModelContainer(
         for: schema,

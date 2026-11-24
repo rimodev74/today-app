@@ -22,6 +22,8 @@ struct SidebarView: View {
   @State private var tally = SidebarTally()
   @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
   private var projects: [Project]
+  @Query(sort: [SortDescriptor(\Area.sortIndex), SortDescriptor(\Area.createdAt)])
+  private var areas: [Area]
 
   /// Change de destination SANS animer. Une simple `selection = …` hérite de la transaction
   /// ambiante posée par le geste de clic (`sidebarRow`/`DragGesture`), qui porte une animation
@@ -71,7 +73,8 @@ struct SidebarView: View {
   // MARK: Réordonnancement (drag) — même moteur que la liste de tâches (mesure des positions de
   // repos, ligne soulevée qui suit le curseur, voisines qui s'écartent, ordre écrit au drop),
   // adapté à la hiérarchie. Un PROJET se réordonne entre projets en emmenant ses listes comme un
-  // bloc (jamais dans une liste) ; une LISTE se réordonne et peut CHANGER de projet.
+  // bloc (jamais dans une liste), et CHANGE de zone s'il se pose sous un autre en-tête de zone ;
+  // une LISTE se réordonne et peut CHANGER de projet. Les en-têtes de zone ne s'empoignent pas.
   // `dragID` = ligne empoignée ; `draggedKeys` = son groupe ; `motion` sa translation sous le
   // curseur, les décalages des autres lignes et le trou ; `rowFrames` la position de repos mesurée
   // de chaque ligne (gelée pendant le drag).
@@ -90,6 +93,9 @@ struct SidebarView: View {
   /// Clé de mesure d'une ligne. Un projet et sa rangée « + » partagent le `persistentModelID` du
   /// projet : l'énum les distingue pour que leurs cadres ne s'écrasent pas.
   private enum RowKey: Hashable {
+    /// L'en-tête d'une zone : mesuré pour que le glisser d'un projet sache sous quelle zone il tombe,
+    /// jamais empoigné lui-même.
+    case area(PersistentIdentifier)
     case project(PersistentIdentifier)
     case list(PersistentIdentifier)
     case addList(PersistentIdentifier)
@@ -317,25 +323,21 @@ struct SidebarView: View {
 
   private var projectsGroup: some View {
     VStack(alignment: .leading, spacing: 6) {
-      if projects.isEmpty {
+      if projects.isEmpty && areas.isEmpty {
         Text("Aucun projet")
           .font(.callout)
           .foregroundStyle(.tertiary)
           .padding(.horizontal, 8)
           .padding(.vertical, 4)
       }
-      ForEach(sortedProjects) { project in
-        projectRow(project)
-        if !project.isCollapsed {
-          // Petit fondu à l'ouverture, EXPLICITE — cf. convention dans CLAUDE.md : un retrait/insertion
-          // réel se fond par défaut, mais laissé au défaut implicite de SwiftUI, un ancêtre qui pose
-          // un jour `.transition(.identity)` l'éteindrait sans qu'on le voie. Le `Group` porte la
-          // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
+      // D'abord les projets hors zone, puis chaque zone et les siens (cf. `AreaGrouping`). Même
+      // parcours que `physicalRows` : les deux DOIVENT dire le même ordre, sinon les trous
+      // d'insertion du glisser tombent à côté.
+      ForEach(areaGrouping.sections, id: \.area?.persistentModelID) { section in
+        if let area = section.area { areaRow(area) }
+        if section.area?.isCollapsed != true {
           Group {
-            ForEach(project.activeLists) { list in
-              listRow(list)
-            }
-            addListRow(project)
+            ForEach(section.projects) { project in projectBlock(project) }
           }
           .transition(.opacity)
         }
@@ -430,6 +432,91 @@ struct SidebarView: View {
       }
   }
 
+  @ViewBuilder
+  private func projectBlock(_ project: Project) -> some View {
+    projectRow(project)
+    if !project.isCollapsed {
+      // Petit fondu à l'ouverture, EXPLICITE — cf. convention dans CLAUDE.md : un retrait/insertion
+      // réel se fond par défaut, mais laissé au défaut implicite de SwiftUI, un ancêtre qui pose
+      // un jour `.transition(.identity)` l'éteindrait sans qu'on le voie. Le `Group` porte la
+      // transition pour tout le pan (listes + ligne d'ajout) comme un seul bloc.
+      Group {
+        ForEach(project.activeLists) { list in
+          listRow(list)
+        }
+        addListRow(project)
+      }
+      .transition(.opacity)
+    }
+  }
+
+  /// L'en-tête d'une zone : petites capitales grises, comme une section de barre latérale du
+  /// Finder — ce n'est pas une destination, rien ne s'y ouvre. Le clic ne fait rien ; le chevron
+  /// replie, le double-clic renomme.
+  private func areaRow(_ area: Area) -> some View {
+    let id = area.persistentModelID
+    let row = sidebarRow(id: id, isSelected: { false }, verticalPadding: 4) {
+    } label: {
+      HStack(spacing: 6) {
+        editableTitle(id: id, text: Bindable(area).title, placeholder: "Nom de la zone") {
+          if area.title.trimmingCharacters(in: .whitespaces).isEmpty {
+            area.title = "Nouvelle zone"
+          }
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .textCase(.uppercase)
+        .foregroundStyle(.secondary)
+
+        // Même chevron, même cible élargie que celui d'un projet (cf. `projectRow`).
+        Image(systemName: "chevron.right")
+          .font(.system(size: 9, weight: .bold))
+          .foregroundStyle(.secondary)
+          .rotationEffect(.degrees(area.isCollapsed ? 0 : 90))
+          .frame(width: 24, height: 20, alignment: .trailing)
+          .contentShape(Rectangle())
+          .highPriorityGesture(
+            TapGesture().onEnded {
+              withAnimation(disclosureFlow) {
+                area.isCollapsed.toggle()
+                try? modelContext.save()
+              }
+            }
+          )
+      }
+    }
+    .contextMenu {
+      Button("Renommer") { startRename(id) }
+      Button("Nouveau projet dans la zone") { addProject(in: area) }
+      Divider()
+      // Pas de confirmation : rien ne se perd, ses projets reviennent à la racine (`.nullify`).
+      Button("Supprimer la zone", role: .destructive) { delete(area) }
+    }
+    .padding(.top, 8)
+    return measured(row, key: .area(id))
+  }
+
+  /// « Zone ▸ » du clic droit d'un projet : le chemin au clavier et à la souris, le glisser
+  /// sous un en-tête de zone étant l'autre (cf. `commitProjectMove`).
+  @ViewBuilder
+  private func areaMenu(_ project: Project) -> some View {
+    Menu("Zone") {
+      ForEach(areas) { area in
+        Toggle(
+          area.title,
+          isOn: Binding(
+            get: { project.area == area },
+            set: { if $0 { move(project, to: area) } }))
+      }
+      if !areas.isEmpty {
+        Toggle(
+          "Aucune zone",
+          isOn: Binding(get: { project.area == nil }, set: { if $0 { move(project, to: nil) } }))
+        Divider()
+      }
+      Button("Nouvelle zone avec ce projet") { addArea(containing: project) }
+    }
+  }
+
   private func projectRow(_ project: Project) -> some View {
     let id = project.persistentModelID
     let row = sidebarRow(
@@ -489,6 +576,7 @@ struct SidebarView: View {
       Button("Renommer") { startRename(id) }
       Button("Nouvelle to-do list") { addList(to: project) }
       Button("Couleur…") { openPalette(id) }
+      areaMenu(project)
       Divider()
       Button("Supprimer le projet", role: .destructive) { requestDelete(project) }
     }
@@ -766,6 +854,8 @@ struct SidebarView: View {
         Label("Nouveau projet", systemImage: "plus").hoverBordered()
       }
       .buttonStyle(.plain)
+      // Une zone vide se crée ici ; avec un projet dedans, au clic droit du projet (« Zone ▸ »).
+      .contextMenu { Button("Nouvelle zone") { addArea(containing: nil) } }
       .padding(.leading, 4)
 
       Spacer()
@@ -829,12 +919,41 @@ struct SidebarView: View {
     editingID = nil
   }
 
-  private func addProject() {
+  private func addProject() { addProject(in: nil) }
+
+  private func addProject(in area: Area?) {
     let project = Project(title: "Nouveau projet")
     project.sortIndex = (projects.map(\.sortIndex).max() ?? -1) + 1
+    project.area = area
+    area?.isCollapsed = false
     modelContext.insertAndSave(project)
     selection = .project(project)
     startRename(project.persistentModelID)
+  }
+
+  /// Une zone neuve, EN FIN de sidebar. `project` y entre d'emblée : c'est le geste qui la fait
+  /// naître (clic droit d'un projet) — une zone vide n'apparaîtrait que comme un titre orphelin.
+  private func addArea(containing project: Project?) {
+    let area = Area(title: "Nouvelle zone")
+    area.sortIndex = (areas.map(\.sortIndex).max() ?? -1) + 1
+    modelContext.insertAndSave(area)
+    if let project { move(project, to: area) }
+    startRename(area.persistentModelID)
+  }
+
+  /// Ranger un projet dans une zone le met EN FIN de celle-ci : `sortIndex` est un ordre global
+  /// (cf. `AreaGrouping`), le dépasser suffit.
+  private func move(_ project: Project, to area: Area?) {
+    withAnimation(disclosureFlow) {
+      project.area = area
+      project.sortIndex = (projects.map(\.sortIndex).max() ?? -1) + 1
+      area?.isCollapsed = false
+    }
+    try? modelContext.save()
+  }
+
+  private func delete(_ area: Area) {
+    withAnimation(disclosureFlow) { _ = modelContext.deleteCascadeAndSave(area) }
   }
 
   /// Le projet qu'une nouvelle to-do list rejoindrait : celui qu'on regarde, ou celui de la liste
@@ -1006,14 +1125,24 @@ struct SidebarView: View {
   /// calcul d'insertion. Stable pendant un drag (ni l'ordre ni le repli ne changent avant le drop).
   private var physicalRows: [RowKey] {
     var rows: [RowKey] = []
-    for p in sortedProjects {
-      rows.append(.project(p.persistentModelID))
-      if !p.isCollapsed {
-        for l in p.activeLists { rows.append(.list(l.persistentModelID)) }
-        rows.append(.addList(p.persistentModelID))
+    for section in areaGrouping.sections {
+      if let area = section.area {
+        rows.append(.area(area.persistentModelID))
+        if area.isCollapsed { continue }
+      }
+      for p in section.projects {
+        rows.append(.project(p.persistentModelID))
+        if !p.isCollapsed {
+          for l in p.activeLists { rows.append(.list(l.persistentModelID)) }
+          rows.append(.addList(p.persistentModelID))
+        }
       }
     }
     return rows
+  }
+
+  private var areaGrouping: AreaGrouping {
+    AreaGrouping(projects: sortedProjects, areas: areas)
   }
 
   /// Lignes qu'emporte le drag : un projet emmène son bloc (lui + ses listes + sa rangée « + »),
@@ -1099,7 +1228,7 @@ struct SidebarView: View {
       case .list(let lid):
         if let lf = rowFrames[.list(lid)], center < lf.midY { return insert }
         insert = i + 1
-      case .addList, .project:
+      case .addList, .project, .area:
         return insert
       }
       i += 1
@@ -1114,8 +1243,15 @@ struct SidebarView: View {
   private func projectInsert(center: CGFloat, others: [RowKey], collapse: CGFloat, origin: Int)
     -> Int
   {
+    // Un en-tête de zone ouvre aussi un bloc : se poser AVANT lui finit la section du dessus, se
+    // poser avant le premier projet qui le suit (ou en fin, s'il est vide) entre dans la zone.
     var starts: [Int] = []
-    for (i, k) in others.enumerated() { if case .project = k { starts.append(i) } }
+    for (i, k) in others.enumerated() {
+      switch k {
+      case .project, .area: starts.append(i)
+      case .list, .addList: break
+      }
+    }
     var blocks: [(insert: Int, center: CGFloat)] = []
     for (n, start) in starts.enumerated() {
       let end = n + 1 < starts.count ? starts[n + 1] : others.count
@@ -1163,13 +1299,25 @@ struct SidebarView: View {
 
   private func commitProjectMove(_ id: PersistentIdentifier, layout: ReorderLayout<RowKey>) {
     guard let moved = project(id) else { return }
-    var order = sortedProjects.filter { $0.persistentModelID != id }
-    // `insert` pointe le début d'un bloc-projet : le nombre de projets AVANT lui dans `others` est
-    // la position cible parmi les projets restants.
-    let before = layout.others[0..<layout.insert].reduce(into: 0) { n, k in
-      if case .project = k { n += 1 }
+    // La zone d'arrivée = le dernier en-tête de zone au-dessus du point d'insertion ; aucun ⇒ la
+    // racine. L'ancre = le dernier projet visible au-dessus. On s'insère juste après elle dans
+    // l'ordre COMPLET (projets des zones repliées compris, absents de `others`) : seul l'ordre
+    // relatif à l'intérieur d'une zone compte, et après l'ancre on est forcément en tête de ce qui
+    // suit dans la zone d'arrivée.
+    var area: Area?
+    var anchor: PersistentIdentifier?
+    for k in layout.others[0..<layout.insert] {
+      switch k {
+      case .area(let aid): area = areas.first { $0.persistentModelID == aid }
+      case .project(let pid): anchor = pid
+      case .list, .addList: break
+      }
     }
-    order.insert(moved, at: min(before, order.count))
+    var order = areaGrouping.sections.flatMap(\.projects).filter { $0.persistentModelID != id }
+    let at =
+      anchor.flatMap { a in order.firstIndex { $0.persistentModelID == a } }.map { $0 + 1 } ?? 0
+    order.insert(moved, at: at)
+    moved.area = area
     for (i, p) in order.enumerated() { p.sortIndex = i }
   }
 
@@ -1186,7 +1334,7 @@ struct SidebarView: View {
         targetID = pid
         index = 0
       case .list: index += 1
-      case .addList: break
+      case .addList, .area: break
       }
     }
     guard let target = targetID.flatMap({ project($0) }) ?? projects.first else { return }

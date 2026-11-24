@@ -6,7 +6,7 @@ import XCTest
 final class SubtaskTests: XCTestCase {
   /// Conteneur en mémoire : les tests de modèle ne touchent jamais le vrai store sur disque.
   private func makeContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return ModelContext(try ModelContainer(for: schema, configurations: config))
   }

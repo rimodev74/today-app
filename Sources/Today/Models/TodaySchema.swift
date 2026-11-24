@@ -26,10 +26,10 @@ import SwiftData
 /// Tant que ce test est vert, l'estampille 1.0.0 est légitime. Rouge = elle ment, ne pas lancer
 /// l'app avant d'avoir suivi la marche ci-dessous.
 enum CurrentSchema: VersionedSchema {
-  static let versionIdentifier = Schema.Version(8, 0, 0)
+  static let versionIdentifier = Schema.Version(9, 0, 0)
 
   static var models: [any PersistentModel.Type] {
-    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+    [Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self]
   }
 }
 
@@ -567,9 +567,89 @@ enum SchemaV7: VersionedSchema {
   }
 }
 
+/// **Forme 8.0.0, FIGÉE — ne se modifie plus jamais.** Ce que contiennent les bases écrites du
+/// 23 au 24 novembre 2026.
+///
+/// Elle ne diffère de la forme courante que par l'entité `Area` (les zones qui regroupent des
+/// projets) et `Project.area`, un ajout PUR — une table neuve, vide, et une relation nil partout.
+enum SchemaV8: VersionedSchema {
+  static let versionIdentifier = Schema.Version(8, 0, 0)
+
+  static var models: [any PersistentModel.Type] {
+    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+
+  @Model final class Project {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var isCollapsed: Bool = false
+    var colorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
+    @Relationship(deleteRule: .nullify, inverse: \TaskItem.inboxProject) var inboxTasks:
+      [TaskItem] = []
+
+    init() {}
+  }
+
+  @Model final class TodoList {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var notes: Data = Data()
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var scheduledWhen: Date?
+    var priorityRaw: Int = 0
+    var project: Project?
+    var isInbox: Bool = false
+    var archivedAt: Date?
+    @Relationship(deleteRule: .cascade, inverse: \TaskItem.list) var tasks: [TaskItem] = []
+
+    init() {}
+  }
+
+  @Model final class TaskItem {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var notes: Data = Data()
+    var isCompleted: Bool = false
+    var isHeader: Bool = false
+    var completedAt: Date?
+    var sortIndex: Int = 0
+    var smartOrder: Int = 0
+    var when: Date?
+    var whenMinutes: Int?
+    var deadline: Date?
+    var priorityRaw: Int = 0
+    var estimateMinutes: Int = 0
+    var createdAt: Date = Date()
+    var reminderIdentifier: String?
+    var eventIdentifier: String?
+    var list: TodoList?
+    var inboxProject: Project?
+    var headerColorRaw: String?
+    @Relationship(deleteRule: .cascade, inverse: \Subtask.task) var subtasks: [Subtask] = []
+
+    init() {}
+  }
+
+  @Model final class Subtask {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var isDone: Bool = false
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var task: TaskItem?
+
+    init() {}
+  }
+}
+
 /// Chaîne de migration de l'app : les formes PASSÉES, dans l'ordre, puis la forme courante.
 ///
-/// Sept formes passées à ce jour (1.0.0 à 7.0.0). La marche ci-dessous vaut pour TOUT changement de
+/// Huit formes passées à ce jour (1.0.0 à 8.0.0). La marche ci-dessous vaut pour TOUT changement de
 /// forme, pas seulement pour un changement cassant : c'est la leçon du 3 août 2026, où un ajout
 /// optionnel sans montée de version a fait échouer l'ouverture et mettre la vraie base en
 /// quarantaine (cf. `SchemaV2`).
@@ -600,7 +680,7 @@ enum TodayMigrationPlan: SchemaMigrationPlan {
   static var schemas: [any VersionedSchema.Type] {
     [
       SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self, SchemaV5.self, SchemaV6.self,
-      SchemaV7.self, CurrentSchema.self,
+      SchemaV7.self, SchemaV8.self, CurrentSchema.self,
     ]
   }
 
@@ -640,7 +720,10 @@ enum TodayMigrationPlan: SchemaMigrationPlan {
       .lightweight(fromVersion: SchemaV6.self, toVersion: SchemaV7.self),
       // 7→8 : ajout de `TaskItem.inboxProject`, optionnel donc nil partout — aucune tâche d'avant
       // n'était rattachée à un projet sans liste.
-      .lightweight(fromVersion: SchemaV7.self, toVersion: CurrentSchema.self),
+      .lightweight(fromVersion: SchemaV7.self, toVersion: SchemaV8.self),
+      // 8→9 : ajout de l'entité `Area` et de `Project.area`, optionnel donc nil partout — aucun
+      // projet d'avant n'était rangé dans une zone, tous restent à la racine.
+      .lightweight(fromVersion: SchemaV8.self, toVersion: CurrentSchema.self),
     ]
   }
 

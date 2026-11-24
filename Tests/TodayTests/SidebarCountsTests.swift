@@ -8,7 +8,7 @@ import XCTest
 /// déplacement ne doit RIEN changer aux nombres affichés, en-têtes exclues comprises.
 final class SidebarCountsTests: XCTestCase {
   private func makeContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return ModelContext(try ModelContainer(for: schema, configurations: config))
   }

@@ -12,7 +12,7 @@ final class SidebarDropTests: XCTestCase {
   /// Conteneur en mémoire : `Project.orderedLists` lit une VRAIE relation, qu'un objet détaché ne
   /// remplirait pas.
   private func makeContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return ModelContext(try ModelContainer(for: schema, configurations: config))
   }

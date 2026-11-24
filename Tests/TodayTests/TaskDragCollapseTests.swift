@@ -10,7 +10,7 @@ import XCTest
 final class TaskDragCollapseTests: XCTestCase {
   /// Conteneur en mémoire : ces tests ne touchent jamais le vrai store (cf. `SubtaskTests`).
   private func makeTask(subtasks: Int) throws -> TaskItem {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     let context = ModelContext(try ModelContainer(for: schema, configurations: config))
     let task = TaskItem(title: "Tirée")

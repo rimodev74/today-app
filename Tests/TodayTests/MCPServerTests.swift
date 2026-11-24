@@ -79,7 +79,7 @@ final class MCPServerTests: XCTestCase {
 
   @MainActor
   func testServerAnswersInitializeOverLoopback() async throws {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let container = try ModelContainer(
       for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
     let server = MCPServer(
@@ -121,7 +121,7 @@ final class MCPServerTests: XCTestCase {
 
   @MainActor
   func testBusyPortReportsTheRequestedPort() async throws {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let container = try ModelContainer(
       for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
     let effects = MCPEffects(forgetAppleItems: { _ in }, removeCover: { _ in })
@@ -148,7 +148,7 @@ final class MCPServerTests: XCTestCase {
 
   @MainActor
   private func listeningServer(timeout: TimeInterval = 10) async throws -> (MCPServer, UInt16) {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let container = try ModelContainer(
       for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
     let server = MCPServer(

@@ -9,7 +9,7 @@ import XCTest
 final class ListArchiveTests: XCTestCase {
   /// Conteneur en mémoire : `Project.lists` et `TodoList.project` sont de VRAIES relations.
   private func makeContext() throws -> ModelContext {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     return ModelContext(try ModelContainer(for: schema, configurations: config))
   }

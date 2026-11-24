@@ -213,7 +213,7 @@ final class RemindersSyncTests: XCTestCase {
   /// SwiftData poste bien cette notification ; ici on le vérifie plutôt que de le supposer.
   @MainActor
   func testSwiftDataPosteBienDidSave() throws {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let container = try ModelContainer(
       for: schema,
       configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))

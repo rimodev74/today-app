@@ -17,6 +17,8 @@ final class Project {
   /// Stocke `ProjectColor.raw` — un nom de la palette (`"blue"`, comme `TaskItem.headerColorRaw`)
   /// ou une couleur libre (`"#3A7BD5"`). Optionnel : `nil` = teinte d'accent du système.
   var colorRaw: String?
+  /// La zone qui le regroupe (cf. `Area`). `nil` = à la racine de la sidebar.
+  var area: Area?
   @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
   /// Les tâches de l'Inbox rattachées à ce projet. `.nullify` et pas `.cascade` : supprimer le projet
   /// les rend à l'Inbox nue — elles n'ont jamais été rangées ici, elles ne partent pas avec lui.

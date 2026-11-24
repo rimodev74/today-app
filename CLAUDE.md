@@ -400,6 +400,11 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   où l'on PARCOURT et où l'on RANGE (`Project.activeLists`, les « Déplacer vers… », les destinations
   de la capsule) mais reste là où on la NOMME ou la CHERCHE (`#Nom`, raccourcis, recherche) — les
   Réglages réconcilient un raccourci par PRÉFIXE, lui retirer un nom le ferait changer de cible.
+- **Les zones** (`Area`, schéma 9.0.0) regroupent des projets — l'agence au-dessus de ses clients.
+  UN niveau, jamais un arbre : ni tâche ni sous-zone dedans. En-tête repliable dans la sidebar (clic
+  droit d'un projet ▸ Zone ▸ …, ou glisser le projet sous l'en-tête), une section par zone dans
+  « Projets ». `AreaGrouping` porte l'ordre, que `SidebarView.physicalRows` DOIT suivre. Supprimer
+  une zone rend ses projets à la racine (`.nullify`).
 - **Le glisser** existe sur une liste, « Aujourd'hui » et « Tâches ». « À venir » et « Archives »
   n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus — ses lignes de
   tâches rattachées suivent l'ordre de « Tâches », où l'on réordonne.

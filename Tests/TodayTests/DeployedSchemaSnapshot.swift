@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 8.0.0, 23 novembre 2026.** Ne se modifie que
+/// **PHOTO FIGÉE de la forme DÉPLOYÉE du store — schéma 9.0.0, 24 novembre 2026.** Ne se modifie que
 /// quand la forme déployée change, et alors dans le même geste que les modèles vivants — jamais
 /// pour faire taire un test.
 ///
@@ -29,6 +29,8 @@ import SwiftData
 ///   projet, ajout PUR (optionnel), étape `.lightweight`. Aucune liste d'avant n'est archivée.
 /// - `TaskItem.inboxProject` (+ son inverse `Project.inboxTasks`), 23 novembre 2026 — une tâche de
 ///   l'Inbox rattachée à un projet sans liste, ajout PUR (optionnel), étape `.lightweight`.
+/// - l'entité `Area` (+ `Project.area`), 24 novembre 2026 — les zones qui regroupent des projets,
+///   ajout PUR (table neuve, relation optionnelle), étape `.lightweight`.
 ///
 /// `CurrentSchema`, côté app, décrit ce que le CODE dit aujourd'hui — par une flèche vers les
 /// modèles vivants. Ce fichier-ci décrit l'autre moitié : ce que contiennent réellement les BASES
@@ -44,10 +46,21 @@ import SwiftData
 /// ces classes relisent sans perte un fichier écrit par les modèles de premier niveau, relations
 /// comprises.
 enum DeployedSchemaSnapshot: VersionedSchema {
-  static let versionIdentifier = Schema.Version(8, 0, 0)
+  static let versionIdentifier = Schema.Version(9, 0, 0)
 
   static var models: [any PersistentModel.Type] {
-    [Project.self, TodoList.self, TaskItem.self, Subtask.self]
+    [Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self]
+  }
+
+  @Model final class Area {
+    var uuid: UUID = UUID()
+    var title: String = ""
+    var sortIndex: Int = 0
+    var createdAt: Date = Date()
+    var isCollapsed: Bool = false
+    @Relationship(deleteRule: .nullify, inverse: \Project.area) var projects: [Project] = []
+
+    init() {}
   }
 
   @Model final class Project {
@@ -58,6 +71,7 @@ enum DeployedSchemaSnapshot: VersionedSchema {
     var createdAt: Date = Date()
     var isCollapsed: Bool = false
     var colorRaw: String?
+    var area: Area?
     @Relationship(deleteRule: .cascade, inverse: \TodoList.project) var lists: [TodoList] = []
     @Relationship(deleteRule: .nullify, inverse: \TaskItem.inboxProject) var inboxTasks:
       [TaskItem] = []

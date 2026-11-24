@@ -17,6 +17,8 @@ struct ProjectsPageView: View {
   /// Même tri que la sidebar : les cartes suivent l'ordre qu'on y a posé à la main.
   @Query(sort: [SortDescriptor(\Project.sortIndex), SortDescriptor(\Project.createdAt)])
   private var projects: [Project]
+  @Query(sort: [SortDescriptor(\Area.sortIndex), SortDescriptor(\Area.createdAt)])
+  private var areas: [Area]
   /// La table entière, comme `SidebarTallySource` : mesuré le 8 octobre 2026, un `@Query` bat la
   /// traversée des relations d'un facteur huit.
   @Query private var allTasks: [TaskItem]
@@ -32,6 +34,19 @@ struct ProjectsPageView: View {
     let overview = ProjectsOverview.build(
       projects: projects,
       counts: SidebarCounts(tasks: allTasks, bounds: ProjectsOverview.cumulativeBounds()))
+    // Une section par zone, comme la sidebar (cf. `AreaGrouping`) ; les cartes déjà comptées s'y
+    // répartissent par identifiant, sans second comptage.
+    let cardsByID = Dictionary(uniqueKeysWithValues: overview.cards.map { ($0.id, $0) })
+    let sections = AreaGrouping(projects: projects, areas: areas).sections
+      .map { (area: $0.area, cards: $0.projects.compactMap { cardsByID[$0.persistentModelID] }) }
+      .filter { !$0.cards.isEmpty }
+    // Rang d'entrée CONTINU d'une section à l'autre : les cartes arrivent en une seule vague.
+    var firstRanks: [Int] = []
+    var seen = 0
+    for section in sections {
+      firstRanks.append(seen)
+      seen += section.cards.count
+    }
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 20) {
@@ -41,17 +56,28 @@ struct ProjectsPageView: View {
             .foregroundStyle(.tertiary)
             .padding(.leading, taskContentColumn)
         }
-        LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
-          ForEach(Array(overview.cards.enumerated()), id: \.element.id) { rank, card in
-            ProjectCardView(
-              card: card, stamp: covers.stamps[card.uuid],
-              openProject: { selection = .project(card.project) },
-              openList: { selection = .list($0) }
-            )
-            .enteringCard(cardsShown, rank: rank)
+        ForEach(Array(sections.enumerated()), id: \.element.area?.persistentModelID) { n, section in
+          VStack(alignment: .leading, spacing: 10) {
+            if let area = section.area {
+              Text(area.title)
+                .font(.app(.callout).weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
+            }
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
+              ForEach(Array(section.cards.enumerated()), id: \.element.id) { rank, card in
+                ProjectCardView(
+                  card: card, stamp: covers.stamps[card.uuid],
+                  openProject: { selection = .project(card.project) },
+                  openList: { selection = .list($0) }
+                )
+                .enteringCard(cardsShown, rank: firstRanks[n] + rank)
+              }
+            }
           }
+          .padding(.leading, taskContentColumn)
         }
-        .padding(.leading, taskContentColumn)
       }
       .padding(.horizontal, gutter)
       .padding(.top, 30)

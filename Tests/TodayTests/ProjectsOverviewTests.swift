@@ -11,7 +11,7 @@ final class ProjectsOverviewTests: XCTestCase {
   private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
   override func setUpWithError() throws {
-    let schema = Schema([Project.self, TodoList.self, TaskItem.self, Subtask.self])
+    let schema = Schema([Area.self, Project.self, TodoList.self, TaskItem.self, Subtask.self])
     let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     context = ModelContext(try ModelContainer(for: schema, configurations: config))
   }
