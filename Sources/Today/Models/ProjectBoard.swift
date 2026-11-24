@@ -85,6 +85,7 @@ struct ProjectBoard {
       }
       total = total + row
     }
+    total = total + .attached(to: project, bounds: cumulative)
     return ProjectBoard(
       cards: cards,
       archived: sortedByKey(

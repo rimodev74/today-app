@@ -44,7 +44,9 @@ struct ProjectsOverview {
 
   /// `counts` DOIT avoir été construit avec `cumulativeBounds` — c'est l'appelant qui détient les
   /// tâches (un `@Query` sur la vue Projets, la relation sur la page d'un projet).
-  static func build(projects: [Project], counts: SidebarCounts) -> ProjectsOverview {
+  static func build(projects: [Project], counts: SidebarCounts, now: Date = Date())
+    -> ProjectsOverview
+  {
     ProjectsOverview(
       cards: projects.map { project in
         var total = SidebarCounts.Row()
@@ -55,6 +57,7 @@ struct ProjectsOverview {
           total = total + row
           if !list.isArchived { lines.append(ListLine(list: list, row: row)) }
         }
+        total = total + .attached(to: project, bounds: cumulativeBounds(now: now))
         return Card(project: project, uuid: project.uuid, total: total, lists: lines)
       })
   }
@@ -63,11 +66,25 @@ struct ProjectsOverview {
   /// écrite à la main.
   static func total(of project: Project, now: Date = Date()) -> SidebarCounts.Row {
     let counts = SidebarCounts(tasks: project.allTasks, bounds: cumulativeBounds(now: now))
-    return build(projects: [project], counts: counts).cards[0].total
+    return build(projects: [project], counts: counts, now: now).cards[0].total
   }
 }
 
 extension SidebarCounts.Row {
+  /// Les tâches rattachées au projet SANS liste (cf. `TaskItem.inboxProject`) : elles vivent dans
+  /// l'Inbox, donc aucune rangée de liste ne les compte — c'est ici qu'elles entrent dans le total
+  /// du projet, pour la carte de « Projets » ET la barre de sa page (`ProjectBoard.build`).
+  static func attached(to project: Project, bounds: DayBounds) -> Self {
+    var row = Self()
+    for task in project.inboxTasks where !task.isHeader && task.list?.isInbox == true {
+      row.hasTasks = true
+      guard task.countsTowardProgress(bounds) else { continue }
+      row.countable += 1
+      if task.isCompleted { row.done += 1 }
+    }
+    return row
+  }
+
   static func + (lhs: Self, rhs: Self) -> Self {
     Self(
       countable: lhs.countable + rhs.countable, done: lhs.done + rhs.done,

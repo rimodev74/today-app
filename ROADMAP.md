@@ -38,9 +38,10 @@ La sidebar plutôt qu'un glisser entre les sections de « Tâches », et c'étai
 la cible ne défile pas, elle liste toutes les destinations, et n'a aucun trou à calculer. Le glisser
 entre sections a été essayé et retiré (cf. `CLAUDE.md`).
 
-**Seules les LISTES rangent.** Une ligne de projet est survolable mais n'accueille rien : la
-survoler la DÉPLIE, pour révéler ses listes. Choisir sa première liste à la place de l'utilisateur
-aurait été une devinette, et un projet vide n'aurait rien eu à offrir.
+**Une liste range, un projet rattache.** Lâcher sur une ligne de projet rattache la tâche au projet
+SANS liste (elle reste dans « Tâches », avec sa pastille — 23 novembre 2026) ; la survoler la DÉPLIE
+aussi, pour viser ses listes. Choisir sa première liste à la place de l'utilisateur aurait été une
+devinette, et un projet vide n'aurait rien eu à offrir.
 
 L'obstacle annoncé — la ligne rognée au bord de la page — s'est réglé sans détacher quoi que ce
 soit : la rangée publie son cadre par une `PreferenceKey`, la fenêtre dessine une pilule par-dessus

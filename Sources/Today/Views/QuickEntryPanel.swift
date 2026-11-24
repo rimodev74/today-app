@@ -1271,7 +1271,7 @@ private struct QuickEntryView: View {
       }
       // La destination est rappelée sur chaque ligne : rien n'oblige les tâches d'une même fournée
       // à partir au même endroit, le chip peut changer entre deux ⌘↩.
-      if let name = list(for: pending.targetID)?.title {
+      if let name = project(for: pending.targetID)?.title ?? list(for: pending.targetID)?.title {
         Text(name).font(.app(11)).foregroundStyle(.tertiary)
       }
       Button {
@@ -1368,7 +1368,7 @@ private struct QuickEntryView: View {
   /// sont deux choses différentes, et c'est le premier qui doit se lire.
   private var chipTitle: String {
     if case .addTask(let target) = step { return target.label }
-    return destination?.title ?? SmartList.all.label
+    return project(for: targetID)?.title ?? destination?.title ?? SmartList.all.label
   }
 
   @ViewBuilder private var destinationIcon: some View {
@@ -1709,8 +1709,8 @@ private struct QuickEntryView: View {
     // propre syntaxe, il rejoue `applyQuickEntry`.
     let entry = QuickEntry(parsing: pending.title, names: quickEntryNames)
     let text = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty, let list = entry.target.flatMap(resolve) ?? list(for: pending.targetID)
-    else { return }
+    let targetID = entry.target.flatMap(resolve) ?? pending.targetID
+    guard !text.isEmpty, let list = list(for: targetID) else { return }
     // Ancre lue AVANT la création : `task.list` rattacherait sinon la neuve à `list.tasks` avant
     // qu'on ait lu son ancre. À la fin de ce qui reste à faire, avant les cochées — sans quoi une
     // tâche notée depuis la capsule atterrirait sous des tâches déjà terminées.
@@ -1723,6 +1723,8 @@ private struct QuickEntryView: View {
       title: text, when: QuickEntry.day(entry.when ?? pending.when, minutes: minutes),
       whenMinutes: minutes, list: list)
     task.sortIndex = rank
+    // `#Projet` : la tâche part dans l'Inbox, rattachée au projet (cf. `TaskItem.inboxProject`).
+    if list.isInbox { task.inboxProject = project(for: targetID) }
     // Avant l'insertion : SwiftData propage la relation, les sous-tâches entrent avec la tâche.
     for line in pending.subtasks {
       let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1766,7 +1768,7 @@ private struct QuickEntryView: View {
     }
     if let date = entry.when { when = date }
     if let minutes = entry.minutes { whenMinutes = minutes }
-    if let list = entry.target.flatMap(resolve) { targetID = list.persistentModelID }
+    if let id = entry.target.flatMap(resolve) { targetID = id }
     // Une heure seule vise aujourd'hui, sinon la pastille n'aurait aucun jour à afficher. Après le
     // jeton de date, jamais avant : « @14h @demain » doit garder demain.
     when = QuickEntry.day(when, minutes: whenMinutes)
@@ -1775,8 +1777,15 @@ private struct QuickEntryView: View {
 
   private var quickEntryNames: [String] { reachable.map(\.title) + projects.map(\.title) }
 
-  private func resolve(_ name: String) -> TodoList? {
-    reachable.first { $0.title == name } ?? projects.first { $0.title == name }?.activeLists.first
+  /// Une liste d'abord ; sinon le PROJET lui-même — la tâche y sera rattachée sans liste (cf.
+  /// `TaskItem.inboxProject`). L'identifiant d'un projet se résout en Inbox par `list(for:)`.
+  private func resolve(_ name: String) -> PersistentIdentifier? {
+    reachable.first { $0.title == name }?.persistentModelID
+      ?? projects.first { $0.title == name }?.persistentModelID
+  }
+
+  private func project(for id: PersistentIdentifier?) -> Project? {
+    id.flatMap { wanted in projects.first { $0.persistentModelID == wanted } }
   }
 
 }

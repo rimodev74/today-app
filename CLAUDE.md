@@ -251,7 +251,8 @@ Chiffres et détail : `PIEGES.md` § Déjà rejeté.
 10. **L'inventaire complet sur « Tâches »** — le non-classé, « Aujourd'hui », un dépliant par projet
     et par liste, les événements du Calendrier. Puis, en remplacement des dépliants, une **barre de
     tags** (Tout / À classer / Aujourd'hui / les projets) : écrite, regardée, jetée le même jour.
-    Les deux répondaient à la même question qu'ailleurs — la page ne montre plus que l'Inbox.
+    Les deux répondaient à la même question qu'ailleurs — la page ne montre plus que l'Inbox
+    (tâches rattachées à un projet comprises, À PLAT avec leur pastille — cf. État réel).
 
 ## Conventions
 
@@ -313,9 +314,9 @@ Tout ce qui suit est branché et vérifié à la main, dans les deux thèmes. **
 décor** — _une fonctionnalité est branchée ou elle n'existe pas._
 
 Listes, tâches, en-têtes de section, réordonnancement (tâches et blocs d'en-tête), rangement par
-glisser vers la barre latérale (seules les LISTES accueillent ; survoler un projet le déplie),
-renommage, complétion, projets, sous-tâches, notes en texte riche, saisie rapide (`@demain`,
-`#liste`), raccourcis texte et combinaisons globales, archivage, recherche (`QuickFindPanel`),
+glisser vers la barre latérale (une liste range ; un projet RATTACHE sans liste, et son survol le
+déplie), renommage, complétion, projets, sous-tâches, notes en texte riche, saisie rapide (`@demain`,
+`#liste`, `#projet`), raccourcis texte et combinaisons globales, archivage, recherche (`QuickFindPanel`),
 capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâches**, **Aujourd'hui**,
 **À venir**, **Archives**.
 
@@ -400,12 +401,20 @@ capsule de saisie rapide hors app, et les quatre pages intelligentes — **Tâch
   de la capsule) mais reste là où on la NOMME ou la CHERCHE (`#Nom`, raccourcis, recherche) — les
   Réglages réconcilient un raccourci par PRÉFIXE, lui retirer un nom le ferait changer de cible.
 - **Le glisser** existe sur une liste, « Aujourd'hui » et « Tâches ». « À venir » et « Archives »
-  n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus — c'est un tableau
-  de cartes, il n'y a aucune ligne de tâche à y glisser.
-- **« Tâches » ne montre QUE la boîte de réception** — une zone de dépôt, l'endroit où l'on note sans
-  classer. Elle a porté l'inventaire complet (sections par projet, par liste, « Aujourd'hui »,
+  n'en ont pas : elles sont ordonnées par une date. La page d'un PROJET non plus — ses lignes de
+  tâches rattachées suivent l'ordre de « Tâches », où l'on réordonne.
+- **« Tâches » montre ce qui n'est rangé dans AUCUNE liste** — la boîte de réception, une zone de
+  dépôt. Elle a porté l'inventaire complet (sections par projet, par liste, « Aujourd'hui »,
   Calendrier) : retiré le 12 août 2026, chaque section répondait à une question à laquelle sa propre
   page répondait déjà.
+  **Une tâche peut être rattachée à un projet SANS liste** (`TaskItem.inboxProject`, schéma 8.0.0) :
+  elle reste dans l'Inbox, s'affiche sur « Tâches » À PLAT avec la pastille du projet
+  (`TaskParentTag`), et en lignes en tête de la page du projet (`AllTasksPage.attached`). C'est ce
+  qui remplace le préfixe « PROJET - » dans les titres. On la rattache par « Déplacer vers… ▸ Projet
+  ▸ Sans liste », `#Projet` à la saisie, ou un dépôt sur le projet dans la sidebar — tous via
+  `TaskItem.file(to:in:)`. La ranger dans une vraie liste efface le lien (`move(to:)`) ; supprimer
+  le projet la rend à l'Inbox nue (`.nullify`). Jamais de section par projet sur « Tâches ».
+  La jauge du projet et sa carte dans « Projets » les comptent (`SidebarCounts.Row.attached`).
 
 ### Dette connue, par ordre de coût
 

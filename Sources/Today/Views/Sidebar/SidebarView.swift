@@ -362,8 +362,8 @@ struct SidebarView: View {
       guard dragID == nil else { return }
       filing.measured(rows)
     }
-    // Survoler un projet le déplie, pour révéler ses listes — les seules vraies destinations
-    // (`SidebarFiling.dropRow(for: Project)` ne range jamais rien). Rien à faire si la ligne
+    // Survoler un projet le déplie, pour révéler ses listes — lâcher sur le projet lui-même le
+    // rattache sans liste (`SidebarFiling.dropRow(for: Project)`). Rien à faire si la ligne
     // survolée est déjà une liste (`row.list != nil`) ou si le projet est déjà déplié : réécrire
     // `isCollapsed` à l'identique animerait pour rien.
     //
@@ -392,11 +392,9 @@ struct SidebarView: View {
   /// réordonnancement : le cadre publié est donc exactement celui de la pilule de sélection, et le
   /// repère de survol tombe pile dessus.
   ///
-  /// `row` est toujours mesurée (même une ligne de projet, cf. `SidebarFiling.dropRow(for:Project)`)
-  /// — c'est ce qui la rend survolable. Elle ne s'ALLUME en revanche que si elle accueille
-  /// vraiment un dépôt (`row.list != nil`) : une ligne de projet reste éteinte, son survol ne fait
-  /// que la déplier (cf. `projectsGroup`'s `.onChange(of: filing.hovered)`) — le repère de survol ne
-  /// promet jamais un dépôt qui n'aurait pas lieu.
+  /// Une ligne de projet s'allume comme une liste : lâcher dessus rattache la tâche au projet, sans
+  /// liste (cf. `SidebarFiling.dropRow(for:Project)`). Son survol prolongé la déplie en plus (cf.
+  /// `projectsGroup`'s `.onChange(of: filing.hovered)`).
   ///
   /// ponytail: chaque ligne lit `filing.hovered`, dont le calcul balaie les cadres — soit N
   /// balayages de N entrées par image de glissement. Plafond : une sidebar à quelques dizaines de
@@ -405,7 +403,7 @@ struct SidebarView: View {
   /// d'une conversion de repère, ces cadres-ci étant mesurés en global et pas dans `dragSpace`.
   private func dropTarget(_ content: some View, _ row: SidebarDropRow?) -> some View {
     // Évalué UNE fois : lu deux fois, il balayait deux fois les cadres pour la même réponse.
-    let hovered = row?.list != nil && filing.hovered == row
+    let hovered = row != nil && filing.hovered == row
     return
       content
       .background {

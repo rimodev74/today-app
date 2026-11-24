@@ -7,6 +7,10 @@ import UniformTypeIdentifiers
 /// tout le travail (édition, création, réordonnancement) ; la carte est une vitrine, pas un
 /// deuxième endroit où éditer.
 ///
+/// Au-dessus des cartes, les tâches rattachées au projet SANS liste (cf. `TaskItem.inboxProject`) :
+/// de vraies lignes, éditables, avec le socle de toute page de tâches. Elles vivent dans l'Inbox,
+/// et « Tâches » les montre aussi, avec la pastille du projet.
+///
 /// Remplace l'empilement « titre de liste + ses tâches en lecture », qui redonnait à voir la page
 /// de chaque liste les unes sous les autres : sur un projet à cinq listes, il fallait faire défiler
 /// pour savoir ce que le projet contient. Une carte tient le résumé dans un écran.
@@ -40,6 +44,15 @@ struct ProjectPageView: View {
   /// Le dépliant des listes archivées, replié à chaque ouverture d'un projet (cf. `onChange`).
   @State private var archiveExpanded = false
 
+  /// Sélection et édition des tâches rattachées (cf. `attachedSection`).
+  @State private var focus = TaskFocus()
+  /// Cibles du « Déplacer vers… » des tâches rattachées — les listes en cours, comme sur « Tâches ».
+  @Query(filter: #Predicate<TodoList> { $0.archivedAt == nil }) private var activeLists: [TodoList]
+  /// Même règle de sortie des cochées que « Tâches » : c'est la même tâche, affichée à deux endroits.
+  @AppStorage(CompletedTaskRetention.storageKey) private var retentionRaw = CompletedTaskRetention
+    .untilNextDay.rawValue
+  @State private var tick = Date()
+
   private static let columns = [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 16)]
 
   var body: some View {
@@ -56,51 +69,77 @@ struct ProjectPageView: View {
     // Lue UNE fois : chaque anneau de carte la reprend, au lieu de relire `list.project?.color`
     // (deux relations SwiftData) par carte et par rendu.
     let tint = project.color?.color
+    let attached = AllTasksPage.attached(to: project, retention: retention, now: tick)
+    let moveIndex = MoveTargetIndex(activeLists)
 
-    return ScrollView {
-      // Le bandeau hors de la colonne : il va bord à bord, comme dans Notion.
-      ProjectCoverBanner(uuid: project.uuid, tint: project.color?.color ?? PageTint.projects)
-      VStack(alignment: .leading, spacing: 20) {
-        header(total)
-        listsHeader(board)
-        LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
-          ForEach(Array(board.cards.enumerated()), id: \.element.id) { rank, card in
-            ListCardView(
-              card: card, tint: tint,
-              open: { selection = .list(card.list) },
-              rename: { rename(card.list) },
-              archive: card.isFinished ? ("Archiver la liste", { archive(card.list) }) : nil,
-              delete: { requestDelete(card.list) }
-            )
-            .enteringCard(cardsShown, rank: rank)
-            // La carte qui part s'efface, celles qui restent COULENT vers leur nouvelle place —
-            // le `withAnimation(boardFlow)` des chemins de création/suppression anime le
-            // replacement de la grille, cette transition ne concerne que la carte elle-même.
-            // Même couple qu'une tâche qui disparaît d'une liste (cf. `TaskRow`) : fondu seul,
-            // pas de glissement, sinon la carte part de travers pendant que la grille se retasse.
-            .transition(.opacity)
+    return GeometryReader { geo in
+      ScrollView {
+        // Le bandeau hors de la colonne : il va bord à bord, comme dans Notion.
+        ProjectCoverBanner(uuid: project.uuid, tint: project.color?.color ?? PageTint.projects)
+        VStack(alignment: .leading, spacing: 20) {
+          header(total)
+          // Largeur EXPLICITE : une rangée en édition disparaît sinon (cf. `PIEGES.md` § Layout).
+          attachedSection(
+            attached, moveIndex: moveIndex, width: max(geo.size.width - 2 * gutter, 1))
+          listsHeader(board)
+          LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 16) {
+            ForEach(Array(board.cards.enumerated()), id: \.element.id) { rank, card in
+              ListCardView(
+                card: card, tint: tint,
+                open: { selection = .list(card.list) },
+                rename: { rename(card.list) },
+                archive: card.isFinished ? ("Archiver la liste", { archive(card.list) }) : nil,
+                delete: { requestDelete(card.list) }
+              )
+              .enteringCard(cardsShown, rank: rank)
+              // La carte qui part s'efface, celles qui restent COULENT vers leur nouvelle place —
+              // le `withAnimation(boardFlow)` des chemins de création/suppression anime le
+              // replacement de la grille, cette transition ne concerne que la carte elle-même.
+              // Même couple qu'une tâche qui disparaît d'une liste (cf. `TaskRow`) : fondu seul,
+              // pas de glissement, sinon la carte part de travers pendant que la grille se retasse.
+              .transition(.opacity)
+            }
+            createCard
+              .enteringCard(cardsShown, rank: board.cards.count)
           }
-          createCard
-            .enteringCard(cardsShown, rank: board.cards.count)
-        }
-        // Même colonne que `listsHeader` et l'anneau du titre juste au-dessus (cf.
-        // `taskContentColumn`) : sans elle, les cartes partaient du bord de section, 20 pt trop à
-        // gauche de tout le reste de la page (mesuré le 10 août 2026).
-        .padding(.leading, taskContentColumn)
+          // Même colonne que `listsHeader` et l'anneau du titre juste au-dessus (cf.
+          // `taskContentColumn`) : sans elle, les cartes partaient du bord de section, 20 pt trop à
+          // gauche de tout le reste de la page (mesuré le 10 août 2026).
+          .padding(.leading, taskContentColumn)
 
-        archiveSection(board, bounds: bounds, tint: tint)
+          archiveSection(board, bounds: bounds, tint: tint)
+        }
+        // `gutter`, comme toutes les autres pages : à `gutter - 8`, l'en-tête et son encadré de notes
+        // tombaient 8 pt à gauche de ceux d'une liste — un décalage que rien ne justifiait, visible
+        // au moindre aller-retour entre les deux pages.
+        .padding(.horizontal, gutter)
+        .padding(.top, 30)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      // `gutter`, comme toutes les autres pages : à `gutter - 8`, l'en-tête et son encadré de notes
-      // tombaient 8 pt à gauche de ceux d'une liste — un décalage que rien ne justifiait, visible
-      // au moindre aller-retour entre les deux pages.
-      .padding(.horizontal, gutter)
-      .padding(.top, 30)
-      .padding(.bottom, 24)
-      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    // Le socle commun, pour les seules tâches rattachées : les cartes sont des vitrines.
+    .taskPageBase(
+      focus: $focus,
+      blocks: { [TaskPageBlock(tasks: attached, isExpanded: true)] },
+      delete: delete,
+      // ponytail: pas de glisser ici — l'ordre est celui de « Tâches » (`SmartList.sort`), où l'on
+      // réordonne. À brancher si la section grossit au point d'en avoir besoin.
+      reorder: nil,
+      // L'`id` nomme le PROJET : la vue est réutilisée d'un projet à l'autre, un `id` commun
+      // laisserait ⌘N créer dans le projet qu'on vient de quitter (cf. `MenuAction`).
+      newTask: MenuAction(id: "newTask.project.\(project.uuid)", run: createTaskInEditMode),
+      locatesClicks: true
+    )
+    .onReceive(
+      NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)
+    ) { _ in
+      withAnimation(taskInsert) { tick = Date() }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       BottomToolbar(
-        onNewTask: nil, onInsertHeader: nil, onSearch: { searchPresented = true })
+        onNewTask: createTaskInEditMode, onInsertHeader: nil,
+        onSearch: { searchPresented = true })
     }
     // `initial` ET changement : la vue est RÉUTILISÉE d'un projet à l'autre (pas d'`.id`, cf.
     // `TaskListView.page`), `onAppear` ne verrait que le premier.
@@ -214,6 +253,113 @@ struct ProjectPageView: View {
       )
     }
     .buttonStyle(.plain)
+  }
+
+  // MARK: Tâches rattachées
+
+  /// Absente tant que rien n'est rattaché : la page d'un projet sans tâche directe reste celle d'avant.
+  @ViewBuilder
+  private func attachedSection(_ tasks: [TaskItem], moveIndex: MoveTargetIndex, width: CGFloat)
+    -> some View
+  {
+    if !tasks.isEmpty {
+      VStack(alignment: .leading, spacing: 0) {
+        Text("Tâches").font(.app(.headline))
+          .padding(.leading, taskContentColumn)
+          .padding(.bottom, 6)
+        ForEach(tasks) { task in taskRow(for: task, moveIndex: moveIndex) }
+      }
+      .frame(width: width, alignment: .leading)
+    }
+  }
+
+  /// La MÊME `TaskRow` que partout. Sans pilule : toutes ces tâches sont de ce projet.
+  private func taskRow(for task: TaskItem, moveIndex: MoveTargetIndex) -> some View {
+    TaskRow(
+      task: task,
+      isSelected: focus.isSelected(task),
+      isEditing: focus.isEditing(task),
+      moveTargets: moveIndex.excluding(task.list?.persistentModelID),
+      showsDate: true,
+      parentTag: nil,
+      onBeginEditing: { beginEditing(task) },
+      onEndEditing: { endEditing(task) },
+      onMove: { move(task, to: $0) },
+      onDuplicate: { duplicate(task) },
+      onDelete: { delete(task) },
+      onCompletionChanged: scheduleRetentionRefresh
+    )
+    .equatable()
+    .rowPressGesture(
+      isSelected: focus.isSelected(task),
+      isEditing: focus.isEditing(task),
+      onSelect: { select(task) },
+      onEdit: { beginEditing(task) }
+    )
+    .taskRowInsertion()
+    .measureTaskRow(task)
+  }
+
+  private var retention: CompletedTaskRetention {
+    CompletedTaskRetention(rawValue: retentionRaw) ?? .untilNextDay
+  }
+
+  /// Même réveil que « Tâches » : en mode « après 1,5 s », la cochée sort au redessin suivant.
+  private func scheduleRetentionRefresh() {
+    guard retention == .timer else { return }
+    Task {
+      try? await Task.sleep(for: .seconds(CompletedTaskRetention.timerDelay))
+      withAnimation(taskInsert) { tick = Date() }
+    }
+  }
+
+  private func select(_ task: TaskItem) {
+    withAnimation(taskSelectFade) { focus.select(task) }
+    // Les notes du projet garderaient sinon le premier répondeur, et ⌫ avec.
+    notesFocused = false
+  }
+
+  private func beginEditing(_ task: TaskItem) {
+    withAnimation(taskFlow) { focus.edit(task) }
+    notesFocused = false
+  }
+
+  private func endEditing(_ task: TaskItem) {
+    guard focus.isEditing(task) else { return }
+    withAnimation(taskFlow) { focus.endEditing(task) }
+  }
+
+  private func move(_ task: TaskItem, to target: TaskDestination) {
+    focus.forget(task)
+    task.file(to: target, in: modelContext)
+    try? modelContext.save()
+  }
+
+  private func duplicate(_ task: TaskItem) {
+    guard let list = task.list else { return }
+    let clone = task.copy(into: list)
+    clone.sortIndex = task.sortIndex + 1
+    modelContext.insertAndSave(clone)
+  }
+
+  private func delete(_ task: TaskItem) {
+    focus.forget(task)
+    withAnimation(taskInsert) {
+      _ = modelContext.deleteTasksAndSave([task], forget: remindersService.forgetAppleItems)
+    }
+  }
+
+  /// ⌘N et le ⊕ : une tâche VIDE, rattachée au projet, ouverte en édition — le geste de « Tâches »,
+  /// dont elle fera partie.
+  private func createTaskInEditMode() {
+    guard let inbox = modelContext.inboxList else { return }
+    keepEditedTaskIfBlank(focus, in: modelContext)
+    let task = TaskItem(title: "", list: inbox)
+    task.sortIndex = (inbox.tasks.map(\.sortIndex).max() ?? -1) + 1
+    task.inboxProject = project
+    insertTaskUnderSelection(
+      task, among: AllTasksPage.attached(to: project, retention: retention, now: tick),
+      focus: $focus, in: modelContext)
   }
 
   private func addList() {

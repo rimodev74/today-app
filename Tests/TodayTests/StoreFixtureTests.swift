@@ -32,7 +32,7 @@ import XCTest
 final class StoreFixtureTests: XCTestCase {
   /// Toutes les formes qui ont existé sur un disque, de la plus ancienne à la courante.
   private static let shipped = [
-    "v1_0_0", "v2_0_0", "v3_0_0", "v4_0_0", "v5_0_0", "v6_0_0", "v7_0_0",
+    "v1_0_0", "v2_0_0", "v3_0_0", "v4_0_0", "v5_0_0", "v6_0_0", "v7_0_0", "v8_0_0",
   ]
 
   /// Copie la fixture ailleurs AVANT de l'ouvrir : `openStore` MIGRE le fichier qu'on lui donne.

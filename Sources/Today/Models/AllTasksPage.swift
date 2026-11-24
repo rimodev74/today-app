@@ -1,6 +1,9 @@
 import Foundation
 
-/// Ce que la page « Tâches » affiche : la boîte de réception, et rien d'autre.
+/// Ce que la page « Tâches » affiche : tout ce qui n'est rangé dans AUCUNE liste — la boîte de
+/// réception, y compris ses tâches rattachées à un projet (cf. `TaskItem.inboxProject`), à plat,
+/// distinguées par leur pastille et rien d'autre. Pas de section par projet : c'est l'inventaire
+/// retiré ci-dessous qui reviendrait.
 ///
 /// Elle a montré l'inventaire complet — le non-classé, puis « Aujourd'hui », puis un dépliant par
 /// projet et par liste. Retiré le 12 août 2026 : l'onglet redevient une ZONE DE DÉPÔT, l'endroit où
@@ -31,8 +34,23 @@ struct AllTasksPage {
   ) -> AllTasksPage {
     AllTasksPage(
       tasks: SmartList.today.sort(
-        tasks.filter {
-          $0.list?.isInbox == true && !$0.isHeader && !$0.hasLeftTheFlow(retention, now: now)
-        }))
+        tasks.filter { $0.list?.isInbox == true && shows($0, retention: retention, now: now) }))
+  }
+
+  /// Les tâches rattachées à un projet sans liste, telles que la page du projet les montre en tête
+  /// : la MÊME règle et le même ordre qu'ici, restreints à ce projet. Une seule règle de sortie
+  /// (`CompletedTaskRetention`) pour la même tâche affichée à deux endroits.
+  static func attached(
+    to project: Project, retention: CompletedTaskRetention = .current, now: Date = Date()
+  ) -> [TaskItem] {
+    SmartList.today.sort(
+      project.inboxTasks.filter {
+        $0.list?.isInbox == true && shows($0, retention: retention, now: now)
+      })
+  }
+
+  private static func shows(_ task: TaskItem, retention: CompletedTaskRetention, now: Date) -> Bool
+  {
+    !task.isHeader && !task.hasLeftTheFlow(retention, now: now)
   }
 }
