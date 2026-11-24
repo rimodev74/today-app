@@ -152,6 +152,12 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollContentBackground(.hidden)
+      // Le clic droit de la barre latérale crée ce qu'elle range. Une ligne qui a son propre menu
+      // (projet, liste, zone) le garde : SwiftUI sert le menu le plus proche du clic.
+      .contextMenu {
+        Button("Nouveau projet", action: addProject)
+        Button("Nouvelle zone") { addArea(containing: nil) }
+      }
       // `.hidden` laisse macOS réafficher la barre au défilement ; `.never` seul la supprime.
       .scrollIndicators(.never)
       // Fondu en haut du défilement : sans lui, une ligne qui passait sous le champ de recherche
@@ -854,8 +860,6 @@ struct SidebarView: View {
         Label("Nouveau projet", systemImage: "plus").hoverBordered()
       }
       .buttonStyle(.plain)
-      // Une zone vide se crée ici ; avec un projet dedans, au clic droit du projet (« Zone ▸ »).
-      .contextMenu { Button("Nouvelle zone") { addArea(containing: nil) } }
       .padding(.leading, 4)
 
       Spacer()
